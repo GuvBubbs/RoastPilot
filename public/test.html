@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Phase 1 Foundation Tests</title>
+  <style>
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      max-width: 800px;
+      margin: 2rem auto;
+      padding: 0 1rem;
+      line-height: 1.6;
+    }
+    .test-section {
+      background: #f5f5f5;
+      padding: 1rem;
+      margin: 1rem 0;
+      border-radius: 8px;
+      border-left: 4px solid #22c55e;
+    }
+    .test-section.error {
+      border-left-color: #ef4444;
+      background: #fee;
+    }
+    h1 { color: #1a1a1a; }
+    h2 { color: #333; margin-top: 2rem; }
+    code { 
+      background: #e0e0e0; 
+      padding: 2px 6px; 
+      border-radius: 3px;
+      font-size: 0.9em;
+    }
+    .success { color: #22c55e; font-weight: bold; }
+    .error-text { color: #ef4444; font-weight: bold; }
+  </style>
+</head>
+<body>
+  <h1>🔥 RoastPilot - Phase 1 Foundation Tests</h1>
+  <p>This page tests all the core utilities and services.</p>
+  
+  <div id="test-results"></div>
+
+  <script type="module">
+    import { createSession, createReading, createOvenEvent, createDefaultSettings } from '../src/models/dataModels.js';
+    import { fahrenheitToCelsius, celsiusToFahrenheit, formatTemperature, formatDelta } from '../src/utils/temperatureUtils.js';
+    import { formatDuration, formatTime, minutesBetween } from '../src/utils/timeUtils.js';
+    import { validateSessionConfig, validateReading } from '../src/utils/validationUtils.js';
+    import { storageService } from '../src/services/storageService.js';
+
+    const results = document.getElementById('test-results');
+
+    function addTest(title, passed, details = '') {
+      const div = document.createElement('div');
+      div.className = `test-section ${passed ? '' : 'error'}`;
+      div.innerHTML = `
+        <strong>${passed ? '✓' : '✗'} ${title}</strong>
+        ${details ? `<div style="margin-top: 0.5rem;">${details}</div>` : ''}
+      `;
+      results.appendChild(div);
+    }
+
+    // Test 1: Data Models
+    try {
+      const session = createSession({ targetTemp: 130 });
+      addTest(
+        'createSession() works',
+        session.config.targetTemp === 130 && session.readings.length === 0,
+        `Created session with ID: <code>${session.config.id.substring(0, 8)}...</code>`
+      );
+    } catch (e) {
+      addTest('createSession() works', false, e.message);
+    }
+
+    // Test 2: Temperature Conversion
+    try {
+      const celsius = fahrenheitToCelsius(212);
+      const fahrenheit = celsiusToFahrenheit(100);
+      addTest(
+        'Temperature conversion',
+        celsius === 100 && fahrenheit === 212,
+        `212°F = ${celsius}°C, 100°C = ${fahrenheit}°F`
+      );
+    } catch (e) {
+      addTest('Temperature conversion', false, e.message);
+    }
+
+    // Test 3: Temperature Formatting
+    try {
+      const formatted = formatTemperature(125, 'F');
+      const formattedC = formatTemperature(125, 'C');
+      addTest(
+        'Temperature formatting',
+        formatted === '125°F' && formattedC === '51.7°C',
+        `125°F displays as: ${formatted}, in Celsius: ${formattedC}`
+      );
+    } catch (e) {
+      addTest('Temperature formatting', false, e.message);
+    }
+
+    // Test 4: Time Utilities
+    try {
+      const duration = formatDuration(90);
+      const duration2 = formatDuration(45);
+      addTest(
+        'Time formatting',
+        duration === '1h 30m' && duration2 === '45m',
+        `90 minutes = ${duration}, 45 minutes = ${duration2}`
+      );
+    } catch (e) {
+      addTest('Time formatting', false, e.message);
+    }
+
+    // Test 5: Storage Service
+    try {
+      storageService.initialize();
+      const testSession = createSession({ targetTemp: 135 });
+      const saved = storageService.saveSession(testSession);
+      const loaded = storageService.loadSession();
+      const matches = loaded && loaded.config.targetTemp === 135;
+      
+      addTest(
+        'Storage service save/load',
+        saved && matches,
+        `Saved and loaded session with target temp: ${loaded ? loaded.config.targetTemp : 'failed'}°F`
+      );
+      
+      // Clean up
+      storageService.clearSession();
+    } catch (e) {
+      addTest('Storage service save/load', false, e.message);
+    }
+
+    // Test 6: Validation
+    try {
+      const validConfig = validateSessionConfig({ targetTemp: 125, initialOvenTemp: 200 }, 'F');
+      const invalidConfig = validateSessionConfig({ targetTemp: 999, initialOvenTemp: 200 }, 'F');
+      
+      addTest(
+        'Session validation',
+        validConfig.valid === true && invalidConfig.valid === false,
+        `Valid config passes: ${validConfig.valid}, Invalid config fails: ${!invalidConfig.valid}`
+      );
+    } catch (e) {
+      addTest('Session validation', false, e.message);
+    }
+
+    // Test 7: Reading Creation
+    try {
+      const reading = createReading(120);
+      addTest(
+        'createReading() works',
+        reading.temp === 120 && reading.id && reading.timestamp,
+        `Created reading: ${reading.temp}°F at ${new Date(reading.timestamp).toLocaleTimeString()}`
+      );
+    } catch (e) {
+      addTest('createReading() works', false, e.message);
+    }
+
+    // Test 8: Oven Event Creation
+    try {
+      const event = createOvenEvent(200, null);
+      addTest(
+        'createOvenEvent() works',
+        event.setTemp === 200 && event.previousTemp === null,
+        `Created oven event: set to ${event.setTemp}°F`
+      );
+    } catch (e) {
+      addTest('createOvenEvent() works', false, e.message);
+    }
+
+    // Test 9: Storage Info
+    try {
+      const info = storageService.getStorageInfo();
+      addTest(
+        'Storage info retrieval',
+        typeof info.used === 'number' && typeof info.percentage === 'number',
+        `Storage used: ${(info.used / 1024).toFixed(2)} KB (${info.percentage.toFixed(2)}%)`
+      );
+    } catch (e) {
+      addTest('Storage info retrieval', false, e.message);
+    }
+
+    // Summary
+    const allTests = document.querySelectorAll('.test-section');
+    const passed = document.querySelectorAll('.test-section:not(.error)').length;
+    const total = allTests.length;
+    
+    const summary = document.createElement('div');
+    summary.style.cssText = 'margin-top: 2rem; padding: 1.5rem; background: #e8f5e9; border-radius: 8px; text-align: center;';
+    summary.innerHTML = `
+      <h2 style="margin-top: 0;">Test Summary</h2>
+      <p style="font-size: 1.5rem; margin: 1rem 0;">
+        <strong class="${passed === total ? 'success' : 'error-text'}">${passed} / ${total}</strong> tests passed
+      </p>
+      ${passed === total ? '<p class="success">✓ Phase 1 Foundation is ready!</p>' : '<p class="error-text">Some tests failed. Check the details above.</p>'}
+    `;
+    results.appendChild(summary);
+  </script>
+</body>
+</html>
+
