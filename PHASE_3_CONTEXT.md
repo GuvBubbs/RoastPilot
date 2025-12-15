@@ -288,3 +288,4 @@ When a reading is updated or deleted, the composable **automatically recalculate
 
 **Ready to Start**: All dependencies are in place. Just import `useSession`, add your UI components, and call the CRUD methods. The auto-save and validation are already handled! 🚀
 
+

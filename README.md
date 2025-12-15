@@ -169,3 +169,4 @@ This is a personal project for learning and practical use.
 
 Ovens and roasts vary. Use this app as a guide and rely on thermometer readings. This application does not provide food safety guarantees.
 
+

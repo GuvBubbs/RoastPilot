@@ -108,8 +108,8 @@
         <!-- Phase 1 Complete Info -->
         <div class="mt-6 bg-blue-50 dark:bg-blue-900 dark:bg-opacity-20 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
           <p class="text-sm text-blue-800 dark:text-blue-300">
-            <strong>Phase 2 Complete!</strong> Session management UI is now ready. 
-            Click "Start New Session" to configure your cooking session.
+            <strong>Phase 3 Complete!</strong> Temperature input system is ready. 
+            Start a session to begin tracking your roast.
           </p>
         </div>
       </div>
@@ -164,16 +164,8 @@
           </div>
         </div>
 
-        <!-- Placeholder for Phase 3: Input Panel -->
-        <div class="bg-white dark:bg-gray-800 shadow rounded-lg p-6">
-          <h3 class="text-lg font-semibold text-gray-900 dark:text-white mb-3">
-            Temperature Input
-          </h3>
-          <div class="text-center py-8 text-gray-500 dark:text-gray-400">
-            <p class="mb-2">📊 Input Panel Coming in Phase 3</p>
-            <p class="text-sm">You'll be able to log temperature readings here</p>
-          </div>
-        </div>
+        <!-- Input Panel -->
+        <InputPanel />
 
         <!-- Placeholder for Phase 4: Status Display -->
         <div class="bg-white dark:bg-gray-800 shadow rounded-lg p-6">
@@ -195,6 +187,12 @@
             <p class="mb-2">📈 Charts Coming in Phase 5</p>
             <p class="text-sm">Temperature progression and oven history will be visualized here</p>
           </div>
+        </div>
+
+        <!-- Temperature Logs -->
+        <div class="space-y-4">
+          <ReadingsLog />
+          <OvenEventsLog />
         </div>
       </div>
     </main>
@@ -224,6 +222,9 @@
       @cancel="state.showEndConfirmation = false"
       @export="handleExportBeforeEnd"
     />
+
+    <!-- Toast Notifications -->
+    <ToastContainer />
 
     <!-- Settings Panel Placeholder -->
     <div 
@@ -257,6 +258,10 @@ import { useSession } from './composables/useSession.js';
 import SessionSetupModal from './components/SessionSetupModal.vue';
 import ResumeSessionDialog from './components/ResumeSessionDialog.vue';
 import EndSessionDialog from './components/EndSessionDialog.vue';
+import InputPanel from './components/InputPanel.vue';
+import ReadingsLog from './components/ReadingsLog.vue';
+import OvenEventsLog from './components/OvenEventsLog.vue';
+import ToastContainer from './components/ToastContainer.vue';
 import { formatTemperature } from './utils/temperatureUtils.js';
 import { formatDateTime, formatTime } from './utils/timeUtils.js';
 import { DISCLAIMER } from './constants/defaults.js';
