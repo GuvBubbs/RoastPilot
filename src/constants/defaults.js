@@ -2,9 +2,9 @@
  * Default session configuration values
  */
 export const SESSION_DEFAULTS = {
-  TARGET_TEMP_F: 125, // Medium-rare beef
+  TARGET_TEMP_F: 125, // Medium-rare beef (stored in F, but display defaults to C)
   INITIAL_OVEN_TEMP_F: 200,
-  UNITS: 'F'
+  UNITS: 'C' // Default to Celsius
 };
 
 /**
