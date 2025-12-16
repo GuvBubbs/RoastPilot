@@ -27,9 +27,10 @@
 /**
  * @typedef {Object} OvenTempEvent
  * @property {string} id - Unique event identifier (UUID v4)
- * @property {number} setTemp - Oven set temperature in Fahrenheit (canonical unit)
+ * @property {number} setTemp - Oven set temperature in Fahrenheit (0 if oven is off)
  * @property {string} timestamp - ISO 8601 datetime when oven was adjusted
  * @property {number|null} previousTemp - The oven temp before this change (null for first entry)
+ * @property {boolean} isOff - Whether this event represents turning the oven OFF (default: false)
  */
 
 /**
@@ -46,11 +47,14 @@
 
 /**
  * @typedef {Object} Recommendation
- * @property {'raise'|'lower'|'hold'|'none'} action
+ * @property {'raise'|'lower'|'hold'|'oven-off'|'none'} action
  * @property {number|null} suggestedTemp - New oven set temp in Fahrenheit
  * @property {number|null} changeAmount - Degrees to change (always positive)
- * @property {string} message - Human-readable recommendation
+ * @property {string} message - Human-readable recommendation (may contain {minTemp} placeholder)
  * @property {string|null} reasoning - Explanation of why this recommendation
+ * @property {string|null} alternativeMessage - Alternative action message (may contain {minutes}, {ovenTemp} placeholders)
+ * @property {number|null} ovenOffMinutes - Suggested minutes to turn oven off
+ * @property {number|null} practicalMinF - Practical minimum oven temp for message formatting
  * @property {boolean} canRecommend - Whether conditions allow a recommendation
  * @property {string|null} blockerReason - If canRecommend is false, why
  */
@@ -66,6 +70,8 @@
  * @property {number} recommendationMaxStepF - Maximum single change in F (default 25)
  * @property {number} ovenTempMinF - Minimum suggested oven temp in F (default 150)
  * @property {number} ovenTempMaxF - Maximum suggested oven temp in F (default 300)
+ * @property {number} ovenTempPracticalMinF - Practical minimum most ovens can achieve (default 175)
+ * @property {boolean} enableLowTempRecommendations - Allow recommendations below practical minimum (default true)
  * @property {number} minReadingsForRecommendation - Minimum readings required (default 3)
  * @property {number} minTimeSpanMinutes - Minimum time span for recommendations (default 30)
  * @property {number} ovenTempStaleMinutes - Max age of oven temp for recommendations (default 60)
@@ -124,6 +130,8 @@ export function createDefaultSettings() {
     recommendationMaxStepF: 25,
     ovenTempMinF: 150,
     ovenTempMaxF: 300,
+    ovenTempPracticalMinF: 175,
+    enableLowTempRecommendations: true,
     minReadingsForRecommendation: 3,
     minTimeSpanMinutes: 30,
     ovenTempStaleMinutes: 60
@@ -151,14 +159,16 @@ export function createReading(temp, timestamp = null) {
  * @param {number} setTemp - Oven set temp in current display units (will be converted)
  * @param {number|null} previousTemp - Previous oven temp or null
  * @param {string} [timestamp] - Optional timestamp, defaults to now
+ * @param {boolean} [isOff] - Whether this event represents turning the oven OFF
  * @returns {OvenTempEvent}
  */
-export function createOvenEvent(setTemp, previousTemp = null, timestamp = null) {
+export function createOvenEvent(setTemp, previousTemp = null, timestamp = null, isOff = false) {
   return {
     id: generateUUID(),
-    setTemp: setTemp, // Caller responsible for ensuring this is in Fahrenheit
+    setTemp: isOff ? 0 : setTemp, // Caller responsible for ensuring this is in Fahrenheit
     timestamp: timestamp || new Date().toISOString(),
-    previousTemp: previousTemp
+    previousTemp: previousTemp,
+    isOff: isOff
   };
 }
 

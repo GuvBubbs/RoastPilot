@@ -18,6 +18,8 @@ export const SETTINGS_DEFAULTS = {
   RECOMMENDATION_MAX_STEP_F: 25,
   OVEN_TEMP_MIN_F: 150,
   OVEN_TEMP_MAX_F: 300,
+  OVEN_TEMP_PRACTICAL_MIN_F: 175, // Most ovens can't go below ~80°C/175°F
+  ENABLE_LOW_TEMP_RECOMMENDATIONS: true, // Allow recommendations below practical minimum
   MIN_READINGS_FOR_RECOMMENDATION: 3,
   MIN_TIME_SPAN_MINUTES: 30,
   OVEN_TEMP_STALE_MINUTES: 60
@@ -51,6 +53,10 @@ export const RECOMMENDATION_MESSAGES = {
   RAISE_LARGE: 'Running late. Consider raising oven to {suggestedTemp}.',
   LOWER_SMALL: 'Running ahead of schedule. Consider lowering oven to {suggestedTemp}.',
   LOWER_LARGE: 'Running very early. Lower oven to {suggestedTemp} to avoid overshooting.',
+  OVEN_OFF_SUGGESTED: 'Running very early. Your oven can\'t go low enough to slow down heating.',
+  OVEN_OFF_ALTERNATIVE: 'Turn off oven for approximately {minutes} minutes, then restart at {ovenTemp}.',
+  OVEN_TOO_LOW: 'Already at practical minimum oven temperature ({ovenTemp}). Most ovens can\'t go lower.',
+  LOW_TEMP_DISABLED: 'Running early, but recommendations below {minTemp} are disabled.',
   NEED_MORE_READINGS: 'Need at least {count} readings to make recommendations.',
   NEED_MORE_TIME: 'Need readings spanning at least {minutes} minutes.',
   NO_SERVE_TIME: 'Set a desired serve time to get timing recommendations.',

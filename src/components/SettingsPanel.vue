@@ -137,14 +137,27 @@
             </p>
             
             <SettingsRow 
-              label="Minimum Oven Temp"
-              description="Lowest temperature the app will suggest"
+              label="Minimum Oven Temp (Food Safety)"
+              description="Lowest temperature the app will suggest for food safety"
             >
               <NumberStepper
                 v-model="ovenMinDisplay"
                 :min="ovenMinBound"
                 :max="ovenMaxDisplay - 50"
                 :step="10"
+                :label="`°${localSettings.units}`"
+              />
+            </SettingsRow>
+            
+            <SettingsRow 
+              label="Practical Minimum Oven Temp"
+              description="Most ovens can't go below ~80°C/175°F"
+            >
+              <NumberStepper
+                v-model="ovenPracticalMinDisplay"
+                :min="ovenMinDisplay"
+                :max="ovenMaxDisplay - 25"
+                :step="5"
                 :label="`°${localSettings.units}`"
               />
             </SettingsRow>
@@ -160,6 +173,19 @@
                 :step="10"
                 :label="`°${localSettings.units}`"
               />
+            </SettingsRow>
+            
+            <SettingsRow 
+              label="Enable Low Temperature Recommendations"
+              description="Allow recommendations below your oven's practical minimum"
+            >
+              <label class="flex items-center cursor-pointer">
+                <input
+                  type="checkbox"
+                  v-model="localSettings.enableLowTempRecommendations"
+                  class="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500 dark:focus:ring-blue-600 dark:ring-offset-gray-800 focus:ring-2 dark:bg-gray-700 dark:border-gray-600"
+                />
+              </label>
             </SettingsRow>
           </SettingsSection>
           
@@ -322,6 +348,13 @@ const ovenMinDisplay = computed({
   get: () => toDisplayUnit(localSettings.ovenTempMinF, localSettings.units),
   set: (val) => {
     localSettings.ovenTempMinF = toStorageUnit(val, localSettings.units);
+  }
+});
+
+const ovenPracticalMinDisplay = computed({
+  get: () => toDisplayUnit(localSettings.ovenTempPracticalMinF, localSettings.units),
+  set: (val) => {
+    localSettings.ovenTempPracticalMinF = toStorageUnit(val, localSettings.units);
   }
 });
 

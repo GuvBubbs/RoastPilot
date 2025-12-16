@@ -176,6 +176,8 @@
           @openOvenModal="handleOpenOvenModal"
           @openReadingModal="handleOpenReadingModal"
           @openSettings="handleOpenSettings"
+          @openPauseModal="state.showPauseCookingModal = true"
+          @openRestartModal="state.showRestartOvenModal = true"
         />
 
         <!-- Temperature Chart -->
@@ -225,6 +227,18 @@
     <!-- Settings Panel -->
     <SettingsPanel v-model="state.showSettings" />
 
+    <!-- Restart Oven Modal -->
+    <RestartOvenModal
+      v-model="state.showRestartOvenModal"
+      @restarted="handleOvenRestarted"
+    />
+    
+    <!-- Pause Cooking Modal -->
+    <PauseCookingModal
+      v-model="state.showPauseCookingModal"
+      @paused="handleCookingPaused"
+    />
+    
     <!-- Offline Indicator -->
     <OfflineIndicator />
   </ErrorBoundary>
@@ -244,6 +258,8 @@ import OvenEventsLog from './components/OvenEventsLog.vue';
 import ToastContainer from './components/ToastContainer.vue';
 import ErrorBoundary from './components/ErrorBoundary.vue';
 import OfflineIndicator from './components/OfflineIndicator.vue';
+import RestartOvenModal from './components/RestartOvenModal.vue';
+import PauseCookingModal from './components/PauseCookingModal.vue';
 
 // Lazy load heavy components for better performance
 const TemperatureChart = defineAsyncComponent(() => 
@@ -280,6 +296,8 @@ const state = reactive({
   showSessionSetup: false,
   showSettings: false,
   showResumePrompt: false,
+  showRestartOvenModal: false,
+  showPauseCookingModal: false,
   showEndConfirmation: false,
   isLoading: true
 });
@@ -368,6 +386,16 @@ function handleOpenReadingModal() {
 
 function handleOpenSettings() {
   state.showSettings = true;
+}
+
+function handleOvenRestarted() {
+  // Toast notification is handled by the RestartOvenModal component
+  state.showRestartOvenModal = false;
+}
+
+function handleCookingPaused() {
+  // Toast notification is handled by the PauseCookingModal component
+  state.showPauseCookingModal = false;
 }
 
 // Initialize on mount

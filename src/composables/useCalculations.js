@@ -24,6 +24,13 @@ export function useCalculations() {
   });
   
   /**
+   * Current heating rate in raw units (Fahrenheit per hour)
+   */
+  const currentRateRaw = computed(() => {
+    return rawCalculations.value?.currentRate ?? null;
+  });
+  
+  /**
    * Current heating rate in display units
    */
   const currentRate = computed(() => {
@@ -179,10 +186,12 @@ export function useCalculations() {
   });
   
   return {
-    // Raw values
+    // Raw values (internal Fahrenheit)
+    currentRateRaw,
     currentRate,
     averageRate,
     predictedMinutes,
+    predictedMinutesToTarget: predictedMinutes, // Alias for recommendation service
     predictedTargetTime,
     scheduleVariance,
     scheduleStatus,

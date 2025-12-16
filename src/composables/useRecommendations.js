@@ -6,7 +6,7 @@ import { toDisplayUnit, formatTemperature } from '../utils/temperatureUtils.js';
 
 export function useRecommendations() {
   const { readings, ovenEvents, currentOvenTemp, config, settings, displayUnits } = useSession();
-  const { scheduleVariance, scheduleStatus, confidence } = useCalculations();
+  const { scheduleVariance, scheduleStatus, confidence, predictedMinutesToTarget, currentRateRaw } = useCalculations();
   
   /**
    * Raw recommendation result (internal units)
@@ -34,7 +34,9 @@ export function useRecommendations() {
       scheduleVarianceMinutes: scheduleVariance.value,
       scheduleStatus: scheduleStatus.value,
       confidence: confidence.value,
-      settings: settings.value
+      settings: settings.value,
+      predictedMinutesToTarget: predictedMinutesToTarget.value,
+      currentRate: currentRateRaw.value
     });
   });
   
@@ -86,9 +88,20 @@ export function useRecommendations() {
   });
   
   /**
-   * Primary recommendation message
+   * Primary recommendation message with unit conversion
    */
-  const message = computed(() => rawRecommendation.value.message);
+  const message = computed(() => {
+    const msg = rawRecommendation.value.message;
+    if (!msg) return null;
+    
+    // Handle LOW_TEMP_DISABLED message with proper unit conversion
+    if (rawRecommendation.value.practicalMinF !== null && rawRecommendation.value.practicalMinF !== undefined) {
+      const minTempFormatted = formatTemperature(rawRecommendation.value.practicalMinF, displayUnits.value);
+      return msg.replace('{minTemp}', minTempFormatted);
+    }
+    
+    return msg;
+  });
   
   /**
    * Detailed reasoning for the recommendation
@@ -116,6 +129,29 @@ export function useRecommendations() {
   const severity = computed(() => rawRecommendation.value.severity || 'normal');
   
   /**
+   * Alternative message (e.g., turn oven off) with unit conversion
+   */
+  const alternativeMessage = computed(() => {
+    const altMsg = rawRecommendation.value.alternativeMessage;
+    if (!altMsg) return null;
+    
+    // Handle OVEN_OFF_ALTERNATIVE message with proper unit conversion
+    if (rawRecommendation.value.ovenOffMinutes && currentOvenTemp.value !== null) {
+      const ovenTempFormatted = formatTemperature(currentOvenTemp.value, displayUnits.value);
+      return altMsg
+        .replace('{minutes}', rawRecommendation.value.ovenOffMinutes)
+        .replace('{ovenTemp}', ovenTempFormatted);
+    }
+    
+    return altMsg;
+  });
+  
+  /**
+   * Suggested minutes to turn oven off
+   */
+  const ovenOffMinutes = computed(() => rawRecommendation.value.ovenOffMinutes);
+  
+  /**
    * Oven responsiveness analysis (optional feature)
    */
   const responsiveness = computed(() => {
@@ -138,6 +174,8 @@ export function useRecommendations() {
     message,
     reasoning,
     severity,
+    alternativeMessage,
+    ovenOffMinutes,
     
     // Blocker info
     blockerReason,

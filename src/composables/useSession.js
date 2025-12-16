@@ -261,6 +261,37 @@ export function useSession() {
   }
   
   /**
+   * Log that the oven was turned OFF
+   * @param {string} [timestamp] - Optional timestamp, defaults to now
+   */
+  function logOvenOff(timestamp = null) {
+    if (!session.value) return;
+    
+    const previousTemp = currentOvenTemp.value;
+    const event = createOvenEvent(0, previousTemp, timestamp, true);
+    
+    session.value.ovenEvents.push(event);
+    session.value.config.updatedAt = new Date().toISOString();
+    storageService.saveSession(session.value);
+  }
+  
+  /**
+   * Log that the oven was turned back ON
+   * @param {number} temperature - Oven temperature in display units
+   * @param {string} [timestamp] - Optional timestamp, defaults to now
+   */
+  function logOvenOn(temperature, timestamp = null) {
+    if (!session.value) return;
+    
+    const tempInF = toStorageUnit(temperature, displayUnits.value);
+    const event = createOvenEvent(tempInF, 0, timestamp, false);
+    
+    session.value.ovenEvents.push(event);
+    session.value.config.updatedAt = new Date().toISOString();
+    storageService.saveSession(session.value);
+  }
+  
+  /**
    * Update session settings
    * @param {Partial<AppSettings>} updates
    */
@@ -365,6 +396,8 @@ export function useSession() {
     addOvenEvent,
     updateOvenEvent,
     deleteOvenEvent,
+    logOvenOff,
+    logOvenOn,
     updateSettings,
     updateConfig,
     exportSession

@@ -127,6 +127,36 @@ export function checkRecommendationEligibility({
 }
 
 /**
+ * Calculate optimal oven-off duration to delay cooking
+ * 
+ * @param {number} scheduleVarianceMinutes - How early we're running (positive = early)
+ * @param {number|null} predictedMinutesToTarget - Minutes until target at current rate
+ * @param {number|null} currentRate - Current heating rate in °F/hour
+ * @returns {number} Suggested pause duration in minutes
+ */
+function calculateOvenOffDuration(scheduleVarianceMinutes, predictedMinutesToTarget, currentRate) {
+  // If we don't have prediction data, fall back to simple heuristic
+  if (!predictedMinutesToTarget || !currentRate || currentRate <= 0) {
+    return Math.max(5, Math.min(30, Math.round(scheduleVarianceMinutes * 0.4)));
+  }
+  
+  // Calculate how much we need to delay
+  // When oven is off, meat continues to heat from residual heat (slower rate)
+  // Typical carryover: meat gains 3-5°F after oven off, then cools slowly
+  // Estimate: oven off reduces effective rate by ~80-90%
+  const effectiveRateWhenOff = currentRate * 0.15; // 85% reduction
+  
+  // We want to delay by scheduleVarianceMinutes
+  // Time needed = variance / (1 - effectiveRate/currentRate)
+  // Simplified: we want to "stretch" the remaining time
+  const pauseFactor = scheduleVarianceMinutes / predictedMinutesToTarget;
+  const suggestedPause = Math.round(predictedMinutesToTarget * pauseFactor * 0.5);
+  
+  // Constrain to reasonable bounds (5-45 minutes)
+  return Math.max(5, Math.min(45, suggestedPause));
+}
+
+/**
  * Calculate the recommended oven temperature adjustment
  * 
  * @param {Object} params
@@ -134,13 +164,17 @@ export function checkRecommendationEligibility({
  * @param {number} params.scheduleVarianceMinutes - Positive = late, negative = early
  * @param {'early'|'late'|'on-track'} params.scheduleStatus
  * @param {AppSettings} params.settings
+ * @param {number|null} params.predictedMinutesToTarget - Minutes until target
+ * @param {number|null} params.currentRate - Current heating rate in °F/hour
  * @returns {Object} Recommendation details
  */
 export function calculateRecommendation({
   currentOvenTemp,
   scheduleVarianceMinutes,
   scheduleStatus,
-  settings
+  settings,
+  predictedMinutesToTarget,
+  currentRate
 }) {
   const {
     recommendationStepF,
@@ -158,6 +192,9 @@ export function calculateRecommendation({
       changeAmount: 0,
       message: formatMessage(RECOMMENDATION_MESSAGES.HOLD, { ovenTemp: currentOvenTemp }),
       reasoning: `Predicted to finish within ${onTrackThresholdMinutes} minutes of your target time.`,
+      alternativeMessage: null,
+      ovenOffMinutes: null,
+      practicalMinF: null,
       severity: 'normal'
     };
   }
@@ -200,6 +237,9 @@ export function calculateRecommendation({
           changeAmount: 0,
           message: `Already at maximum recommended temperature (${ovenTempMaxF}°F). Consider extending your timeline if possible.`,
           reasoning: `Running ${Math.round(absVariance)} minutes late, but oven is already at the upper limit for low-and-slow cooking.`,
+          alternativeMessage: null,
+          ovenOffMinutes: null,
+          practicalMinF: null,
           severity: 'warning'
         };
       }
@@ -215,6 +255,9 @@ export function calculateRecommendation({
       changeAmount: Math.round(changeAmount),
       message: formatMessage(messageTemplate, { suggestedTemp: Math.round(suggestedTemp) }),
       reasoning: `Running approximately ${Math.round(absVariance)} minutes late. Increasing oven temperature will speed up heating.`,
+      alternativeMessage: null,
+      ovenOffMinutes: null,
+      practicalMinF: null,
       severity
     };
   }
@@ -244,7 +287,67 @@ export function calculateRecommendation({
     // Calculate suggested temperature
     let suggestedTemp = currentOvenTemp - changeAmount;
     
-    // Apply lower bound guardrail
+    // Check practical minimum first (most ovens can't go below ~175°F/80°C)
+    const practicalMinF = settings.ovenTempPracticalMinF || 175;
+    const enableLowTemp = settings.enableLowTempRecommendations !== false;
+    
+    if (suggestedTemp < practicalMinF) {
+      // Calculate optimal oven-off duration using physics-based approach
+      const ovenOffMinutes = calculateOvenOffDuration(absVariance, predictedMinutesToTarget, currentRate);
+      
+      // Check if low temp recommendations are disabled
+      if (!enableLowTemp) {
+        // Suggest oven-off instead of just saying "hold steady"
+        return {
+          action: 'oven-off',
+          suggestedTemp: currentOvenTemp,
+          changeAmount: 0,
+          message: RECOMMENDATION_MESSAGES.LOW_TEMP_DISABLED,
+          reasoning: `Running ${Math.round(absVariance)} minutes early. Low temperature recommendations are disabled, but you can pause cooking temporarily.`,
+          alternativeMessage: RECOMMENDATION_MESSAGES.OVEN_OFF_ALTERNATIVE,
+          ovenOffMinutes,
+          practicalMinF: practicalMinF,
+          severity: 'moderate'
+        };
+      }
+      
+      // Already at practical minimum - suggest turning oven off temporarily
+      if (currentOvenTemp <= practicalMinF) {
+        return {
+          action: 'oven-off',
+          suggestedTemp: currentOvenTemp,
+          changeAmount: 0,
+          message: RECOMMENDATION_MESSAGES.OVEN_OFF_SUGGESTED,
+          reasoning: `Running ${Math.round(absVariance)} minutes early. Your oven is already at the practical minimum temperature.`,
+          alternativeMessage: RECOMMENDATION_MESSAGES.OVEN_OFF_ALTERNATIVE,
+          ovenOffMinutes,
+          practicalMinF: null,
+          severity: 'moderate'
+        };
+      }
+      
+      // Suggest lowering to practical minimum
+      suggestedTemp = practicalMinF;
+      changeAmount = currentOvenTemp - suggestedTemp;
+      
+      const messageTemplate = absVariance > 30 
+        ? RECOMMENDATION_MESSAGES.LOWER_LARGE 
+        : RECOMMENDATION_MESSAGES.LOWER_SMALL;
+      
+      return {
+        action: 'lower',
+        suggestedTemp: Math.round(suggestedTemp),
+        changeAmount: Math.round(changeAmount),
+        message: formatMessage(messageTemplate, { suggestedTemp: Math.round(suggestedTemp) }),
+        reasoning: `Running approximately ${Math.round(absVariance)} minutes early. This is the practical minimum for most ovens.`,
+        alternativeMessage: null,
+        ovenOffMinutes: null,
+        practicalMinF: null,
+        severity
+      };
+    }
+    
+    // Apply food safety lower bound guardrail
     if (suggestedTemp < ovenTempMinF) {
       suggestedTemp = ovenTempMinF;
       changeAmount = currentOvenTemp - suggestedTemp;
@@ -257,6 +360,9 @@ export function calculateRecommendation({
           changeAmount: 0,
           message: `Already at minimum recommended temperature (${ovenTempMinF}°F). You may finish early.`,
           reasoning: `Running ${Math.round(absVariance)} minutes early, but oven is already at the lower limit for food safety.`,
+          alternativeMessage: null,
+          ovenOffMinutes: null,
+          practicalMinF: null,
           severity: 'info'
         };
       }
@@ -272,6 +378,9 @@ export function calculateRecommendation({
       changeAmount: Math.round(changeAmount),
       message: formatMessage(messageTemplate, { suggestedTemp: Math.round(suggestedTemp) }),
       reasoning: `Running approximately ${Math.round(absVariance)} minutes early. Lowering oven temperature will slow down heating.`,
+      alternativeMessage: null,
+      ovenOffMinutes: null,
+      practicalMinF: null,
       severity
     };
   }
@@ -283,6 +392,9 @@ export function calculateRecommendation({
     changeAmount: null,
     message: 'Unable to determine schedule status.',
     reasoning: 'Insufficient data to calculate timing.',
+    alternativeMessage: null,
+    ovenOffMinutes: null,
+    practicalMinF: null,
     severity: 'unknown'
   };
 }
@@ -299,6 +411,8 @@ export function calculateRecommendation({
  * @param {'early'|'late'|'on-track'|'unknown'} params.scheduleStatus
  * @param {Object} params.confidence
  * @param {AppSettings} params.settings
+ * @param {number|null} params.predictedMinutesToTarget - Minutes until target at current rate
+ * @param {number|null} params.currentRate - Current heating rate in °F/hour
  * @returns {Recommendation}
  */
 export function generateRecommendation({
@@ -309,7 +423,9 @@ export function generateRecommendation({
   scheduleVarianceMinutes,
   scheduleStatus,
   confidence,
-  settings
+  settings,
+  predictedMinutesToTarget,
+  currentRate
 }) {
   // First check eligibility
   const eligibility = checkRecommendationEligibility({
@@ -327,6 +443,9 @@ export function generateRecommendation({
       changeAmount: null,
       message: null,
       reasoning: null,
+      alternativeMessage: null,
+      ovenOffMinutes: null,
+      practicalMinF: null,
       canRecommend: false,
       blockerReason: eligibility.blockerReason,
       blockerType: eligibility.blockerType,
@@ -339,7 +458,9 @@ export function generateRecommendation({
     currentOvenTemp,
     scheduleVarianceMinutes,
     scheduleStatus,
-    settings
+    settings,
+    predictedMinutesToTarget,
+    currentRate
   });
   
   return {

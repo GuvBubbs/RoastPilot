@@ -164,6 +164,20 @@ export function validateSettings(settings) {
     }
   }
   
+  if (settings.ovenTempPracticalMinF !== undefined) {
+    if (settings.ovenTempPracticalMinF < 150 || settings.ovenTempPracticalMinF > 350) {
+      errors.ovenTempPracticalMinF = 'Must be between 150°F and 350°F';
+    }
+    
+    if (settings.ovenTempMinF !== undefined && settings.ovenTempPracticalMinF < settings.ovenTempMinF) {
+      errors.ovenTempPracticalMinF = 'Practical minimum must be at or above food safety minimum';
+    }
+    
+    if (settings.ovenTempMaxF !== undefined && settings.ovenTempPracticalMinF >= settings.ovenTempMaxF) {
+      errors.ovenTempPracticalMinF = 'Practical minimum must be less than maximum';
+    }
+  }
+  
   return {
     valid: Object.keys(errors).length === 0,
     errors

@@ -40,8 +40,18 @@
               {{ message }}
             </p>
             
+            <!-- Alternative message for oven-off recommendation -->
+            <div v-if="alternativeMessage" class="mt-3 p-3 bg-white dark:bg-gray-900 rounded-lg border border-purple-200 dark:border-purple-700">
+              <p class="text-sm font-medium text-purple-800 dark:text-purple-200">
+                💡 Alternative Approach:
+              </p>
+              <p class="mt-1 text-sm text-gray-700 dark:text-gray-300">
+                {{ alternativeMessage }}
+              </p>
+            </div>
+            
             <!-- Temperature change visual -->
-            <div v-if="action !== 'hold'" class="mt-3 flex items-center gap-3">
+            <div v-if="action !== 'hold' && action !== 'oven-off'" class="mt-3 flex items-center gap-3">
               <div class="text-center">
                 <div class="text-xs text-gray-500 dark:text-gray-400 uppercase">Current</div>
                 <div class="text-xl font-bold text-gray-600 dark:text-gray-400">
@@ -67,7 +77,7 @@
             </div>
             
             <!-- Apply button for raise/lower actions -->
-            <div v-if="action !== 'hold' && action !== 'none'" class="mt-4">
+            <div v-if="action === 'raise' || action === 'lower'" class="mt-4">
               <button
                 @click="applyRecommendation"
                 class="w-full py-3 px-4 rounded-lg font-semibold text-white transition-colors"
@@ -77,6 +87,27 @@
               </button>
               <p class="text-xs text-gray-500 dark:text-gray-400 text-center mt-2">
                 This will log the oven temperature change
+              </p>
+            </div>
+            
+            <!-- Apply button for oven-off action -->
+            <div v-if="action === 'oven-off'" class="mt-4 space-y-2">
+              <button
+                @click="emit('openPauseModal')"
+                class="w-full py-3 px-4 rounded-lg font-semibold text-white transition-colors"
+                :class="applyButtonClass"
+              >
+                Turn Off Oven ({{ ovenOffMinutes }} min pause)
+              </button>
+              <p class="text-xs text-gray-500 dark:text-gray-400 text-center">
+                Set a timer and restart the oven after {{ ovenOffMinutes }} minutes
+              </p>
+            </div>
+            
+            <!-- Oven-off action note -->
+            <div v-if="action === 'oven-off'" class="mt-4 p-3 bg-white dark:bg-gray-900 rounded-lg border border-purple-200 dark:border-purple-700">
+              <p class="text-sm text-gray-600 dark:text-gray-400">
+                <strong>💡 Tip:</strong> Pausing your oven temporarily is a practical way to slow down cooking when you can't lower the temperature any further. Set a timer and restart at the same temperature after the suggested time.
               </p>
             </div>
             
@@ -134,6 +165,27 @@
       </p>
     </div>
     
+    <!-- Manual Pause/Restart Button (Always Visible) -->
+    <div class="mt-3 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-3">
+      <div class="flex items-center justify-between gap-3">
+        <div class="flex-1">
+          <h4 class="text-sm font-medium text-gray-700 dark:text-gray-300">
+            {{ isOvenCurrentlyOff ? 'Restart Cooking' : 'Pause Cooking' }}
+          </h4>
+          <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+            {{ isOvenCurrentlyOff ? 'Turn the oven back on to continue cooking' : 'Turn off oven temporarily to slow down cooking' }}
+          </p>
+        </div>
+        <button
+          @click="isOvenCurrentlyOff ? emit('openRestartModal') : emit('openPauseModal')"
+          class="px-4 py-2 rounded-lg font-medium text-white transition-colors whitespace-nowrap"
+          :class="isOvenCurrentlyOff ? 'bg-green-600 hover:bg-green-700 dark:bg-green-700 dark:hover:bg-green-800' : 'bg-purple-600 hover:bg-purple-700 dark:bg-purple-700 dark:hover:bg-purple-800'"
+        >
+          {{ isOvenCurrentlyOff ? 'Restart Oven' : 'Pause Now' }}
+        </button>
+      </div>
+    </div>
+    
     <!-- Oven Responsiveness (optional, collapsible) -->
     <details v-if="hasResponsivenessData" class="mt-3">
       <summary class="text-sm text-gray-500 dark:text-gray-400 cursor-pointer hover:text-gray-700 dark:hover:text-gray-300 px-2">
@@ -154,9 +206,9 @@ import { useToast } from '../composables/useToast.js';
 import { formatTemperature } from '../utils/temperatureUtils.js';
 import { DISCLAIMER } from '../constants/defaults.js';
 
-const emit = defineEmits(['openOvenModal', 'openReadingModal', 'openSettings']);
+const emit = defineEmits(['openOvenModal', 'openReadingModal', 'openSettings', 'openPauseModal', 'openRestartModal']);
 
-const { currentOvenTemp, displayUnits, addOvenEvent } = useSession();
+const { currentOvenTemp, displayUnits, addOvenEvent, ovenEvents } = useSession();
 const {
   canRecommend,
   action,
@@ -166,6 +218,8 @@ const {
   message,
   reasoning,
   severity,
+  alternativeMessage,
+  ovenOffMinutes,
   blockerReason,
   blockerType,
   blockerProgress,
@@ -175,6 +229,13 @@ const {
 const { showToast } = useToast();
 
 const disclaimer = DISCLAIMER;
+
+// Check if oven is currently off
+const isOvenCurrentlyOff = computed(() => {
+  if (!ovenEvents.value || ovenEvents.value.length === 0) return false;
+  const lastEvent = ovenEvents.value[ovenEvents.value.length - 1];
+  return lastEvent.isOff === true;
+});
 
 // Computed display values
 const currentOvenFormatted = computed(() => {
@@ -193,6 +254,7 @@ const actionTitle = computed(() => {
     case 'raise': return 'Raise Oven Temperature';
     case 'lower': return 'Lower Oven Temperature';
     case 'hold': return 'Hold Steady';
+    case 'oven-off': return 'Pause Cooking Temporarily';
     default: return 'No Recommendation';
   }
 });
@@ -220,6 +282,7 @@ const statusIcon = computed(() => {
     case 'raise': return 'ArrowUpCircleIcon';
     case 'lower': return 'ArrowDownCircleIcon';
     case 'hold': return 'CheckCircleIcon';
+    case 'oven-off': return 'ClockIcon';
     default: return 'ClockIcon';
   }
 });
@@ -236,6 +299,7 @@ const panelClasses = computed(() => {
         : 'bg-amber-50 dark:bg-amber-900/20 border-amber-300 dark:border-amber-800';
     case 'lower': return 'bg-blue-50 dark:bg-blue-900/20 border-blue-300 dark:border-blue-800';
     case 'hold': return 'bg-green-50 dark:bg-green-900/20 border-green-300 dark:border-green-800';
+    case 'oven-off': return 'bg-purple-50 dark:bg-purple-900/20 border-purple-300 dark:border-purple-800';
     default: return 'bg-gray-50 dark:bg-gray-800 border-gray-200 dark:border-gray-700';
   }
 });
@@ -246,6 +310,7 @@ const iconClass = computed(() => {
     case 'raise': return severity.value === 'urgent' ? 'text-red-500' : 'text-amber-500';
     case 'lower': return 'text-blue-500';
     case 'hold': return 'text-green-500';
+    case 'oven-off': return 'text-purple-500';
     default: return 'text-gray-400';
   }
 });
@@ -256,6 +321,7 @@ const textClass = computed(() => {
     case 'raise': return severity.value === 'urgent' ? 'text-red-700 dark:text-red-300' : 'text-amber-700 dark:text-amber-300';
     case 'lower': return 'text-blue-700 dark:text-blue-300';
     case 'hold': return 'text-green-700 dark:text-green-300';
+    case 'oven-off': return 'text-purple-700 dark:text-purple-300';
     default: return 'text-gray-700 dark:text-gray-300';
   }
 });
@@ -280,6 +346,7 @@ const applyButtonClass = computed(() => {
   switch (action.value) {
     case 'raise': return 'bg-amber-500 hover:bg-amber-600 dark:bg-amber-600 dark:hover:bg-amber-700';
     case 'lower': return 'bg-blue-500 hover:bg-blue-600 dark:bg-blue-600 dark:hover:bg-blue-700';
+    case 'oven-off': return 'bg-purple-500 hover:bg-purple-600 dark:bg-purple-600 dark:hover:bg-purple-700';
     default: return 'bg-gray-500 hover:bg-gray-600';
   }
 });

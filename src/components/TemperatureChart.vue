@@ -104,6 +104,7 @@ const projectionData = computed(() => {
 
 /**
  * Transform oven events into step chart data
+ * Handles oven-off events by creating gaps in the line
  */
 const ovenTempData = computed(() => {
   if (ovenEvents.value.length === 0) return [];
@@ -111,22 +112,45 @@ const ovenTempData = computed(() => {
   const data = [];
   
   ovenEvents.value.forEach((event, index) => {
-    const temp = toDisplayUnit(event.setTemp, displayUnits.value);
     const time = new Date(event.timestamp);
     
-    // For step chart: add point at previous temp just before this timestamp
-    if (index > 0) {
-      const prevTemp = toDisplayUnit(ovenEvents.value[index - 1].setTemp, displayUnits.value);
-      data.push({ x: time, y: prevTemp });
+    if (event.isOff) {
+      // Oven turned off - end the line here
+      const prevTemp = index > 0 
+        ? toDisplayUnit(ovenEvents.value[index - 1].setTemp, displayUnits.value)
+        : 0;
+      
+      // Add point to step down
+      if (index > 0) {
+        data.push({ x: time, y: prevTemp });
+      }
+      
+      // Add null point to create gap in line
+      data.push({ x: time, y: null });
+    } else {
+      const temp = toDisplayUnit(event.setTemp, displayUnits.value);
+      
+      // Check if previous event was oven-off
+      const prevWasOff = index > 0 && ovenEvents.value[index - 1].isOff;
+      
+      if (prevWasOff) {
+        // Resuming from off - start new line segment
+        data.push({ x: time, y: null });
+        data.push({ x: time, y: temp });
+      } else {
+        // Normal step change
+        if (index > 0) {
+          const prevTemp = toDisplayUnit(ovenEvents.value[index - 1].setTemp, displayUnits.value);
+          data.push({ x: time, y: prevTemp });
+        }
+        data.push({ x: time, y: temp });
+      }
     }
-    
-    // Add point at new temp
-    data.push({ x: time, y: temp });
   });
   
-  // Extend last value to current time
-  if (ovenEvents.value.length > 0) {
-    const lastEvent = ovenEvents.value[ovenEvents.value.length - 1];
+  // Extend last value to current time (only if oven is currently on)
+  const lastEvent = ovenEvents.value[ovenEvents.value.length - 1];
+  if (lastEvent && !lastEvent.isOff) {
     const lastTemp = toDisplayUnit(lastEvent.setTemp, displayUnits.value);
     data.push({ x: new Date(), y: lastTemp });
   }
@@ -268,6 +292,7 @@ const chartData = computed(() => {
       stepped: 'before',
       tension: 0,
       fill: false,
+      spanGaps: false,  // Don't connect across null values (oven-off gaps)
       order: 3,
       yAxisID: 'yOven'
     });
