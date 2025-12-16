@@ -52,9 +52,14 @@
  * @property {number|null} changeAmount - Degrees to change (always positive)
  * @property {string} message - Human-readable recommendation (may contain {minTemp} placeholder)
  * @property {string|null} reasoning - Explanation of why this recommendation
- * @property {string|null} alternativeMessage - Alternative action message (may contain {minutes}, {ovenTemp} placeholders)
+ * @property {string|null} alternativeMessage - Alternative action message (may contain {minutes}, {ovenTemp}, {estimatedTemp} placeholders)
  * @property {number|null} ovenOffMinutes - Suggested minutes to turn oven off
  * @property {number|null} practicalMinF - Practical minimum oven temp for message formatting
+ * @property {string|null} restartTime - ISO timestamp when to restart oven (when oven is off)
+ * @property {number|null} restartTemp - Temperature to restart oven at in Fahrenheit (when oven is off)
+ * @property {number|null} minutesUntilRestart - Minutes until should restart oven (when oven is off)
+ * @property {boolean} shouldRestartNow - Whether should restart oven immediately (when oven is off)
+ * @property {number|null} estimatedCurrentMeatTemp - Estimated current meat temperature in Fahrenheit (when oven is off)
  * @property {boolean} canRecommend - Whether conditions allow a recommendation
  * @property {string|null} blockerReason - If canRecommend is false, why
  */

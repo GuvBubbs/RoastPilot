@@ -2,6 +2,21 @@ import { minutesBetween } from '../utils/timeUtils.js';
 import { RECOMMENDATION_MESSAGES, SETTINGS_DEFAULTS } from '../constants/defaults.js';
 
 /**
+ * Estimate meat temperature after cooling period
+ * Uses exponential decay (Newton's Law of Cooling)
+ * 
+ * @param {number} initialTemp - Initial meat temperature in °F
+ * @param {number} minutesElapsed - Time elapsed since cooling started
+ * @param {number} ambientTemp - Room/ambient temperature in °F (default 70°F)
+ * @param {number} coolingRate - Cooling constant k (default 0.02 per minute for typical roasts)
+ * @returns {number} Estimated current temperature in °F
+ */
+function estimateMeatCooling(initialTemp, minutesElapsed, ambientTemp = 70, coolingRate = 0.02) {
+  // T(t) = T_ambient + (T_initial - T_ambient) * e^(-k*t)
+  return ambientTemp + (initialTemp - ambientTemp) * Math.exp(-coolingRate * minutesElapsed);
+}
+
+/**
  * Determine if conditions allow making a recommendation
  * 
  * @param {Object} params
@@ -66,7 +81,10 @@ export function checkRecommendationEligibility({
   const lastOvenEvent = ovenEvents[ovenEvents.length - 1];
   const ovenDataAge = minutesBetween(lastOvenEvent.timestamp, new Date().toISOString());
   
-  if (ovenDataAge > settings.ovenTempStaleMinutes) {
+  // Skip stale check if oven is currently off (we'll handle restart recommendations separately)
+  const isOvenOff = lastOvenEvent.isOff === true;
+  
+  if (!isOvenOff && ovenDataAge > settings.ovenTempStaleMinutes) {
     return {
       canRecommend: false,
       blockerReason: RECOMMENDATION_MESSAGES.OVEN_TEMP_STALE,
@@ -76,16 +94,6 @@ export function checkRecommendationEligibility({
         required: settings.ovenTempStaleMinutes,
         message: 'Please confirm your current oven setting'
       }
-    };
-  }
-  
-  // Check confidence level
-  if (confidence.level === 'insufficient') {
-    return {
-      canRecommend: false,
-      blockerReason: confidence.reason,
-      blockerType: 'insufficient_confidence',
-      progress: null
     };
   }
   
@@ -99,7 +107,28 @@ export function checkRecommendationEligibility({
     };
   }
   
-  // Check for problematic rate
+  // If oven is off, we can provide restart recommendations regardless of confidence/rate stability
+  // Restart recommendations don't rely on stable heating rate predictions
+  if (isOvenOff) {
+    return {
+      canRecommend: true,
+      blockerReason: null,
+      blockerType: null,
+      progress: null
+    };
+  }
+  
+  // For normal recommendations (oven is on), check confidence level
+  if (confidence.level === 'insufficient') {
+    return {
+      canRecommend: false,
+      blockerReason: confidence.reason,
+      blockerType: 'insufficient_confidence',
+      progress: null
+    };
+  }
+  
+  // Check for problematic rate (only when oven is on)
   if (confidence.level === 'low' && confidence.reason.includes('slow or negative')) {
     return {
       canRecommend: false,
@@ -154,6 +183,126 @@ function calculateOvenOffDuration(scheduleVarianceMinutes, predictedMinutesToTar
   
   // Constrain to reasonable bounds (5-45 minutes)
   return Math.max(5, Math.min(45, suggestedPause));
+}
+
+/**
+ * Estimate heating rate at a different oven temperature
+ * Uses proportional scaling based on temp difference
+ * 
+ * @param {number} newOvenTemp - Proposed new oven temperature in °F
+ * @param {number} currentRate - Current observed heating rate in °F/hour
+ * @param {number} currentOvenTemp - Current oven temperature in °F
+ * @returns {number} Estimated heating rate at new oven temp in °F/hour
+ */
+function estimateHeatingRate(newOvenTemp, currentRate, currentOvenTemp) {
+  if (!currentRate || currentRate <= 0 || !currentOvenTemp) {
+    // No rate data, use typical rate: ~10-15°F/hr at 225°F
+    return (newOvenTemp / 225) * 12;
+  }
+  
+  // Simple proportional model: rate scales with oven temp
+  // This is a rough approximation
+  const scaleFactor = newOvenTemp / currentOvenTemp;
+  return currentRate * scaleFactor;
+}
+
+/**
+ * Calculate when to restart oven and at what temperature
+ * 
+ * @param {Object} params
+ * @param {number} params.lastMeatTemp - Last recorded meat temperature in °F
+ * @param {number} params.targetTemp - Target meat temperature in °F
+ * @param {number} params.minutesSinceOvenOff - Minutes since oven was turned off
+ * @param {string} params.desiredServeTime - ISO timestamp of desired serve time
+ * @param {number} params.previousOvenTemp - Oven temperature before it was turned off in °F
+ * @param {number|null} params.currentRate - Current/recent heating rate in °F/hour
+ * @param {AppSettings} params.settings
+ * @returns {Object} Restart recommendation
+ */
+function calculateOvenRestartRecommendation({
+  lastMeatTemp,
+  targetTemp,
+  minutesSinceOvenOff,
+  desiredServeTime,
+  previousOvenTemp,
+  currentRate,
+  settings
+}) {
+  // 1. Estimate current meat temp (after cooling)
+  const estimatedCurrentTemp = estimateMeatCooling(lastMeatTemp, minutesSinceOvenOff);
+  
+  // 2. Calculate temp deficit
+  const tempDeficit = targetTemp - estimatedCurrentTemp;
+  
+  // If already at or past target, recommend restart immediately
+  if (tempDeficit <= 0) {
+    return {
+      restartTime: new Date().toISOString(),
+      restartTemp: previousOvenTemp,
+      minutesUntilRestart: 0,
+      shouldRestartNow: true,
+      estimatedCurrentMeatTemp: estimatedCurrentTemp,
+      reasoning: 'Meat is already at or past target temperature.'
+    };
+  }
+  
+  // 3. Calculate time remaining to serve time
+  const now = new Date().toISOString();
+  const minutesToServeTime = minutesBetween(now, desiredServeTime);
+  
+  // If no time left or past serve time, restart immediately at higher temp
+  if (minutesToServeTime <= 0) {
+    const urgentTemp = Math.min(
+      previousOvenTemp + 50,
+      settings.ovenTempMaxF
+    );
+    return {
+      restartTime: now,
+      restartTemp: urgentTemp,
+      minutesUntilRestart: 0,
+      shouldRestartNow: true,
+      estimatedCurrentMeatTemp: estimatedCurrentTemp,
+      reasoning: 'Past desired serve time - restart immediately at higher temperature.'
+    };
+  }
+  
+  // 4. Determine required heating rate
+  const requiredRatePerHour = (tempDeficit / minutesToServeTime) * 60;
+  
+  // 5. Select appropriate oven temperature
+  let restartTemp = previousOvenTemp;
+  
+  if (currentRate && currentRate > 0) {
+    if (requiredRatePerHour > currentRate * 1.2) {
+      // Need to heat faster - increase temp
+      restartTemp = Math.min(previousOvenTemp + 25, settings.ovenTempMaxF);
+    } else if (requiredRatePerHour < currentRate * 0.8) {
+      // Can afford to heat slower - decrease temp
+      restartTemp = Math.max(previousOvenTemp - 25, settings.ovenTempMinF);
+    }
+  }
+  
+  // 6. Estimate time needed at restart temp
+  const estimatedRateAtRestartTemp = estimateHeatingRate(restartTemp, currentRate, previousOvenTemp);
+  const minutesNeeded = (tempDeficit / estimatedRateAtRestartTemp) * 60;
+  
+  // 7. Calculate restart time
+  const restartTimeMs = new Date(desiredServeTime).getTime() - minutesNeeded * 60000;
+  const restartTime = new Date(restartTimeMs).toISOString();
+  
+  // 8. Determine if should restart now or wait
+  const minutesUntilRestart = minutesBetween(now, restartTime);
+  
+  return {
+    restartTime,
+    restartTemp: Math.round(restartTemp),
+    minutesUntilRestart: Math.round(minutesUntilRestart),
+    shouldRestartNow: minutesUntilRestart <= 0,
+    estimatedCurrentMeatTemp: estimatedCurrentTemp,
+    reasoning: minutesUntilRestart > 0
+      ? `Wait ${Math.round(minutesUntilRestart)} minutes to finish on time.`
+      : 'Restart now to reach target by desired serve time.'
+  };
 }
 
 /**
@@ -235,11 +384,12 @@ export function calculateRecommendation({
           action: 'hold',
           suggestedTemp: currentOvenTemp,
           changeAmount: 0,
-          message: `Already at maximum recommended temperature (${ovenTempMaxF}°F). Consider extending your timeline if possible.`,
+          message: `Already at maximum recommended temperature ({maxTemp}). Consider extending your timeline if possible.`,
           reasoning: `Running ${Math.round(absVariance)} minutes late, but oven is already at the upper limit for low-and-slow cooking.`,
           alternativeMessage: null,
           ovenOffMinutes: null,
           practicalMinF: null,
+          maxTempF: ovenTempMaxF, // For formatting in composable
           severity: 'warning'
         };
       }
@@ -358,11 +508,12 @@ export function calculateRecommendation({
           action: 'hold',
           suggestedTemp: currentOvenTemp,
           changeAmount: 0,
-          message: `Already at minimum recommended temperature (${ovenTempMinF}°F). You may finish early.`,
+          message: `Already at minimum recommended temperature ({minTemp}). You may finish early.`,
           reasoning: `Running ${Math.round(absVariance)} minutes early, but oven is already at the lower limit for food safety.`,
           alternativeMessage: null,
           ovenOffMinutes: null,
           practicalMinF: null,
+          minTempF: ovenTempMinF, // For formatting in composable
           severity: 'info'
         };
       }
@@ -406,6 +557,7 @@ export function calculateRecommendation({
  * @param {InternalReading[]} params.readings
  * @param {OvenTempEvent[]} params.ovenEvents
  * @param {number} params.currentOvenTemp - Current oven temp in °F
+ * @param {number} params.targetTemp - Target internal meat temp in °F
  * @param {string|null} params.desiredServeTime
  * @param {number|null} params.scheduleVarianceMinutes
  * @param {'early'|'late'|'on-track'|'unknown'} params.scheduleStatus
@@ -419,6 +571,7 @@ export function generateRecommendation({
   readings,
   ovenEvents,
   currentOvenTemp,
+  targetTemp,
   desiredServeTime,
   scheduleVarianceMinutes,
   scheduleStatus,
@@ -446,6 +599,11 @@ export function generateRecommendation({
       alternativeMessage: null,
       ovenOffMinutes: null,
       practicalMinF: null,
+      restartTime: null,
+      restartTemp: null,
+      minutesUntilRestart: null,
+      shouldRestartNow: false,
+      estimatedCurrentMeatTemp: null,
       canRecommend: false,
       blockerReason: eligibility.blockerReason,
       blockerType: eligibility.blockerType,
@@ -453,7 +611,54 @@ export function generateRecommendation({
     };
   }
   
-  // Calculate the recommendation
+  // Check if oven is currently off
+  const lastOvenEvent = ovenEvents[ovenEvents.length - 1];
+  const isOvenOff = lastOvenEvent.isOff === true;
+  
+  if (isOvenOff && desiredServeTime) {
+    // Oven is off - calculate restart recommendation
+    const lastReading = readings[readings.length - 1];
+    const ovenOffTime = new Date(lastOvenEvent.timestamp);
+    const minutesSinceOvenOff = minutesBetween(lastOvenEvent.timestamp, new Date().toISOString());
+    
+    // Find the oven temp before it was turned off
+    const previousOvenTemp = lastOvenEvent.previousTemp || currentOvenTemp || 225;
+    
+    const restartRec = calculateOvenRestartRecommendation({
+      lastMeatTemp: lastReading.temp,
+      targetTemp,
+      minutesSinceOvenOff,
+      desiredServeTime,
+      previousOvenTemp,
+      currentRate,
+      settings
+    });
+    
+    return {
+      action: 'oven-off',
+      suggestedTemp: restartRec.restartTemp,
+      changeAmount: null,
+      message: restartRec.shouldRestartNow 
+        ? RECOMMENDATION_MESSAGES.OVEN_RESTART_NOW
+        : RECOMMENDATION_MESSAGES.OVEN_RESTART_TIMED,
+      reasoning: restartRec.reasoning,
+      alternativeMessage: RECOMMENDATION_MESSAGES.OVEN_OFF_COOLING,
+      ovenOffMinutes: null,
+      practicalMinF: null,
+      restartTime: restartRec.restartTime,
+      restartTemp: restartRec.restartTemp,
+      minutesUntilRestart: restartRec.minutesUntilRestart,
+      shouldRestartNow: restartRec.shouldRestartNow,
+      estimatedCurrentMeatTemp: restartRec.estimatedCurrentMeatTemp,
+      canRecommend: true,
+      blockerReason: null,
+      blockerType: null,
+      progress: null,
+      severity: restartRec.shouldRestartNow ? 'moderate' : 'normal'
+    };
+  }
+  
+  // Calculate the normal recommendation (oven is on)
   const recommendation = calculateRecommendation({
     currentOvenTemp,
     scheduleVarianceMinutes,
@@ -465,6 +670,11 @@ export function generateRecommendation({
   
   return {
     ...recommendation,
+    restartTime: null,
+    restartTemp: null,
+    minutesUntilRestart: null,
+    shouldRestartNow: false,
+    estimatedCurrentMeatTemp: null,
     canRecommend: true,
     blockerReason: null,
     blockerType: null,
@@ -556,7 +766,8 @@ export function analyzeOvenResponsiveness(readings, ovenEvents) {
     segments,
     correlation,
     responsiveness, // °F/hr change per °F oven change
-    description: generateResponsivenessDescription(responsiveness, correlation)
+    responsivenessValue: responsiveness,
+    descriptionType: getResponsivenessDescriptionType(responsiveness, correlation)
   };
 }
 
@@ -580,18 +791,29 @@ function calculateCorrelation(x, y) {
 }
 
 /**
- * Generate human-readable description of oven responsiveness
+ * Determine the type of responsiveness description
+ * Returns type and raw values for formatting with proper units
  */
-function generateResponsivenessDescription(responsiveness, correlation) {
+function getResponsivenessDescriptionType(responsiveness, correlation) {
   if (correlation < 0.3) {
-    return 'Oven temperature changes have had limited observable effect on heating rate so far.';
+    return {
+      type: 'limited',
+      correlation
+    };
   }
   
   if (responsiveness > 0.1) {
-    return `Higher oven temperatures have increased heating rate. Each +25°F oven increase has added roughly +${(responsiveness * 25).toFixed(1)}°F/hr to the heating rate.`;
+    return {
+      type: 'high',
+      responsiveness,
+      correlation
+    };
   }
   
-  return 'Moderate correlation between oven temperature and heating rate observed.';
+  return {
+    type: 'moderate',
+    correlation
+  };
 }
 
 

@@ -3,6 +3,7 @@ import { useSession } from './useSession.js';
 import { useCalculations } from './useCalculations.js';
 import { generateRecommendation, analyzeOvenResponsiveness } from '../services/recommendationService.js';
 import { toDisplayUnit, formatTemperature } from '../utils/temperatureUtils.js';
+import { formatTime } from '../utils/timeUtils.js';
 
 export function useRecommendations() {
   const { readings, ovenEvents, currentOvenTemp, config, settings, displayUnits } = useSession();
@@ -30,6 +31,7 @@ export function useRecommendations() {
       readings: readings.value,
       ovenEvents: ovenEvents.value,
       currentOvenTemp: currentOvenTemp.value,
+      targetTemp: config.value.targetTemp,
       desiredServeTime: config.value.desiredServeTime,
       scheduleVarianceMinutes: scheduleVariance.value,
       scheduleStatus: scheduleStatus.value,
@@ -91,13 +93,53 @@ export function useRecommendations() {
    * Primary recommendation message with unit conversion
    */
   const message = computed(() => {
-    const msg = rawRecommendation.value.message;
+    let msg = rawRecommendation.value.message;
     if (!msg) return null;
     
-    // Handle LOW_TEMP_DISABLED message with proper unit conversion
-    if (rawRecommendation.value.practicalMinF !== null && rawRecommendation.value.practicalMinF !== undefined) {
-      const minTempFormatted = formatTemperature(rawRecommendation.value.practicalMinF, displayUnits.value);
-      return msg.replace('{minTemp}', minTempFormatted);
+    // Handle {ovenTemp} placeholder - used in HOLD, OVEN_RESTART_NOW, OVEN_RESTART_TIMED, etc.
+    if (msg.includes('{ovenTemp}')) {
+      let tempToFormat = null;
+      
+      // For restart messages, use restartTemp
+      if (rawRecommendation.value.restartTemp !== null) {
+        tempToFormat = rawRecommendation.value.restartTemp;
+      }
+      // For other messages (like HOLD), use currentOvenTemp
+      else if (currentOvenTemp.value !== null) {
+        tempToFormat = currentOvenTemp.value;
+      }
+      
+      if (tempToFormat !== null) {
+        const tempFormatted = formatTemperature(tempToFormat, displayUnits.value);
+        msg = msg.replace(/{ovenTemp}/g, tempFormatted);
+      }
+    }
+    
+    // Handle {suggestedTemp} placeholder - used in RAISE/LOWER messages
+    if (msg.includes('{suggestedTemp}') && rawRecommendation.value.suggestedTemp !== null) {
+      const tempFormatted = formatTemperature(rawRecommendation.value.suggestedTemp, displayUnits.value);
+      msg = msg.replace(/{suggestedTemp}/g, tempFormatted);
+    }
+    
+    // Handle {minTemp} placeholder - used in LOW_TEMP_DISABLED and MIN_TEMP messages
+    if (msg.includes('{minTemp}')) {
+      const minTempF = rawRecommendation.value.practicalMinF || rawRecommendation.value.minTempF;
+      if (minTempF !== null && minTempF !== undefined) {
+        const minTempFormatted = formatTemperature(minTempF, displayUnits.value);
+        msg = msg.replace(/{minTemp}/g, minTempFormatted);
+      }
+    }
+    
+    // Handle {maxTemp} placeholder - used in MAX_TEMP message
+    if (msg.includes('{maxTemp}') && rawRecommendation.value.maxTempF !== null) {
+      const maxTempFormatted = formatTemperature(rawRecommendation.value.maxTempF, displayUnits.value);
+      msg = msg.replace(/{maxTemp}/g, maxTempFormatted);
+    }
+    
+    // Handle {restartTime} placeholder - used in OVEN_RESTART_TIMED message
+    if (msg.includes('{restartTime}') && rawRecommendation.value.restartTime) {
+      const restartTimeFormatted = formatTime(rawRecommendation.value.restartTime);
+      msg = msg.replace(/{restartTime}/g, restartTimeFormatted);
     }
     
     return msg;
@@ -132,15 +174,24 @@ export function useRecommendations() {
    * Alternative message (e.g., turn oven off) with unit conversion
    */
   const alternativeMessage = computed(() => {
-    const altMsg = rawRecommendation.value.alternativeMessage;
+    let altMsg = rawRecommendation.value.alternativeMessage;
     if (!altMsg) return null;
     
-    // Handle OVEN_OFF_ALTERNATIVE message with proper unit conversion
-    if (rawRecommendation.value.ovenOffMinutes && currentOvenTemp.value !== null) {
+    // Handle {minutes} placeholder
+    if (altMsg.includes('{minutes}') && rawRecommendation.value.ovenOffMinutes !== null) {
+      altMsg = altMsg.replace(/{minutes}/g, rawRecommendation.value.ovenOffMinutes);
+    }
+    
+    // Handle {ovenTemp} placeholder - use currentOvenTemp for alternative messages
+    if (altMsg.includes('{ovenTemp}') && currentOvenTemp.value !== null) {
       const ovenTempFormatted = formatTemperature(currentOvenTemp.value, displayUnits.value);
-      return altMsg
-        .replace('{minutes}', rawRecommendation.value.ovenOffMinutes)
-        .replace('{ovenTemp}', ovenTempFormatted);
+      altMsg = altMsg.replace(/{ovenTemp}/g, ovenTempFormatted);
+    }
+    
+    // Handle {estimatedTemp} placeholder - used in OVEN_OFF_COOLING message
+    if (altMsg.includes('{estimatedTemp}') && rawRecommendation.value.estimatedCurrentMeatTemp !== null) {
+      const estimatedTempFormatted = formatTemperature(rawRecommendation.value.estimatedCurrentMeatTemp, displayUnits.value);
+      altMsg = altMsg.replace(/{estimatedTemp}/g, estimatedTempFormatted);
     }
     
     return altMsg;
@@ -152,16 +203,87 @@ export function useRecommendations() {
   const ovenOffMinutes = computed(() => rawRecommendation.value.ovenOffMinutes);
   
   /**
+   * Restart time (ISO timestamp)
+   */
+  const restartTime = computed(() => rawRecommendation.value.restartTime || null);
+  
+  /**
+   * Formatted restart time
+   */
+  const restartTimeFormatted = computed(() => {
+    if (!restartTime.value) return null;
+    return formatTime(restartTime.value);
+  });
+  
+  /**
+   * Whether should restart oven now
+   */
+  const shouldRestartNow = computed(() => rawRecommendation.value.shouldRestartNow || false);
+  
+  /**
+   * Estimated current meat temperature (in display units)
+   */
+  const estimatedCurrentMeatTemp = computed(() => {
+    if (!rawRecommendation.value.estimatedCurrentMeatTemp) return null;
+    return toDisplayUnit(rawRecommendation.value.estimatedCurrentMeatTemp, displayUnits.value);
+  });
+  
+  /**
+   * Formatted estimated current meat temperature
+   */
+  const estimatedCurrentMeatTempFormatted = computed(() => {
+    if (!rawRecommendation.value.estimatedCurrentMeatTemp) return null;
+    return formatTemperature(rawRecommendation.value.estimatedCurrentMeatTemp, displayUnits.value);
+  });
+  
+  /**
+   * Minutes until should restart oven
+   */
+  const minutesUntilRestart = computed(() => rawRecommendation.value.minutesUntilRestart || null);
+  
+  /**
    * Oven responsiveness analysis (optional feature)
    */
-  const responsiveness = computed(() => {
+  const responsivenessRaw = computed(() => {
     return analyzeOvenResponsiveness(readings.value, ovenEvents.value);
+  });
+  
+  /**
+   * Formatted responsiveness with proper unit conversion
+   */
+  const responsiveness = computed(() => {
+    const raw = responsivenessRaw.value;
+    if (!raw) return null;
+    
+    // Format description based on type
+    let description = '';
+    const descType = raw.descriptionType;
+    
+    if (descType.type === 'limited') {
+      description = 'Oven temperature changes have had limited observable effect on heating rate so far.';
+    } else if (descType.type === 'high') {
+      // Convert: +25°F/°C oven increase and the resulting rate change
+      const ovenDelta = displayUnits.value === 'C' ? Math.round(25 * 5 / 9) : 25;
+      const rateChange = descType.responsiveness * 25; // In °F/hr
+      const rateChangeConverted = displayUnits.value === 'C' 
+        ? Math.round((rateChange * 5 / 9) * 10) / 10 
+        : Math.round(rateChange * 10) / 10;
+      
+      description = `Higher oven temperatures have increased heating rate. Each +${ovenDelta}°${displayUnits.value} oven increase has added roughly +${rateChangeConverted}°${displayUnits.value}/hr to the heating rate.`;
+    } else {
+      description = 'Moderate correlation between oven temperature and heating rate observed.';
+    }
+    
+    return {
+      ...raw,
+      description
+    };
   });
   
   /**
    * Whether responsiveness data is available
    */
-  const hasResponsivenessData = computed(() => responsiveness.value !== null);
+  const hasResponsivenessData = computed(() => responsivenessRaw.value !== null);
   
   return {
     // Core recommendation
@@ -176,6 +298,14 @@ export function useRecommendations() {
     severity,
     alternativeMessage,
     ovenOffMinutes,
+    
+    // Restart recommendation (when oven is off)
+    restartTime,
+    restartTimeFormatted,
+    shouldRestartNow,
+    minutesUntilRestart,
+    estimatedCurrentMeatTemp,
+    estimatedCurrentMeatTempFormatted,
     
     // Blocker info
     blockerReason,

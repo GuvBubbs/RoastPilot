@@ -90,8 +90,45 @@
               </p>
             </div>
             
-            <!-- Apply button for oven-off action -->
-            <div v-if="action === 'oven-off'" class="mt-4 space-y-2">
+            <!-- Apply button for oven-off action when oven is currently off (restart recommendation) -->
+            <div v-if="action === 'oven-off' && isOvenCurrentlyOff && restartTime" class="mt-4 space-y-3">
+              <!-- Display estimated current meat temp -->
+              <div v-if="estimatedCurrentMeatTempFormatted" class="p-3 bg-white dark:bg-gray-900 rounded-lg border border-purple-200 dark:border-purple-700">
+                <p class="text-sm text-gray-600 dark:text-gray-400">
+                  {{ alternativeMessage }}
+                </p>
+              </div>
+              
+              <!-- Restart time display -->
+              <div class="p-4 bg-purple-50 dark:bg-purple-900/30 rounded-lg border-2 border-purple-300 dark:border-purple-700">
+                <div class="text-center">
+                  <p class="text-sm text-purple-600 dark:text-purple-300 font-medium mb-2">
+                    {{ shouldRestartNow ? '🔥 Restart Now' : '⏰ Restart Time' }}
+                  </p>
+                  <p class="text-2xl font-bold text-purple-700 dark:text-purple-200">
+                    {{ shouldRestartNow ? 'NOW' : restartTimeFormatted }}
+                  </p>
+                  <p class="text-sm text-purple-600 dark:text-purple-300 mt-2">
+                    at {{ suggestedTempFormatted }}
+                  </p>
+                  <p v-if="!shouldRestartNow && minutesUntilRestart !== null" class="text-xs text-purple-500 dark:text-purple-400 mt-1">
+                    (in {{ Math.round(minutesUntilRestart) }} minutes)
+                  </p>
+                </div>
+              </div>
+              
+              <!-- Quick restart button -->
+              <button
+                @click="emit('openRestartModal')"
+                class="w-full py-3 px-4 rounded-lg font-semibold text-white transition-colors"
+                :class="shouldRestartNow ? 'bg-green-600 hover:bg-green-700 dark:bg-green-700 dark:hover:bg-green-800' : 'bg-purple-500 hover:bg-purple-600 dark:bg-purple-600 dark:hover:bg-purple-700'"
+              >
+                {{ shouldRestartNow ? 'Restart Oven Now' : 'Log Oven Restart' }}
+              </button>
+            </div>
+            
+            <!-- Apply button for oven-off action when oven is ON (pause recommendation) -->
+            <div v-else-if="action === 'oven-off' && !isOvenCurrentlyOff && ovenOffMinutes" class="mt-4 space-y-2">
               <button
                 @click="emit('openPauseModal')"
                 class="w-full py-3 px-4 rounded-lg font-semibold text-white transition-colors"
@@ -104,8 +141,8 @@
               </p>
             </div>
             
-            <!-- Oven-off action note -->
-            <div v-if="action === 'oven-off'" class="mt-4 p-3 bg-white dark:bg-gray-900 rounded-lg border border-purple-200 dark:border-purple-700">
+            <!-- Oven-off action note (only when recommending pause, not restart) -->
+            <div v-if="action === 'oven-off' && !isOvenCurrentlyOff" class="mt-4 p-3 bg-white dark:bg-gray-900 rounded-lg border border-purple-200 dark:border-purple-700">
               <p class="text-sm text-gray-600 dark:text-gray-400">
                 <strong>💡 Tip:</strong> Pausing your oven temporarily is a practical way to slow down cooking when you can't lower the temperature any further. Set a timer and restart at the same temperature after the suggested time.
               </p>
@@ -220,6 +257,12 @@ const {
   severity,
   alternativeMessage,
   ovenOffMinutes,
+  restartTime,
+  restartTimeFormatted,
+  shouldRestartNow,
+  minutesUntilRestart,
+  estimatedCurrentMeatTemp,
+  estimatedCurrentMeatTempFormatted,
   blockerReason,
   blockerType,
   blockerProgress,
@@ -254,7 +297,12 @@ const actionTitle = computed(() => {
     case 'raise': return 'Raise Oven Temperature';
     case 'lower': return 'Lower Oven Temperature';
     case 'hold': return 'Hold Steady';
-    case 'oven-off': return 'Pause Cooking Temporarily';
+    case 'oven-off': 
+      // Check if this is a restart recommendation (oven currently off)
+      if (isOvenCurrentlyOff.value && restartTime.value) {
+        return shouldRestartNow.value ? 'Restart Oven Now' : 'Oven Restart Scheduled';
+      }
+      return 'Pause Cooking Temporarily';
     default: return 'No Recommendation';
   }
 });
