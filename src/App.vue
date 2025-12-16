@@ -170,16 +170,11 @@
         <!-- Status Display -->
         <StatusCards />
 
-        <!-- Placeholder for Phase 5: Charts -->
-        <div class="bg-white dark:bg-gray-800 shadow rounded-lg p-6">
-          <h3 class="text-lg font-semibold text-gray-900 dark:text-white mb-3">
-            Temperature Chart
-          </h3>
-          <div class="text-center py-12 text-gray-500 dark:text-gray-400">
-            <p class="mb-2">📈 Charts Coming in Phase 5</p>
-            <p class="text-sm">Temperature progression and oven history will be visualized here</p>
-          </div>
-        </div>
+        <!-- Temperature Chart -->
+        <TemperatureChart />
+
+        <!-- Rate Chart (shown when 3+ readings) -->
+        <RateChart v-if="readings.length >= 3" />
 
         <!-- Temperature Logs -->
         <div class="space-y-4">
@@ -255,6 +250,8 @@ import StatusCards from './components/StatusCards.vue';
 import ReadingsLog from './components/ReadingsLog.vue';
 import OvenEventsLog from './components/OvenEventsLog.vue';
 import ToastContainer from './components/ToastContainer.vue';
+import TemperatureChart from './components/TemperatureChart.vue';
+import RateChart from './components/RateChart.vue';
 import { formatTemperature } from './utils/temperatureUtils.js';
 import { formatDateTime, formatTime } from './utils/timeUtils.js';
 import { DISCLAIMER } from './constants/defaults.js';
