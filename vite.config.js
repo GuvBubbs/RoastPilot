@@ -8,14 +8,19 @@ export default defineConfig({
     vue(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'mask-icon.svg'],
+      injectRegister: 'auto',
+      strategies: 'generateSW',
+      includeAssets: ['favicon.ico'],
       manifest: {
-        name: 'Reverse Sear Tracker',
+        name: 'Reverse Sear Temperature Tracker',
         short_name: 'RoastTracker',
-        description: 'Track your reverse sear roast temperature and get timing recommendations',
+        description: 'Track and predict cooking temperatures for perfect reverse sear results',
         theme_color: '#dc2626',
         background_color: '#ffffff',
         display: 'standalone',
+        orientation: 'portrait',
+        scope: '/',
+        start_url: '/',
         icons: [
           {
             src: 'pwa-192x192.png',
@@ -29,8 +34,8 @@ export default defineConfig({
           }
         ]
       },
-      workbox: {
-        globPatterns: ['**/*.{js,css,html,ico,png,svg}']
+      devOptions: {
+        enabled: true
       }
     })
   ]

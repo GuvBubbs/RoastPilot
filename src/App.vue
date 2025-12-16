@@ -1,7 +1,8 @@
 <template>
-  <div class="min-h-screen bg-gray-50 dark:bg-gray-900">
-    <!-- Header -->
-    <header class="sticky top-0 z-40 bg-white dark:bg-gray-800 shadow">
+  <ErrorBoundary>
+    <div class="min-h-screen bg-gray-50 dark:bg-gray-900">
+      <!-- Header -->
+      <header class="sticky top-0 z-40 bg-white dark:bg-gray-800 shadow">
       <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex items-center justify-between">
         <div>
           <h1 class="text-2xl sm:text-3xl font-bold text-gray-900 dark:text-white">
@@ -191,10 +192,11 @@
       </div>
     </main>
 
-    <!-- Footer -->
-    <footer class="mt-12 py-6 text-center text-sm text-gray-500 dark:text-gray-400 border-t border-gray-200 dark:border-gray-700">
-      <p>{{ DISCLAIMER }}</p>
-    </footer>
+      <!-- Footer -->
+      <footer class="mt-12 py-6 text-center text-sm text-gray-500 dark:text-gray-400 border-t border-gray-200 dark:border-gray-700">
+        <p>{{ DISCLAIMER }}</p>
+      </footer>
+    </div>
 
     <!-- Modals -->
     <SessionSetupModal
@@ -220,34 +222,16 @@
     <!-- Toast Notifications -->
     <ToastContainer />
 
-    <!-- Settings Panel Placeholder -->
-    <div 
-      v-if="state.showSettings"
-      class="fixed inset-0 z-50 flex items-center justify-center p-4"
-      @click.self="state.showSettings = false"
-    >
-      <div class="absolute inset-0 bg-black bg-opacity-50"></div>
-      <div class="relative bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-md w-full p-6">
-        <h2 class="text-2xl font-bold text-gray-900 dark:text-white mb-4">
-          Settings
-        </h2>
-        <div class="text-center py-8 text-gray-500 dark:text-gray-400">
-          <p class="mb-2">⚙️ Settings Panel Coming in Phase 7</p>
-          <p class="text-sm">Configure smoothing, thresholds, and export options</p>
-        </div>
-        <button
-          @click="state.showSettings = false"
-          class="w-full px-4 py-2 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 font-medium rounded-lg transition-colors"
-        >
-          Close
-        </button>
-      </div>
-    </div>
-  </div>
+    <!-- Settings Panel -->
+    <SettingsPanel v-model="state.showSettings" />
+
+    <!-- Offline Indicator -->
+    <OfflineIndicator />
+  </ErrorBoundary>
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted } from 'vue';
+import { ref, reactive, computed, onMounted, defineAsyncComponent } from 'vue';
 import { useSession } from './composables/useSession.js';
 import SessionSetupModal from './components/SessionSetupModal.vue';
 import ResumeSessionDialog from './components/ResumeSessionDialog.vue';
@@ -258,8 +242,20 @@ import RecommendationPanel from './components/RecommendationPanel.vue';
 import ReadingsLog from './components/ReadingsLog.vue';
 import OvenEventsLog from './components/OvenEventsLog.vue';
 import ToastContainer from './components/ToastContainer.vue';
-import TemperatureChart from './components/TemperatureChart.vue';
-import RateChart from './components/RateChart.vue';
+import ErrorBoundary from './components/ErrorBoundary.vue';
+import OfflineIndicator from './components/OfflineIndicator.vue';
+
+// Lazy load heavy components for better performance
+const TemperatureChart = defineAsyncComponent(() => 
+  import('./components/TemperatureChart.vue')
+);
+const RateChart = defineAsyncComponent(() => 
+  import('./components/RateChart.vue')
+);
+const SettingsPanel = defineAsyncComponent(() =>
+  import('./components/SettingsPanel.vue')
+);
+
 import { formatTemperature } from './utils/temperatureUtils.js';
 import { formatDateTime, formatTime } from './utils/timeUtils.js';
 import { DISCLAIMER } from './constants/defaults.js';
@@ -342,8 +338,9 @@ function handleEndSession() {
 
 // Handler: Export before ending
 function handleExportBeforeEnd() {
-  // This will be implemented in Phase 7
-  alert('Export functionality coming in Phase 7!');
+  // Export is now available through the settings panel
+  state.showSettings = true;
+  state.showEndConfirmation = false;
 }
 
 // Handler: Session created from modal

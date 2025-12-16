@@ -473,3 +473,4 @@ function generateResponsivenessDescription(responsiveness, correlation) {
   return 'Moderate correlation between oven temperature and heating rate observed.';
 }
 
+
