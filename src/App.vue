@@ -165,10 +165,17 @@
         </div>
 
         <!-- Input Panel -->
-        <InputPanel />
+        <InputPanel ref="inputPanelRef" />
 
         <!-- Status Display -->
         <StatusCards />
+
+        <!-- Recommendation Panel -->
+        <RecommendationPanel 
+          @openOvenModal="handleOpenOvenModal"
+          @openReadingModal="handleOpenReadingModal"
+          @openSettings="handleOpenSettings"
+        />
 
         <!-- Temperature Chart -->
         <TemperatureChart />
@@ -247,6 +254,7 @@ import ResumeSessionDialog from './components/ResumeSessionDialog.vue';
 import EndSessionDialog from './components/EndSessionDialog.vue';
 import InputPanel from './components/InputPanel.vue';
 import StatusCards from './components/StatusCards.vue';
+import RecommendationPanel from './components/RecommendationPanel.vue';
 import ReadingsLog from './components/ReadingsLog.vue';
 import OvenEventsLog from './components/OvenEventsLog.vue';
 import ToastContainer from './components/ToastContainer.vue';
@@ -342,6 +350,27 @@ function handleExportBeforeEnd() {
 function handleSessionCreated(configData) {
   startSession(configData);
   state.showSessionSetup = false;
+}
+
+// Handlers for RecommendationPanel quick actions
+const inputPanelRef = ref(null);
+
+function handleOpenOvenModal() {
+  // Open the oven modal in InputPanel
+  if (inputPanelRef.value) {
+    inputPanelRef.value.openOvenModal();
+  }
+}
+
+function handleOpenReadingModal() {
+  // Open the reading modal in InputPanel
+  if (inputPanelRef.value) {
+    inputPanelRef.value.openReadingModal();
+  }
+}
+
+function handleOpenSettings() {
+  state.showSettings = true;
 }
 
 // Initialize on mount

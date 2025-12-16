@@ -79,5 +79,19 @@ function handleReadingAdded() {
 function handleOvenUpdated() {
   // Additional logic if needed after oven is updated
 }
+
+// Expose methods for parent component to trigger modals
+function openReadingModal() {
+  showReadingModal.value = true;
+}
+
+function openOvenModal() {
+  showOvenModal.value = true;
+}
+
+defineExpose({
+  openReadingModal,
+  openOvenModal
+});
 </script>
 
