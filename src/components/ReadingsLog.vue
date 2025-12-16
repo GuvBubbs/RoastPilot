@@ -45,7 +45,7 @@
                 Temp
               </th>
               <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider hidden sm:table-cell">
-                Δ Start
+                Change
               </th>
               <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                 Actions
@@ -66,8 +66,8 @@
                 <td class="px-4 py-3 text-sm font-medium text-gray-900 dark:text-white">
                   {{ formatTemperature(reading.temp, displayUnits) }}
                 </td>
-                <td class="px-4 py-3 text-sm hidden sm:table-cell" :class="getDeltaClass(reading.deltaFromStart)">
-                  {{ formatDelta(reading.deltaFromStart, displayUnits) }}
+                <td class="px-4 py-3 text-sm hidden sm:table-cell" :class="getDeltaClass(reading.deltaFromPrevious)">
+                  {{ formatDelta(reading.deltaFromPrevious, displayUnits) }}
                 </td>
                 <td class="px-4 py-3 text-right">
                   <div class="flex items-center justify-end gap-1">
