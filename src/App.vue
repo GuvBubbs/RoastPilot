@@ -105,10 +105,10 @@
           </div>
         </div>
         
-        <!-- Phase 1 Complete Info -->
+        <!-- Phase 4 Complete Info -->
         <div class="mt-6 bg-blue-50 dark:bg-blue-900 dark:bg-opacity-20 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
           <p class="text-sm text-blue-800 dark:text-blue-300">
-            <strong>Phase 3 Complete!</strong> Temperature input system is ready. 
+            <strong>Phase 4 Complete!</strong> Status cards with ETA predictions and rate calculations are ready. 
             Start a session to begin tracking your roast.
           </p>
         </div>
@@ -167,16 +167,8 @@
         <!-- Input Panel -->
         <InputPanel />
 
-        <!-- Placeholder for Phase 4: Status Display -->
-        <div class="bg-white dark:bg-gray-800 shadow rounded-lg p-6">
-          <h3 class="text-lg font-semibold text-gray-900 dark:text-white mb-3">
-            Status & ETA
-          </h3>
-          <div class="text-center py-8 text-gray-500 dark:text-gray-400">
-            <p class="mb-2">⏱️ Status Cards Coming in Phase 4</p>
-            <p class="text-sm">ETA predictions and rate calculations will appear here</p>
-          </div>
-        </div>
+        <!-- Status Display -->
+        <StatusCards />
 
         <!-- Placeholder for Phase 5: Charts -->
         <div class="bg-white dark:bg-gray-800 shadow rounded-lg p-6">
@@ -259,6 +251,7 @@ import SessionSetupModal from './components/SessionSetupModal.vue';
 import ResumeSessionDialog from './components/ResumeSessionDialog.vue';
 import EndSessionDialog from './components/EndSessionDialog.vue';
 import InputPanel from './components/InputPanel.vue';
+import StatusCards from './components/StatusCards.vue';
 import ReadingsLog from './components/ReadingsLog.vue';
 import OvenEventsLog from './components/OvenEventsLog.vue';
 import ToastContainer from './components/ToastContainer.vue';
