@@ -817,3 +817,5 @@ function getResponsivenessDescriptionType(responsiveness, correlation) {
 }
 
 
+
+
