@@ -157,8 +157,13 @@ const control = computed(() => {
       case 'no_oven_data':
       case 'stale_oven_data':
         return { kind: 'ghost', label: 'Update oven temp', event: 'openOvenModal' };
+      // No "Add reading" control here: App.vue's BottomBar already carries
+      // "+ Add reading" as its primary button whenever a session is active, and
+      // this band renders directly above it - the two rendered as a stack of
+      // identical buttons. The pause/restart escape hatch is the one action the
+      // bottom bar does not offer.
       case 'insufficient_readings':
-        return { kind: 'ghost', label: 'Add reading', event: 'openReadingModal' };
+        return pauseControl.value;
       case 'no_serve_time':
         return { kind: 'ghost', label: 'Set serve time', event: 'openSettings' };
       // Nothing to offer before there is a session to act on.
@@ -170,14 +175,21 @@ const control = computed(() => {
   }
 
   switch (action.value) {
+    // Both of these states are waiting on a reading, and both used to offer
+    // their own "Add reading" button directly above the BottomBar's identical
+    // one. The headline already says a reading is what is needed, and the
+    // bottom bar is where the thumb already is - so this band spends its single
+    // control on pause/restart, which nothing else reaches.
     case 'needs-reading':
       // The locked decision: measure the meat, never estimate how far it cooled.
-      return { kind: 'primary', label: 'Add reading', event: 'openReadingModal' };
+      // With the oven off, pauseControl resolves to "Log oven restart", which is
+      // the other half of what a paused cook needs.
+      return pauseControl.value;
 
     case 'settling':
       // Nothing to apply - the change has been accepted, and the only thing that
       // moves this state forward is a reading that shows its effect.
-      return { kind: 'primary', label: 'Add reading', event: 'openReadingModal' };
+      return pauseControl.value;
 
     case 'raise':
     case 'lower':

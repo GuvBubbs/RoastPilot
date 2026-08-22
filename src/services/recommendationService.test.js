@@ -731,6 +731,54 @@ describe('dial-settable suggestions', () => {
     expect(result.suggestedTemp).toBeGreaterThan(225);
     expect(result.changeAmount).toBeGreaterThan(0);
   });
+
+  // recommendationMaxStepF used to be applied to the step BEFORE the dial snap,
+  // and the snap rounds to the nearest mark - so on a Celsius dial, whose marks
+  // are 5°C (9°F) apart, a 25°F cap emitted a 27°F (15°C) suggestion. Found by
+  // the simulated-cook harness, which flagged it in both Celsius scenarios and
+  // in neither Fahrenheit one.
+  describe('recommendationMaxStepF survives the dial snap', () => {
+    const cases = [
+      { label: 'raise, Celsius', baseC: 95, status: 'late', variance: 40 },
+      { label: 'raise, Celsius on an odd mark', baseC: 100, status: 'late', variance: 40 },
+      { label: 'lower, Celsius', baseC: 130, status: 'early', variance: -40 },
+      { label: 'raise, Celsius, moderate', baseC: 95, status: 'late', variance: 20 },
+      { label: 'lower, Celsius, moderate', baseC: 130, status: 'early', variance: -20 }
+    ];
+
+    for (const { label, baseC, status, variance } of cases) {
+      it(`caps the change at recommendationMaxStepF (${label})`, () => {
+        const result = calculateRecommendation({
+          ovenBaseTemp: celsiusToFahrenheit(baseC),
+          scheduleVarianceMinutes: variance,
+          scheduleStatus: status,
+          settings,
+          predictedMinutesToTarget: 100,
+          currentRate: 30,
+          displayUnits: 'C'
+        });
+
+        expect(result.changeAmount).toBeLessThanOrEqual(settings.recommendationMaxStepF);
+        // Still a real dial position, and still a real move.
+        expect(fahrenheitToCelsius(result.suggestedTemp) % 5).toBe(0);
+        expect(result.changeAmount).toBeGreaterThan(0);
+      });
+    }
+
+    it('leaves Fahrenheit suggestions on the cap exactly, as before', () => {
+      const raise = calculateRecommendation({
+        ovenBaseTemp: 200,
+        scheduleVarianceMinutes: 40,
+        scheduleStatus: 'late',
+        settings,
+        predictedMinutesToTarget: 100,
+        currentRate: 30,
+        displayUnits: 'F'
+      });
+      expect(raise.suggestedTemp).toBe(225);
+      expect(raise.changeAmount).toBe(settings.recommendationMaxStepF);
+    });
+  });
 });
 
 describe('assessOvenChangeEffect', () => {

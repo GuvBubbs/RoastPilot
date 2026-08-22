@@ -318,9 +318,18 @@ export function calculateRecommendation({
     // Snap to something the dial can actually be set to, then take the change
     // amount back off the snapped value so the two can never disagree.
     let suggestedTemp = snapToDial(ovenBaseTemp + changeAmount, displayUnits);
+    // Snapping rounds to the NEAREST mark, which can land past
+    // recommendationMaxStepF - the cap above is applied to the unsnapped step.
+    // On a Celsius dial the marks are 5°C (9°F) apart, so a 25°F cap emitted a
+    // 27°F (15°C) suggestion. Step back to the mark below the cap.
+    if (suggestedTemp - ovenBaseTemp > recommendationMaxStepF) {
+      suggestedTemp = snapToDial(ovenBaseTemp + recommendationMaxStepF, displayUnits, 'down');
+    }
     if (suggestedTemp <= ovenBaseTemp) {
       // Snapping swallowed the whole step - move by one dial increment instead
-      // of emitting a "change" that leaves the dial where it already is.
+      // of emitting a "change" that leaves the dial where it already is. One
+      // increment can itself exceed the cap on a coarse dial; a change the user
+      // can actually make is the lesser evil.
       suggestedTemp = snapToDial(ovenBaseTemp + dialStepF(displayUnits), displayUnits, 'up');
     }
     changeAmount = suggestedTemp - ovenBaseTemp;
@@ -388,6 +397,9 @@ export function calculateRecommendation({
     
     // Snap to something the dial can actually be set to (see the raise branch)
     let suggestedTemp = snapToDial(ovenBaseTemp - changeAmount, displayUnits);
+    if (ovenBaseTemp - suggestedTemp > recommendationMaxStepF) {
+      suggestedTemp = snapToDial(ovenBaseTemp - recommendationMaxStepF, displayUnits, 'up');
+    }
     if (suggestedTemp >= ovenBaseTemp) {
       suggestedTemp = snapToDial(ovenBaseTemp - dialStepF(displayUnits), displayUnits, 'down');
     }

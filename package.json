@@ -10,7 +10,11 @@
     "test": "vitest",
     "test:ui": "vitest --ui",
     "test:run": "vitest run",
-    "generate-pwa-assets": "pwa-assets-generator"
+    "generate-pwa-assets": "pwa-assets-generator",
+    "sim": "SIM_REPORT_ONLY=1 vitest run --config vitest.sim.config.js",
+    "sim:test": "vitest run --config vitest.sim.config.js",
+    "sim:calibrate": "node tools/sim/calibrate.js",
+    "sim:shots": "playwright test"
   },
   "dependencies": {
     "@vueuse/core": "^10.0.0",
@@ -23,6 +27,7 @@
     "vue-chartjs": "^5.3.3"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "@vite-pwa/assets-generator": "^0.2.6",
     "@vitejs/plugin-vue": "^5.0.0",
     "@vue/test-utils": "^2.4.11",

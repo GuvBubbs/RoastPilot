@@ -1,0 +1,92 @@
+{
+  "exportedAt": "2026-08-22T03:41:05.556Z",
+  "appVersion": "1.0.0",
+  "session": {
+    "config": {
+      "id": "edb2d273-991d-4bc2-a543-4e59f46cf82c",
+      "targetTemp": 129.9,
+      "units": "C",
+      "startingTemp": 46.4,
+      "desiredServeTime": "2026-08-22T05:00:00.000Z",
+      "desiredTimeRemaining": null,
+      "initialOvenTemp": 212,
+      "meatType": null,
+      "meatCut": null,
+      "weight": null,
+      "notes": null,
+      "createdAt": "2026-08-22T01:59:09.758Z",
+      "updatedAt": "2026-08-22T03:41:04.566Z"
+    },
+    "readings": [
+      {
+        "id": "a130270c-a6bb-41ff-b11d-66a92747b1c8",
+        "temp": 46.4,
+        "timestamp": "2026-08-22T01:59:09.758Z",
+        "deltaFromStart": 0,
+        "deltaFromPrevious": 0
+      },
+      {
+        "id": "b20f992a-a0db-418f-adf0-4e9b49b4d27b",
+        "temp": 59.9,
+        "timestamp": "2026-08-22T02:43:12.825Z",
+        "deltaFromStart": 13.5,
+        "deltaFromPrevious": 13.5
+      },
+      {
+        "id": "34328916-c959-4aa1-a2c1-be5009833157",
+        "temp": 91.9,
+        "timestamp": "2026-08-22T03:27:42.451Z",
+        "deltaFromStart": 45.50000000000001,
+        "deltaFromPrevious": 32.00000000000001
+      }
+    ],
+    "ovenEvents": [
+      {
+        "id": "6e532bdd-47fa-4498-bbc6-91d443e163b3",
+        "setTemp": 212,
+        "timestamp": "2026-08-22T01:59:09.758Z",
+        "previousTemp": null,
+        "isOff": false
+      },
+      {
+        "id": "148bb4ae-a62d-43d9-9234-40a595fbfb9c",
+        "setTemp": 266,
+        "timestamp": "2026-08-22T02:43:30.612Z",
+        "previousTemp": 212,
+        "isOff": false
+      },
+      {
+        "id": "b1b622ad-e4d0-4474-b72f-d087335c9250",
+        "setTemp": 248,
+        "timestamp": "2026-08-22T03:27:59.169Z",
+        "previousTemp": 266,
+        "isOff": false
+      }
+    ],
+    "settings": {
+      "units": "F",
+      "smoothingWindowReadings": 3,
+      "smoothingWindowMinutes": 30,
+      "smoothingMode": "readings",
+      "onTrackThresholdMinutes": 10,
+      "recommendationStepF": 10,
+      "recommendationMaxStepF": 25,
+      "ovenTempMinF": 150,
+      "ovenTempMaxF": 300,
+      "ovenTempPracticalMinF": 175,
+      "enableLowTempRecommendations": true,
+      "minReadingsForRecommendation": 3,
+      "minTimeSpanMinutes": 30,
+      "ovenTempStaleMinutes": 60
+    }
+  },
+  "summary": {
+    "totalReadings": 3,
+    "totalOvenChanges": 3,
+    "sessionDurationMinutes": 89,
+    "startingTemp": 46.4,
+    "endingTemp": 91.9,
+    "totalTempChange": 45.50000000000001,
+    "averageReadingInterval": 44
+  }
+}

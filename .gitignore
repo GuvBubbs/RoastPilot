@@ -35,3 +35,10 @@ dist-ssr
 
 # PWA dev service worker output
 dev-dist
+
+# Simulated-cook harness output: transcripts, session snapshots, screenshots
+tools/sim/artifacts
+
+# Playwright
+test-results
+playwright-report

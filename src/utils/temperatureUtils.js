@@ -92,7 +92,14 @@ export function convertRate(rateF, displayUnit) {
  */
 export function formatRate(rateF, displayUnit) {
   const converted = convertRate(rateF, displayUnit);
-  return `${converted}°${displayUnit}/hr`;
+  // Three significant figures at most. Two decimal places is spurious precision
+  // on a slope fitted to three noisy readings, and it overflowed the Rate stat
+  // card at 390px - "33.77°F/hr" rendered as "33.77°F/...". convertRate keeps
+  // its two decimals for callers doing arithmetic; this is the display form.
+  const shown = Math.abs(converted) < 10
+    ? Math.round(converted * 10) / 10
+    : Math.round(converted);
+  return `${shown}°${displayUnit}/hr`;
 }
 
 /**
