@@ -2,8 +2,57 @@ import { hoursBetween, minutesBetween, addMinutes } from '../utils/timeUtils.js'
 import { CALCULATION_THRESHOLDS } from '../constants/defaults.js';
 
 /**
+ * The readings a rate fit may legitimately use.
+ *
+ * A pause is not a slow patch of the same cook - it is a different experiment.
+ * Fitting a line across one averages the flat (or falling) pause into the
+ * heating rate: measured against the harness, a roast genuinely climbing at
+ * 10 °F/hr reported 4.5 °F/hr because the fit window straddled a 40 minute
+ * oven-off period. Everything downstream then inherits it - the ETA doubles,
+ * the schedule says "late", and the app advises raising an oven that is fine.
+ *
+ * So the fit is confined to the current oven-state segment:
+ *
+ *  - oven currently OFF: readings from the off event onward. That measures
+ *    cooling, which is the truth about what is happening now.
+ *  - oven currently ON after a pause: readings from the restart onward.
+ *  - no pause in this cook: everything.
+ *
+ * This can leave fewer than two readings, in which case there is no rate. That
+ * is the correct answer and not a regression: immediately after a restart the
+ * app genuinely has not measured the new state yet, and saying so is better than
+ * reporting a rate that belongs to the wrong segment.
+ *
+ * @param {InternalReading[]} readings - Chronological
+ * @param {OvenTempEvent[]} [ovenEvents] - Chronological
+ * @returns {InternalReading[]} A suffix of `readings`
+ */
+export function readingsForRateFit(readings, ovenEvents = []) {
+  if (!ovenEvents || ovenEvents.length === 0) return readings;
+  
+  let lastOffIndex = -1;
+  for (let i = ovenEvents.length - 1; i >= 0; i--) {
+    if (ovenEvents[i].isOff === true) { lastOffIndex = i; break; }
+  }
+  if (lastOffIndex === -1) return readings;
+  
+  // The restart is the first non-off event after that pause. If there is none
+  // the oven is still off, and the pause itself is the current segment.
+  const restart = ovenEvents.slice(lastOffIndex + 1).find(e => e.isOff !== true);
+  const segmentStart = restart ? restart.timestamp : ovenEvents[lastOffIndex].timestamp;
+  
+  return readings.filter(r => r.timestamp >= segmentStart);
+}
+
+/**
  * Calculate the heating rate from a set of readings using linear regression
  * Returns rate in degrees Fahrenheit per hour
+ *
+ * The slope and R² come back UNROUNDED. They used to be rounded to 2 and 3
+ * decimal places here, which is a display concern applied to a value the whole
+ * projection is then derived from - and the rounded rate was what got divided
+ * into the remaining degrees. Rounding is done at the edge, in
+ * useCalculations/formatRate.
  * 
  * @param {InternalReading[]} readings - Array of readings sorted by timestamp
  * @param {number} windowSize - Number of most recent readings to use
@@ -63,9 +112,20 @@ export function calculateHeatingRate(readings, windowSize = 3) {
   
   const r2 = ssTotal > 0 ? 1 - (ssResidual / ssTotal) : 0;
   
+  // A non-finite slope escaped from here and was passed on as a number. It
+  // reached predictTimeToTarget, which divided by it, produced a non-finite
+  // minute count, and handed that to addMinutes - where `new Date(NaN)
+  // .toISOString()` throws RangeError out of the whole status panel rather than
+  // producing a bad number. The guarded arithmetic above makes this hard to
+  // reach now; it stays because "hard to reach" and "unreachable" are different
+  // and the failure mode is a blank screen.
+  if (!Number.isFinite(slope) || !Number.isFinite(r2)) {
+    return { rate: null, r2: 0, readings: n };
+  }
+  
   return {
-    rate: Math.round(slope * 100) / 100, // °F per hour, 2 decimal places
-    r2: Math.round(r2 * 1000) / 1000,
+    rate: slope,
+    r2,
     readings: n
   };
 }
@@ -107,12 +167,19 @@ export function calculateReadingSpanMinutes(readings) {
  * reading - not to "now". Anchoring to "now" would re-charge the projection for
  * the minutes the meat has already been climbing since that reading was taken.
  * 
+ * A refusal carries a `reason`, so a caller can tell "no data yet" from "the
+ * arithmetic came out absurd". Every refusal returns null timings: a projection
+ * the app does not believe must not reach a display as a number, because a
+ * number on a clock face is indistinguishable from a number the app stands
+ * behind.
+ *
  * @param {number} currentTemp - Internal temperature at the anchor (°F)
  * @param {number} targetTemp - Target temperature (°F)
  * @param {number} rate - Heating rate (°F/hour)
  * @param {string} [anchorTime] - ISO timestamp `currentTemp` was observed at
  * @param {string} [now] - ISO timestamp to measure the countdown from
- * @returns {{minutes: number|null, minutesFromNow: number|null, targetTime: string|null}}
+ * @returns {{minutes: number|null, minutesFromNow: number|null,
+ *   targetTime: string|null, reason: string|null}}
  */
 export function predictTimeToTarget(
   currentTemp,
@@ -121,19 +188,41 @@ export function predictTimeToTarget(
   anchorTime = new Date().toISOString(),
   now = anchorTime
 ) {
-  if (rate === null || rate <= CALCULATION_THRESHOLDS.MIN_RATE_FOR_PREDICTION) {
-    return { minutes: null, minutesFromNow: null, targetTime: null };
+  const refuse = (reason) => ({
+    minutes: null, minutesFromNow: null, targetTime: null, reason
+  });
+  
+  // Non-finite before the comparison: NaN fails every `<=` test, so a NaN rate
+  // used to sail past this gate and be divided by below.
+  if (rate === null || rate === undefined || !Number.isFinite(rate)) {
+    return refuse('no-rate');
+  }
+  
+  if (!Number.isFinite(currentTemp) || !Number.isFinite(targetTemp)) {
+    return refuse('no-temp');
+  }
+  
+  if (rate <= CALCULATION_THRESHOLDS.MIN_RATE_FOR_PREDICTION) {
+    return refuse('rate-too-low');
   }
   
   const tempRemaining = targetTemp - currentTemp;
   
   if (tempRemaining <= 0) {
     // Already at or past target as of the anchor reading
-    return { minutes: 0, minutesFromNow: 0, targetTime: anchorTime };
+    return { minutes: 0, minutesFromNow: 0, targetTime: anchorTime, reason: null };
   }
   
   const hoursRemaining = tempRemaining / rate;
   const minutesRemaining = Math.round(hoursRemaining * 60);
+  
+  // The horizon. A straight line fitted to three readings does not know it has
+  // left the range of everything it has seen, and the app has no way to say
+  // "this is a guess" once the number is a time on a clock.
+  if (minutesRemaining > CALCULATION_THRESHOLDS.MAX_PREDICTION_MINUTES) {
+    return refuse('beyond-horizon');
+  }
+  
   const targetTime = addMinutes(anchorTime, minutesRemaining);
   
   return {
@@ -142,7 +231,8 @@ export function predictTimeToTarget(
     // The same projection as a countdown from `now`, which is what a display
     // should show: part of `minutes` has already elapsed since the anchor.
     minutesFromNow: Math.round(minutesBetween(now, targetTime)),
-    targetTime
+    targetTime,
+    reason: null
   };
 }
 
@@ -255,18 +345,51 @@ export function assessConfidence({ readingCount, timeSpanMinutes, r2, rate, fitR
 }
 
 /**
+ * The latest moment the meat can come out of the oven and still be rested in
+ * time to serve.
+ *
+ * Rest was never subtracted anywhere: the projection aimed at the target
+ * temperature and the schedule was compared straight against the serve time, so
+ * a roast that needed 30 minutes on the board was declared "on track" to be
+ * pulled at the moment dinner was supposed to be on the table. Dinner was
+ * systematically 20-45 minutes late and nothing in the app said so.
+ *
+ * @param {string|null} desiredServeTime - ISO 8601
+ * @param {number} [restMinutes]
+ * @returns {string|null} ISO 8601, or null if there is no serve time
+ */
+export function computeLatestPullTime(desiredServeTime, restMinutes = 0) {
+  if (!desiredServeTime) return null;
+  if (!Number.isFinite(restMinutes) || restMinutes <= 0) return desiredServeTime;
+  return addMinutes(desiredServeTime, -restMinutes);
+}
+
+/**
  * Compute all calculations for the current session state
  * This is the main entry point that combines all calculation functions
  * 
  * @param {Object} params
  * @param {InternalReading[]} params.readings
+ * @param {OvenTempEvent[]} [params.ovenEvents] - Used to keep the rate fit
+ *   inside one oven-state segment; see readingsForRateFit
  * @param {number} params.targetTemp
  * @param {string|null} params.desiredServeTime
  * @param {AppSettings} params.settings
+ * @param {number} [params.restMinutes] - Rest the meat needs before it is
+ *   served. The schedule is judged against the latest PULL time, which is the
+ *   serve time less the rest.
  * @param {string} [params.now] - ISO timestamp to measure countdowns from
  * @returns {CalculationResult}
  */
-export function computeSessionCalculations({ readings, targetTemp, desiredServeTime, settings, now = new Date().toISOString() }) {
+export function computeSessionCalculations({
+  readings,
+  ovenEvents = [],
+  targetTemp,
+  desiredServeTime,
+  settings,
+  restMinutes = 0,
+  now = new Date().toISOString()
+}) {
   // Handle empty or insufficient readings
   if (readings.length === 0) {
     return {
@@ -275,6 +398,8 @@ export function computeSessionCalculations({ readings, targetTemp, desiredServeT
       predictedMinutesToTarget: null,
       predictedMinutesFromNow: null,
       predictedTargetTime: null,
+      projectionRefusedReason: 'no-readings',
+      latestPullTime: null,
       scheduleVarianceMinutes: null,
       scheduleStatus: 'unknown',
       confidence: { level: 'insufficient', reason: 'No readings recorded yet' }
@@ -285,8 +410,10 @@ export function computeSessionCalculations({ readings, targetTemp, desiredServeT
   const currentTemp = lastReading.temp;
   const timeSpan = calculateReadingSpanMinutes(readings);
   
-  // Calculate rates
-  const rateResult = calculateHeatingRate(readings, settings.smoothingWindowReadings);
+  // Calculate rates. The fit is confined to the current oven-state segment: a
+  // window straddling a pause reports the pause's flatness as the roast's rate.
+  const fitReadings = readingsForRateFit(readings, ovenEvents);
+  const rateResult = calculateHeatingRate(fitReadings, settings.smoothingWindowReadings);
   const averageRate = calculateAverageRate(readings);
   
   // Assess confidence
@@ -307,12 +434,19 @@ export function computeSessionCalculations({ readings, targetTemp, desiredServeT
     now
   );
   
+  // The projection aims at the PULL, so it is judged against the latest moment
+  // the meat can come out and still be rested by the serve time - not against
+  // the serve time itself. Applied here rather than inside
+  // calculateScheduleVarianceWithThreshold, which is a clean comparison of two
+  // timestamps and has its own tests saying exactly that.
+  const latestPullTime = computeLatestPullTime(desiredServeTime, restMinutes);
+  
   // Calculate schedule variance if serve time is set
   let scheduleVariance = { varianceMinutes: null, status: 'unknown' };
-  if (desiredServeTime && prediction.targetTime) {
+  if (latestPullTime && prediction.targetTime) {
     scheduleVariance = calculateScheduleVarianceWithThreshold(
       prediction.targetTime,
-      desiredServeTime,
+      latestPullTime,
       settings.onTrackThresholdMinutes
     );
   }
@@ -323,6 +457,11 @@ export function computeSessionCalculations({ readings, targetTemp, desiredServeT
     predictedMinutesToTarget: prediction.minutes,
     predictedMinutesFromNow: prediction.minutesFromNow,
     predictedTargetTime: prediction.targetTime,
+    // Why there is no projection, when there is none. Distinguishes "not enough
+    // data yet" from "the number came out absurd and was refused", which the UI
+    // and the eligibility gate need to say different things about.
+    projectionRefusedReason: prediction.reason ?? null,
+    latestPullTime,
     scheduleVarianceMinutes: scheduleVariance.varianceMinutes,
     scheduleStatus: scheduleVariance.status,
     confidence

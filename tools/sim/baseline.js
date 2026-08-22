@@ -80,6 +80,17 @@ export const METRIC_POLICY = {
     advisory: 5,
     ratchet: 60
   },
+  noAdviceMinutes: {
+    label: 'no-advice minutes',
+    unit: 'min',
+    // The honest silence number: blocked gates plus the 'none' and 'unknown'
+    // non-answers, which reach the advice band as advice. Tracked alongside
+    // blockedMinutes so a change that only relabels one as the other cannot look
+    // like a regression. Same both-directions treatment, same reasoning.
+    tolerance: null,
+    advisory: 5,
+    ratchet: 60
+  },
   reversals: {
     label: 'reversals',
     unit: '',
@@ -132,6 +143,7 @@ export function metricsOf(score) {
       : Math.round(score.overshootF * 10) / 10,
     blindMinutes: score.blindMinutes,
     blockedMinutes: score.blockedMinutes,
+    noAdviceMinutes: score.noAdviceMinutes,
     reversals: score.reversals
   };
 }

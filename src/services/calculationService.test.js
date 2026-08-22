@@ -6,7 +6,9 @@ import {
   predictTimeToTarget,
   calculateScheduleVarianceWithThreshold,
   assessConfidence,
-  computeSessionCalculations
+  computeSessionCalculations,
+  readingsForRateFit,
+  computeLatestPullTime
 } from './calculationService.js';
 
 // Several suites pin the clock so that "now"-relative results are exact rather
@@ -138,19 +140,63 @@ describe('predictTimeToTarget', () => {
     expect(result2.targetTime).toBeNull();
   });
   
-  it('returns null when rate is too low (below threshold)', () => {
-    const result = predictTimeToTarget(100, 125, 0.05); // Below MIN_RATE_FOR_PREDICTION (0.1)
-    expect(result.minutes).toBeNull();
-    expect(result.targetTime).toBeNull();
+  it('refuses a rate under the floor, and says why', () => {
+    // The floor is 2 F/hr. It was 0.1, which is about 100x too low to
+    // distinguish a slow roast from a probe that has fallen out of one.
+    const stalled = predictTimeToTarget(100, 125, 0.05);
+    expect(stalled.minutes).toBeNull();
+    expect(stalled.targetTime).toBeNull();
+    expect(stalled.reason).toBe('rate-too-low');
+
+    expect(predictTimeToTarget(100, 125, 1.9).reason).toBe('rate-too-low');
+    // Just over the floor is a projection, not a refusal. Only 5 F to go here:
+    // 25 F at 2.1 F/hr is 11 hours, which the horizon refuses for its own
+    // reasons, and this assertion is about the floor.
+    expect(predictTimeToTarget(100, 105, 2.1).minutes).toBe(143);
+  });
+
+  it('refuses a projection past the horizon rather than naming an hour', () => {
+    // 155 F to climb at 0.11 F/hr - a shoulder deep in the stall with a probe
+    // barely moving - used to return 55.7 DAYS, which formatTime rendered as an
+    // ordinary time of day. The rate floor catches this one; the horizon catches
+    // the same absurdity arrived at with a plausible rate.
+    expect(predictTimeToTarget(48, 195, 0.11).minutes).toBeNull();
+
+    // 30 F at 5 F/hr is six hours of heating still needed. A straight line
+    // fitted to three readings has no business projecting that far.
+    const long = predictTimeToTarget(100, 130, 5);
+    expect(long.minutes).toBeNull();
+    expect(long.targetTime).toBeNull();
+    expect(long.reason).toBe('beyond-horizon');
+
+    // 300 minutes exactly is inside the horizon; 301 is not.
+    expect(predictTimeToTarget(0, 300, 60).minutes).toBe(300);
+    expect(predictTimeToTarget(0, 301, 60).reason).toBe('beyond-horizon');
+  });
+
+  it('refuses a non-finite rate instead of throwing out of the panel', () => {
+    // NaN fails every `<=` comparison, so it used to sail through the rate gate,
+    // get divided into the remaining degrees, and reach addMinutes - where
+    // `new Date(NaN).toISOString()` throws RangeError, taking the whole status
+    // panel down rather than producing a bad number.
+    for (const rate of [NaN, Infinity, -Infinity]) {
+      const result = predictTimeToTarget(100, 125, rate);
+      expect(result.minutes).toBeNull();
+      expect(result.targetTime).toBeNull();
+      expect(result.reason).toBe('no-rate');
+    }
+
+    expect(predictTimeToTarget(NaN, 125, 20).reason).toBe('no-temp');
+    expect(predictTimeToTarget(100, NaN, 20).reason).toBe('no-temp');
   });
   
   it('calculates correct time for positive rate', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2024-01-01T12:00:00.000Z'));
     
-    const result = predictTimeToTarget(100, 125, 5); // 25°F to go at 5°F/hr
-    expect(result.minutes).toBe(300); // 5 hours = 300 minutes
-    expect(result.targetTime).toBe('2024-01-01T17:00:00.000Z');
+    const result = predictTimeToTarget(100, 125, 15); // 25°F to go at 15°F/hr
+    expect(result.minutes).toBe(100); // 1h 40m
+    expect(result.targetTime).toBe('2024-01-01T13:40:00.000Z');
   });
   
   it('projects from the supplied anchor time rather than from now', () => {
@@ -160,21 +206,21 @@ describe('predictTimeToTarget', () => {
     // Anchor is 30 minutes stale: the meat has already been climbing for those
     // 30 minutes, so the target lands 30 minutes earlier than a now-anchored
     // projection would claim.
-    const result = predictTimeToTarget(100, 125, 5, '2024-01-01T11:30:00.000Z');
-    expect(result.minutes).toBe(300);
-    expect(result.targetTime).toBe('2024-01-01T16:30:00.000Z');
+    const result = predictTimeToTarget(100, 125, 15, '2024-01-01T11:30:00.000Z');
+    expect(result.minutes).toBe(100);
+    expect(result.targetTime).toBe('2024-01-01T13:10:00.000Z');
   });
   
   it('reports the countdown from now separately from the heating time needed', () => {
     const result = predictTimeToTarget(
       100,
       125,
-      5,
+      15,
       '2024-01-01T11:30:00.000Z', // anchor
       '2024-01-01T12:00:00.000Z'  // now
     );
-    expect(result.minutes).toBe(300); // heating still needed from the anchor
-    expect(result.minutesFromNow).toBe(270); // 30 of those minutes already elapsed
+    expect(result.minutes).toBe(100); // heating still needed from the anchor
+    expect(result.minutesFromNow).toBe(70); // 30 of those minutes already elapsed
   });
   
   it('returns the anchor as the target time when already past target', () => {
@@ -190,8 +236,166 @@ describe('predictTimeToTarget', () => {
   });
   
   it('rounds minutes to nearest integer', () => {
-    const result = predictTimeToTarget(100, 123, 5); // 23°F to go at 5°F/hr = 4.6 hours
-    expect(result.minutes).toBe(276); // 4.6 * 60 = 276 minutes
+    const result = predictTimeToTarget(100, 123, 7); // 23°F to go at 7°F/hr
+    expect(result.minutes).toBe(197); // 23/7*60 = 197.14
+  });
+});
+
+describe('readingsForRateFit', () => {
+  /**
+   * A pause is not a slow patch of the same cook, it is a different experiment.
+   * This service had no oven-off coverage at all, which is how a rate fit that
+   * averaged a 40 minute pause into the heating rate went unnoticed - it
+   * reported 4.5 F/hr against a true 10.
+   */
+  const readings = [
+    { temp: 100, timestamp: '2024-01-01T12:00:00.000Z' }, // before the pause
+    { temp: 106, timestamp: '2024-01-01T12:30:00.000Z' }, // before the pause
+    { temp: 107, timestamp: '2024-01-01T13:30:00.000Z' }, // during the pause
+    { temp: 113, timestamp: '2024-01-01T14:00:00.000Z' }, // after the restart
+    { temp: 119, timestamp: '2024-01-01T14:30:00.000Z' }  // after the restart
+  ];
+
+  const on = (iso, setTemp = 200) => ({ setTemp, isOff: false, timestamp: iso });
+  const off = (iso) => ({ setTemp: 0, isOff: true, timestamp: iso });
+
+  it('returns everything when the oven never went off', () => {
+    expect(readingsForRateFit(readings, [on('2024-01-01T11:00:00.000Z')]))
+      .toEqual(readings);
+    expect(readingsForRateFit(readings, [])).toEqual(readings);
+    expect(readingsForRateFit(readings)).toEqual(readings);
+  });
+
+  it('keeps only the readings since the restart', () => {
+    const events = [
+      on('2024-01-01T11:00:00.000Z'),
+      off('2024-01-01T13:00:00.000Z'),
+      on('2024-01-01T13:45:00.000Z')
+    ];
+    expect(readingsForRateFit(readings, events).map(r => r.temp)).toEqual([113, 119]);
+  });
+
+  it('keeps only the readings since the pause began while the oven is still off', () => {
+    // Measuring cooling is the truth about what is happening now, and it is a
+    // different truth from the heating that preceded it.
+    const events = [on('2024-01-01T11:00:00.000Z'), off('2024-01-01T13:00:00.000Z')];
+    expect(readingsForRateFit(readings, events).map(r => r.temp)).toEqual([107, 113, 119]);
+  });
+
+  it('uses the most recent pause when there have been several', () => {
+    const events = [
+      on('2024-01-01T11:00:00.000Z'),
+      off('2024-01-01T12:10:00.000Z'),
+      on('2024-01-01T12:20:00.000Z'),
+      off('2024-01-01T13:00:00.000Z'),
+      on('2024-01-01T13:45:00.000Z')
+    ];
+    expect(readingsForRateFit(readings, events).map(r => r.temp)).toEqual([113, 119]);
+  });
+
+  it('may legitimately leave too few readings to fit', () => {
+    // Immediately after a restart the app has not measured the new state, and
+    // saying so beats reporting a rate that belongs to the previous one.
+    const events = [
+      on('2024-01-01T11:00:00.000Z'),
+      off('2024-01-01T13:00:00.000Z'),
+      on('2024-01-01T14:15:00.000Z')
+    ];
+    const kept = readingsForRateFit(readings, events);
+    expect(kept.map(r => r.temp)).toEqual([119]);
+    expect(calculateHeatingRate(kept).rate).toBeNull();
+  });
+});
+
+describe('the rate fit does not span a pause', () => {
+  it('reports the post-restart rate, not one averaged across the pause', () => {
+    // The measured case, reproduced: five readings, window of 5, with a flat
+    // 40 minute pause in the middle of the window.
+    const readings = [
+      { temp: 100, timestamp: '2024-01-01T12:00:00.000Z' },
+      { temp: 105, timestamp: '2024-01-01T12:30:00.000Z' },
+      { temp: 105, timestamp: '2024-01-01T13:10:00.000Z' },
+      { temp: 110, timestamp: '2024-01-01T13:40:00.000Z' },
+      { temp: 115, timestamp: '2024-01-01T14:10:00.000Z' }
+    ];
+    const ovenEvents = [
+      { setTemp: 200, isOff: false, timestamp: '2024-01-01T11:00:00.000Z' },
+      { setTemp: 0, isOff: true, timestamp: '2024-01-01T12:30:00.000Z' },
+      { setTemp: 200, isOff: false, timestamp: '2024-01-01T13:10:00.000Z' }
+    ];
+    const wide = { smoothingWindowReadings: 5, onTrackThresholdMinutes: 10 };
+
+    const straddling = computeSessionCalculations({
+      readings, targetTemp: 125, desiredServeTime: null, settings: wide,
+      now: '2024-01-01T14:10:00.000Z'
+    });
+    const segmented = computeSessionCalculations({
+      readings, ovenEvents, targetTemp: 125, desiredServeTime: null, settings: wide,
+      now: '2024-01-01T14:10:00.000Z'
+    });
+
+    // The pause drags the fitted slope well below the rate the roast is actually
+    // climbing at either side of it.
+    expect(straddling.currentRate).toBeLessThan(8);
+    // Confined to the post-restart segment, 105 -> 110 -> 115 over 60 minutes.
+    expect(segmented.currentRate).toBeCloseTo(10, 1);
+  });
+});
+
+describe('computeLatestPullTime', () => {
+  it('subtracts the rest from the serve time', () => {
+    // Rest was never subtracted anywhere. The projection aimed at the target
+    // temperature and the schedule was compared straight against the serve time,
+    // so a roast needing 30 minutes on the board was called "on track" to come
+    // out of the oven at the moment dinner was meant to be on the table.
+    expect(computeLatestPullTime('2024-01-01T19:00:00.000Z', 30))
+      .toBe('2024-01-01T18:30:00.000Z');
+  });
+
+  it('is the serve time itself when there is no rest', () => {
+    expect(computeLatestPullTime('2024-01-01T19:00:00.000Z', 0))
+      .toBe('2024-01-01T19:00:00.000Z');
+    expect(computeLatestPullTime('2024-01-01T19:00:00.000Z'))
+      .toBe('2024-01-01T19:00:00.000Z');
+  });
+
+  it('has nothing to compute without a serve time', () => {
+    expect(computeLatestPullTime(null, 30)).toBeNull();
+    expect(computeLatestPullTime(undefined, 30)).toBeNull();
+  });
+
+  it('ignores a nonsensical rest rather than moving the deadline the wrong way', () => {
+    expect(computeLatestPullTime('2024-01-01T19:00:00.000Z', -30))
+      .toBe('2024-01-01T19:00:00.000Z');
+    expect(computeLatestPullTime('2024-01-01T19:00:00.000Z', NaN))
+      .toBe('2024-01-01T19:00:00.000Z');
+  });
+
+  it('moves the schedule verdict by exactly the rest', () => {
+    const readings = [
+      { temp: 100, timestamp: '2024-01-01T12:00:00.000Z' },
+      { temp: 110, timestamp: '2024-01-01T12:30:00.000Z' },
+      { temp: 120, timestamp: '2024-01-01T13:00:00.000Z' }
+    ];
+    const settings = { smoothingWindowReadings: 3, onTrackThresholdMinutes: 10 };
+    const common = {
+      readings, targetTemp: 125,
+      // Rate is 20 F/hr, 5 F to go, so the pull lands at 13:15.
+      desiredServeTime: '2024-01-01T13:15:00.000Z',
+      settings, now: '2024-01-01T13:00:00.000Z'
+    };
+
+    const noRest = computeSessionCalculations(common);
+    expect(noRest.predictedTargetTime).toBe('2024-01-01T13:15:00.000Z');
+    expect(noRest.scheduleVarianceMinutes).toBe(0);
+    expect(noRest.scheduleStatus).toBe('on-track');
+
+    // With 30 minutes of rest the meat had to be out at 12:45, so the same
+    // projection is half an hour LATE and the app can say so.
+    const rested = computeSessionCalculations({ ...common, restMinutes: 30 });
+    expect(rested.latestPullTime).toBe('2024-01-01T12:45:00.000Z');
+    expect(rested.scheduleVarianceMinutes).toBe(30);
+    expect(rested.scheduleStatus).toBe('late');
   });
 });
 

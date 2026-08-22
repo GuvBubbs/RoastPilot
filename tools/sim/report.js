@@ -10,7 +10,7 @@
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { stateBudget, overshoot, blockedMinutes, scoreOutcome } from './score.js';
+import { stateBudget, overshoot, blockedMinutes, noAdviceMinutes, scoreOutcome } from './score.js';
 
 // Re-exported: these used to live here, and the transcripts are not the only
 // caller any more - the invariants score an outcome too, and the two must not
@@ -203,8 +203,8 @@ export function writeSummary(results) {
   lines.push(`${results.length} scenarios. Transcripts are the per-scenario files in this ` +
     'directory; snapshots under `snapshots/` feed the screenshot pass.');
   lines.push('');
-  lines.push('| scenario | ended | overshoot | blind | blocked | settling | errors |');
-  lines.push('|---|---|---|---|---|---|---|');
+  lines.push('| scenario | ended | overshoot | blind | blocked | no advice | settling | errors |');
+  lines.push('|---|---|---|---|---|---|---|---|');
   for (const { outcome, evaluation } of results) {
     const over = overshoot(outcome);
     const budget = new Map(stateBudget(outcome.rows));
@@ -213,13 +213,17 @@ export function writeSummary(results) {
       `${outcome.endedAtMin} min | ` +
       `${over.overshootF > 0 ? `+${num(over.overshootF, 1)} F` : '--'} | ` +
       `${over.blindMinutes === null ? '--' : `${num(over.blindMinutes)} min`} | ` +
-      `${num(blocked)} min | ${num(budget.get('settling') ?? 0)} min | ` +
+      `${num(blocked)} min | ${num(noAdviceMinutes(outcome.rows))} min | ` +
+      `${num(budget.get('settling') ?? 0)} min | ` +
       `${evaluation.errors.length} |`);
   }
   lines.push('');
   lines.push('- **overshoot** — how far past target the true core went before the app said ' +
     'at-target. **blind** — how long the meat was done while the app did not know. ' +
-    '**blocked** — minutes with no advice at all because an eligibility gate fired.');
+    '**blocked** — minutes an eligibility gate fired. **no advice** — blocked plus the ' +
+    '`none`/`unknown` non-answers; this is the honest silence figure, because labelling ' +
+    'a refusal as a blocker moves minutes from one column to the other without ' +
+    'changing what the cook saw.');
   lines.push('');
 
   lines.push('| scenario | convergence | advisories |');

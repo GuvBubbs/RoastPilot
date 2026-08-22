@@ -244,6 +244,9 @@ export function checkNoDoubleCharging(outcome) {
     // design, so awaitingEffect is legitimately false there.
     if (r.action === 'at-target' || !r.canRecommend) continue;
     if (r.action === 'needs-reading') continue;
+    // The oven is off, so the settling question is moot: the projection cannot
+    // describe a set point that is not in force. Restart is the only advice.
+    if (r.action === 'restart-oven') continue;
 
     const truth = assessOvenChangeEffect({
       readings: r.readingTimes.map((timestamp) => ({ timestamp })),

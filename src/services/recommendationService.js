@@ -30,6 +30,26 @@ export function snapToDial(tempF, units, mode = 'nearest') {
   return units === 'C' ? celsiusToFahrenheit(snapped) : snapped;
 }
 
+/**
+ * What to tell the cook when the projection was refused. Keyed by
+ * predictTimeToTarget's `reason`.
+ *
+ * Each one is a different situation and only one of them resolves itself by
+ * waiting, so they do not share a string.
+ */
+const PROJECTION_REFUSAL_REASONS = {
+  'no-rate': 'Not enough usable readings to measure a heating rate yet.',
+  'no-temp': 'A temperature is missing or unreadable. Check the latest reading.',
+  'rate-too-low':
+    'The core is barely moving, so there is nothing to project from. Check the ' +
+    'probe is still seated and the oven is on.',
+  'beyond-horizon':
+    'At the current rate the target is more than five hours away - too far for ' +
+    'this projection to be worth acting on. Log another reading as it speeds up.',
+  'no-readings': 'No readings recorded yet.',
+  default: 'There is no projection to advise from yet.'
+};
+
 /** One dial increment expressed in Fahrenheit. */
 function dialStepF(units) {
   const step = DIAL_STEP[units] ?? DIAL_STEP.F;
@@ -89,6 +109,8 @@ export function buildRecommendationResult(fields) {
  * @param {string|null} params.desiredServeTime
  * @param {AppSettings} params.settings
  * @param {Object} params.confidence - Confidence assessment from calculation service
+ * @param {string|null} [params.projectionRefusedReason] - Why the projection was
+ *   refused, if it was. See predictTimeToTarget.
  * @returns {{canRecommend: boolean, blockerReason: string|null, blockerType: string|null, progress: Object|null}}
  */
 export function checkRecommendationEligibility({
@@ -97,6 +119,7 @@ export function checkRecommendationEligibility({
   desiredServeTime,
   settings,
   confidence,
+  projectionRefusedReason = null,
   now = new Date().toISOString()
 }) {
   // Check minimum readings requirement
@@ -172,15 +195,42 @@ export function checkRecommendationEligibility({
     };
   }
   
+  // A refused projection is a blocker, and has to say so.
+  //
+  // Without this the refusal fell through to calculateRecommendation with
+  // scheduleStatus 'unknown', which returns action 'none' and the string
+  // "Unable to determine schedule status." - with canRecommend TRUE. So the app
+  // presented a non-answer as though it were advice, in the panel where advice
+  // goes, styled as advice. Refusing to project and admitting it are the same
+  // decision; only one of them was implemented.
+  //
+  // Placed after the oven and serve-time gates: "confirm your oven setting" and
+  // "set a serve time" are things the cook can act on, and this is not.
+  if (projectionRefusedReason) {
+    return {
+      canRecommend: false,
+      blockerReason: PROJECTION_REFUSAL_REASONS[projectionRefusedReason]
+        ?? PROJECTION_REFUSAL_REASONS.default,
+      blockerType: 'no_projection',
+      progress: null
+    };
+  }
+  
   // If the oven is off we have already established (in generateRecommendation) that a
   // reading exists since the pause began, so let the recommendation through even though
   // the heating rate measured across the pause will look slow or unstable.
+  //
+  // Note this short-circuits ahead of every confidence gate, which is why
+  // generateRecommendation narrows the ACTION set while paused - see the
+  // restart-only branch there. Left unconstrained, this branch happily returned
+  // "raise the oven to 225" about an oven that was switched off.
   if (isOvenOff) {
     return {
       canRecommend: true,
       blockerReason: null,
       blockerType: null,
-      progress: null
+      progress: null,
+      ovenIsOff: true
     };
   }
   
@@ -222,27 +272,79 @@ export function checkRecommendationEligibility({
 }
 
 /**
- * Calculate optimal oven-off duration to delay cooking
- * 
- * @param {number} scheduleVarianceMinutes - How early we're running (positive = early)
- * @param {number|null} predictedMinutesToTarget - Minutes until target at current rate
- * @param {number|null} currentRate - Current heating rate in °F/hour
+ * Coldest core, in Fahrenheit, at which pausing the cook is offered outright.
+ *
+ * 140 °F is 60 °C - the top of the food-safety danger zone. Below it the meat is
+ * in the range where switching the oven off and leaving it there extends the
+ * time it spends there, and the app cannot police how long the cook will
+ * actually leave it.
+ */
+export const MIN_CORE_FOR_OVEN_OFF_F = 140;
+
+/**
+ * ...with one exemption, without which the pause path would not exist.
+ *
+ * Every red-meat target is BELOW 140 °F - the app's own default is 125 °F for
+ * medium-rare beef - so a flat "no pausing under 140 °F core" rule deletes the
+ * feature for the majority of cooks it was built for, along with the whole
+ * lower-then-pause ladder. That cannot be the intent of a food-safety guard.
+ *
+ * What actually makes a pause hazardous is TIME accumulated in the danger zone.
+ * Within this band of the target the roast is in its final approach - minutes to
+ * an hour from done - and a pause now cannot strand it, because it is about to
+ * leave the zone for good. Further out it has hours to run and a pause is a real
+ * extension.
+ *
+ * So: 140 °F core, OR inside the final approach. Both, with the pause itself
+ * capped at MAX_OVEN_OFF_MINUTES.
+ */
+export const FINAL_APPROACH_BAND_F = 25;
+
+/**
+ * Is pausing the cook a timing tool here, or a food-safety problem?
+ *
+ * @param {number|null} latestCoreTempF
+ * @param {number|null} targetTempF
+ * @returns {boolean}
+ */
+export function mayPauseCooking(latestCoreTempF, targetTempF) {
+  // No reading: this is the caller's problem, not something to guess at. Left
+  // permissive so an unrelated caller is not silently changed; every path in
+  // this file passes the reading.
+  if (latestCoreTempF === null || latestCoreTempF === undefined) return true;
+  if (latestCoreTempF >= MIN_CORE_FOR_OVEN_OFF_F) return true;
+  if (typeof targetTempF !== 'number') return false;
+  return latestCoreTempF >= targetTempF - FINAL_APPROACH_BAND_F;
+}
+
+/** Longest pause the app will ever suggest, in minutes. */
+export const MAX_OVEN_OFF_MINUTES = 20;
+
+/**
+ * How long to pause the cook for.
+ *
+ * Half of however early the cook is running, capped hard.
+ *
+ * The cap is 20 minutes, not 45. Measured oven-off efficiency in the harness is
+ * 0.4-0.53: a closed oven with the element off gives up its heat slowly
+ * (tauOvenCoolMin 45), so the meat keeps climbing through most of the pause and
+ * 45 minutes of oven-off buys only about 20 minutes of delay. Suggesting 45
+ * therefore promised more than twice what it delivered, and the cook came back
+ * to a roast that had carried on cooking.
+ *
+ * The `!predictedMinutesToTarget` branch that used to sit at the top of this
+ * function - a 0.4x heuristic - was unreachable: the only caller is inside the
+ * 'early' branch of calculateRecommendation, which is only entered when a
+ * schedule variance exists, and a schedule variance requires a projection. It
+ * has been deleted rather than left as a second, differently-tuned answer to the
+ * same question.
+ *
+ * @param {number} scheduleVarianceMinutes - How early we're running (positive)
  * @returns {number} Suggested pause duration in minutes
  */
-function calculateOvenOffDuration(scheduleVarianceMinutes, predictedMinutesToTarget, currentRate) {
-  // If we don't have prediction data, fall back to simple heuristic
-  if (!predictedMinutesToTarget || !currentRate || currentRate <= 0) {
-    return Math.max(5, Math.min(30, Math.round(scheduleVarianceMinutes * 0.4)));
-  }
-  
-  // Pause for half of however early we are running. Note that predictedMinutesToTarget
-  // cancels out of the expression below, so this reduces algebraically to
-  // scheduleVarianceMinutes * 0.5 - the prediction only gates which branch we take.
-  const pauseFactor = scheduleVarianceMinutes / predictedMinutesToTarget;
-  const suggestedPause = Math.round(predictedMinutesToTarget * pauseFactor * 0.5);
-  
-  // Constrain to reasonable bounds (5-45 minutes)
-  return Math.max(5, Math.min(45, suggestedPause));
+function calculateOvenOffDuration(scheduleVarianceMinutes) {
+  const suggestedPause = Math.round(Math.abs(scheduleVarianceMinutes) * 0.5);
+  return Math.max(5, Math.min(MAX_OVEN_OFF_MINUTES, suggestedPause));
 }
 
 /**
@@ -257,6 +359,11 @@ function calculateOvenOffDuration(scheduleVarianceMinutes, predictedMinutesToTar
  * @param {AppSettings} params.settings
  * @param {number|null} params.predictedMinutesToTarget - Minutes until target
  * @param {number|null} params.currentRate - Current heating rate in °F/hour
+ * @param {number|null} [params.latestCoreTempF] - Newest reading (°F). Pausing
+ *   the cook is refused in the danger zone, and without this the function had no
+ *   way to know - it was advising oven-off at any core temperature at all.
+ * @param {number|null} [params.targetTempF] - Pull target (°F), for the
+ *   final-approach exemption in mayPauseCooking
  * @param {'F'|'C'} [params.displayUnits] - Unit the user's dial is marked in;
  *   suggestions are snapped to a settable increment in that unit
  * @returns {Object} Recommendation details
@@ -268,6 +375,8 @@ export function calculateRecommendation({
   settings,
   predictedMinutesToTarget,
   currentRate,
+  latestCoreTempF = null,
+  targetTempF = null,
   displayUnits = 'F'
 }) {
   const {
@@ -414,12 +523,59 @@ export function calculateRecommendation({
     const enableLowTemp = settings.enableLowTempRecommendations !== false;
     
     if (suggestedTemp < practicalMinSetting) {
-      // Calculate optimal oven-off duration using physics-based approach
-      const ovenOffMinutes = calculateOvenOffDuration(absVariance, predictedMinutesToTarget, currentRate);
+      // ORDER MATTERS HERE, and it used to be wrong.
+      //
+      // The clamp to the practical minimum comes FIRST, ahead of the
+      // enableLowTempRecommendations test. That setting means "may I suggest a
+      // temperature below the practical minimum" - lowering the dial TO the
+      // practical minimum is not such a suggestion. Testing it first meant a
+      // cook with the setting off, whose oven was at 250, was told to switch the
+      // oven OFF when "lower the dial to 175" was available, legal, and the
+      // obviously better answer.
+      if (ovenBaseTemp > practicalMinSetting) {
+        suggestedTemp = practicalMinSetting;
+        changeAmount = ovenBaseTemp - suggestedTemp;
+        
+        const messageTemplate = absVariance > 30 
+          ? RECOMMENDATION_MESSAGES.LOWER_LARGE 
+          : RECOMMENDATION_MESSAGES.LOWER_SMALL;
+        
+        return {
+          action: 'lower',
+          suggestedTemp: Math.round(suggestedTemp),
+          changeAmount: Math.round(changeAmount),
+          message: messageTemplate,
+          reasoning: `Running approximately ${Math.round(absVariance)} minutes early. This is the practical minimum for most ovens.`,
+          alternativeMessage: null,
+          ovenOffMinutes: null,
+          practicalMinF: null,
+          severity
+        };
+      }
       
-      // Check if low temp recommendations are disabled
+      // The dial is already at or below the practical minimum, so the only
+      // remaining lever is time: pause the cook.
+      //
+      // Except below 140 °F core, where it is not a lever at all. Switching the
+      // oven off with the meat in the danger zone, for a duration the app cannot
+      // enforce, is not a timing decision. Hold and say so.
+      if (!mayPauseCooking(latestCoreTempF, targetTempF)) {
+        return {
+          action: 'hold',
+          suggestedTemp: ovenBaseTemp,
+          changeAmount: 0,
+          message: RECOMMENDATION_MESSAGES.EARLY_NO_PAUSE_YET,
+          reasoning: `Running ${Math.round(absVariance)} minutes early with the oven already at its practical minimum. Pausing is not offered this far from target below ${MIN_CORE_FOR_OVEN_OFF_F}°F core: the meat would spend the pause in the food-safety danger zone with hours still to run.`,
+          alternativeMessage: null,
+          ovenOffMinutes: null,
+          practicalMinF: practicalMinSetting,
+          severity: 'info'
+        };
+      }
+      
+      const ovenOffMinutes = calculateOvenOffDuration(absVariance);
+      
       if (!enableLowTemp) {
-        // Suggest oven-off instead of just saying "hold steady"
         return {
           action: 'oven-off',
           suggestedTemp: ovenBaseTemp,
@@ -434,39 +590,16 @@ export function calculateRecommendation({
         };
       }
       
-      // Already at practical minimum - suggest turning oven off temporarily
-      if (ovenBaseTemp <= practicalMinSetting) {
-        return {
-          action: 'oven-off',
-          suggestedTemp: ovenBaseTemp,
-          changeAmount: 0,
-          message: RECOMMENDATION_MESSAGES.OVEN_OFF_SUGGESTED,
-          reasoning: `Running ${Math.round(absVariance)} minutes early. Your oven is already at the practical minimum temperature.`,
-          alternativeMessage: RECOMMENDATION_MESSAGES.OVEN_OFF_ALTERNATIVE,
-          ovenOffMinutes,
-          practicalMinF: null,
-          severity: 'moderate'
-        };
-      }
-      
-      // Suggest lowering to practical minimum
-      suggestedTemp = practicalMinSetting;
-      changeAmount = ovenBaseTemp - suggestedTemp;
-      
-      const messageTemplate = absVariance > 30 
-        ? RECOMMENDATION_MESSAGES.LOWER_LARGE 
-        : RECOMMENDATION_MESSAGES.LOWER_SMALL;
-      
       return {
-        action: 'lower',
-        suggestedTemp: Math.round(suggestedTemp),
-        changeAmount: Math.round(changeAmount),
-        message: messageTemplate,
-        reasoning: `Running approximately ${Math.round(absVariance)} minutes early. This is the practical minimum for most ovens.`,
-        alternativeMessage: null,
-        ovenOffMinutes: null,
+        action: 'oven-off',
+        suggestedTemp: ovenBaseTemp,
+        changeAmount: 0,
+        message: RECOMMENDATION_MESSAGES.OVEN_OFF_SUGGESTED,
+        reasoning: `Running ${Math.round(absVariance)} minutes early. Your oven is already at the practical minimum temperature.`,
+        alternativeMessage: RECOMMENDATION_MESSAGES.OVEN_OFF_ALTERNATIVE,
+        ovenOffMinutes,
         practicalMinF: null,
-        severity
+        severity: 'moderate'
       };
     }
     
@@ -741,6 +874,8 @@ export function reconcileWithOvenChange({
  * @param {AppSettings} params.settings
  * @param {number|null} params.predictedMinutesToTarget - Minutes until target at current rate
  * @param {number|null} params.currentRate - Current heating rate in °F/hour
+ * @param {string|null} [params.projectionRefusedReason] - Why there is no
+ *   projection, if there is none
  * @param {'F'|'C'} [params.displayUnits] - Unit the user's oven dial is marked in
  * @returns {Recommendation}
  */
@@ -756,6 +891,7 @@ export function generateRecommendation({
   settings,
   predictedMinutesToTarget,
   currentRate,
+  projectionRefusedReason = null,
   displayUnits = 'F',
   now = new Date().toISOString()
 }) {
@@ -794,6 +930,7 @@ export function generateRecommendation({
     desiredServeTime,
     settings,
     confidence,
+    projectionRefusedReason,
     now
   });
   
@@ -803,6 +940,25 @@ export function generateRecommendation({
       blockerReason: eligibility.blockerReason,
       blockerType: eligibility.blockerType,
       progress: eligibility.progress
+    });
+  }
+  
+  // The oven is off, and a reading since the pause exists (the branch above
+  // guarantees it). The eligibility gate lets this through ahead of every
+  // confidence check, which is right - the rate measured across a pause is
+  // meaningless and there is no point blocking on it - but it left the ACTION
+  // unconstrained, so the projection-based branches ran as normal and the app
+  // said "raise the oven to 225" about an oven that was switched off. The cook's
+  // only real option here is to restart it.
+  if (isOvenOff) {
+    return buildRecommendationResult({
+      action: 'restart-oven',
+      suggestedTemp: ovenBaseTemp,
+      changeAmount: 0,
+      message: RECOMMENDATION_MESSAGES.RESTART_OVEN,
+      reasoning: 'The oven is off. Nothing else can be advised until it is back on: every projection-based suggestion assumes the oven is heating, and the measured rate across a pause describes cooling.',
+      latestReadingTemp: latestReading ? latestReading.temp : null,
+      severity: 'moderate'
     });
   }
   
@@ -821,6 +977,8 @@ export function generateRecommendation({
       settings,
       predictedMinutesToTarget,
       currentRate,
+      latestCoreTempF: latestReading ? latestReading.temp : null,
+      targetTempF: targetTemp,
       displayUnits
     });
     
@@ -836,8 +994,7 @@ export function generateRecommendation({
     });
   }
   
-  // Normal recommendation - from the latest reading, whether or not the oven is
-  // currently off (a post-pause reading is guaranteed by the branch above).
+  // Normal recommendation. The oven is on: the paused case returned above.
   const recommendation = calculateRecommendation({
     ovenBaseTemp,
     scheduleVarianceMinutes,
@@ -845,6 +1002,8 @@ export function generateRecommendation({
     settings,
     predictedMinutesToTarget,
     currentRate,
+    latestCoreTempF: latestReading ? latestReading.temp : null,
+    targetTempF: targetTemp,
     displayUnits
   });
   

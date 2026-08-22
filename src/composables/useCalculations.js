@@ -6,7 +6,7 @@ import { formatDuration, formatTime, minutesBetween } from '../utils/timeUtils.j
 import { useRefreshTimer } from './useRefreshTimer.js';
 
 export function useCalculations() {
-  const { readings, config, settings, displayUnits } = useSession();
+  const { readings, ovenEvents, config, settings, displayUnits } = useSession();
 
   // Anything derived from "now" needs a reactive clock. Without this the
   // countdown is computed once and then frozen for the rest of the cook.
@@ -22,6 +22,8 @@ export function useCalculations() {
     
     return computeSessionCalculations({
       readings: readings.value,
+      // The rate fit must not span a pause; see readingsForRateFit.
+      ovenEvents: ovenEvents.value,
       targetTemp: config.value.targetTemp,
       desiredServeTime: config.value.desiredServeTime,
       settings: settings.value,
@@ -45,9 +47,13 @@ export function useCalculations() {
   /**
    * Current heating rate in display units
    */
+  // `== null`, not `=== null`: the optional chain above yields *undefined* when
+  // there is no session, and `undefined === null` is false - so undefined fell
+  // straight through into convertRate, which returned NaN, which reached the
+  // screen. The three guards below were all written the same wrong way.
   const currentRate = computed(() => {
     const raw = rawCalculations.value?.currentRate;
-    if (raw === null) return null;
+    if (raw == null) return null;
     return convertRate(raw, displayUnits.value);
   });
   
@@ -56,7 +62,7 @@ export function useCalculations() {
    */
   const currentRateFormatted = computed(() => {
     const raw = rawCalculations.value?.currentRate;
-    if (raw === null) return '--';
+    if (raw == null) return '--';
     return formatRate(raw, displayUnits.value);
   });
   
@@ -65,7 +71,7 @@ export function useCalculations() {
    */
   const averageRate = computed(() => {
     const raw = rawCalculations.value?.averageRate;
-    if (raw === null) return null;
+    if (raw == null) return null;
     return convertRate(raw, displayUnits.value);
   });
   
@@ -115,6 +121,10 @@ export function useCalculations() {
    * Formatted predicted completion time
    */
   const predictedTargetTimeFormatted = computed(() => {
+    // formatTime qualifies with the date when the target is not today, and
+    // "today" is read from the clock - so this has to re-run on the tick or the
+    // qualifier is decided once, at whatever time the page happened to load.
+    tick.value;
     const time = predictedTargetTime.value;
     if (!time) return '--';
     return formatTime(time);
@@ -150,6 +160,25 @@ export function useCalculations() {
    */
   const scheduleStatus = computed(() => {
     return rawCalculations.value?.scheduleStatus ?? 'unknown';
+  });
+  
+  /**
+   * Why there is no projection, when there is none: 'no-readings' | 'no-rate' |
+   * 'no-temp' | 'rate-too-low' | 'beyond-horizon', or null when there is one.
+   *
+   * The UI needs to distinguish "not enough data yet", which resolves itself,
+   * from "the arithmetic came out absurd and was refused", which does not.
+   */
+  const projectionRefusedReason = computed(() => {
+    return rawCalculations.value?.projectionRefusedReason ?? null;
+  });
+  
+  /**
+   * The latest moment the meat can come out and still be rested by serve time.
+   * This, not the serve time, is what the projection is judged against.
+   */
+  const latestPullTime = computed(() => {
+    return rawCalculations.value?.latestPullTime ?? null;
   });
   
   /**
@@ -226,6 +255,8 @@ export function useCalculations() {
     predictedTargetTime,
     scheduleVariance,
     scheduleStatus,
+    projectionRefusedReason,
+    latestPullTime,
     confidence,
     currentTemp,
     progressPercent,

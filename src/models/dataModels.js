@@ -50,7 +50,7 @@
 
 /**
  * @typedef {Object} Recommendation
- * @property {'raise'|'lower'|'hold'|'oven-off'|'at-target'|'needs-reading'|'settling'|'none'} action
+ * @property {'raise'|'lower'|'hold'|'oven-off'|'restart-oven'|'at-target'|'needs-reading'|'settling'|'none'} action
  * @property {number|null} suggestedTemp - New oven set temp in Fahrenheit
  * @property {number|null} changeAmount - Degrees to change (always positive)
  * @property {string|null} message - TEMPLATE with {placeholders}; substituted (and
@@ -69,8 +69,8 @@
  * @property {string|null} blockerReason - If canRecommend is false, why (display string)
  * @property {string|null} blockerType - Machine-readable blocker discriminant, e.g.
  *   'insufficient_readings' | 'insufficient_time' | 'no_oven_data' |
- *   'stale_oven_data' | 'no_serve_time' | 'insufficient_confidence' |
- *   'bad_rate' | 'unstable_rate' | 'no_session'
+ *   'stale_oven_data' | 'no_serve_time' | 'no_projection' |
+ *   'insufficient_confidence' | 'bad_rate' | 'unstable_rate' | 'no_session'
  * @property {{current: number, required: number, message: string}|null} progress -
  *   Progress toward clearing a countable blocker
  * @property {boolean} awaitingEffect - True while the last oven set-point change has

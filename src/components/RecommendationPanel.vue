@@ -130,8 +130,10 @@ const dotClass = computed(() => {
     case 'oven-off': return 'bg-early';
     // The dial is where it needs to be; we are only waiting to see it land.
     case 'settling': return 'bg-ontrack';
-    // Pause is an action, not a status, so it gets neutral treatment.
+    // Pause is an action, not a status, so it gets neutral treatment. Both of
+    // these are the app waiting on the cook rather than judging the cook.
     case 'needs-reading': return 'bg-ink-dim';
+    case 'restart-oven': return 'bg-ink-dim';
     default: return 'bg-ink-mute';
   }
 });
@@ -166,6 +168,10 @@ const control = computed(() => {
         return pauseControl.value;
       case 'no_serve_time':
         return { kind: 'ghost', label: 'Set serve time', event: 'openSettings' };
+      // Nothing the cook can do but take another reading, which the BottomBar
+      // already offers. Fall through to the pause/restart escape hatch.
+      case 'no_projection':
+        return pauseControl.value;
       // Nothing to offer before there is a session to act on.
       case 'no_session':
         return null;
@@ -185,6 +191,12 @@ const control = computed(() => {
       // With the oven off, pauseControl resolves to "Log oven restart", which is
       // the other half of what a paused cook needs.
       return pauseControl.value;
+
+    case 'restart-oven':
+      // The oven is off and a post-pause reading exists, so the app knows where
+      // the meat is - it just cannot advise anything about a cold oven. The one
+      // action that means something here is turning it back on.
+      return { kind: 'primary', label: 'Log oven restart', event: 'openRestartModal' };
 
     case 'settling':
       // Nothing to apply - the change has been accepted, and the only thing that

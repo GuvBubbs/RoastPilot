@@ -245,6 +245,15 @@ export async function runScenario(scenario, deps) {
       return;
     }
 
+    // The oven is off and the app is asking for it back on. A cook who has just
+    // deliberately paused ignores this (deliberatePauseUntilMin, checked above);
+    // any other paused state, the cook does what it says.
+    if (action === 'restart-oven') {
+      await advanceTo(cursor + APPLY_DELAY_MIN);
+      await restartOven();
+      return;
+    }
+
     if (action === 'oven-off') {
       await advanceTo(cursor + APPLY_DELAY_MIN);
       if (rec.isPaused.value) {

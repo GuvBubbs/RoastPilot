@@ -11,8 +11,59 @@ export const SESSION_DEFAULTS = {
  * Calculation thresholds
  */
 export const CALCULATION_THRESHOLDS = {
-  MIN_READINGS_FOR_RATE: 2, // Coefficient of variation threshold for "noisy" data
-  MIN_RATE_FOR_PREDICTION: 0.1 // °F/hr minimum to consider valid heating
+  MIN_READINGS_FOR_RATE: 2,
+  /**
+   * °F/hr below which a projection is refused outright.
+   *
+   * Was 0.1 - about 100x too low to mean anything. A roast climbing at 0.11
+   * °F/hr is not heating, it is stalled or the probe has fallen out; the app
+   * projected it forward regardless and returned an ETA 55.7 DAYS out, which the
+   * status panel rendered as an ordinary clock time.
+   *
+   * 2 °F/hr is chosen as roughly a fifth of the slowest rate a real cook shows.
+   * The reference export's slowest interval is 10.2 °C/h (18 °F/hr); a 9 lb
+   * shoulder deep in the evaporative stall still manages several °F/hr. Anything
+   * under 2 is a measurement problem, not a slow roast, and the honest answer is
+   * no projection rather than a confident one.
+   */
+  MIN_RATE_FOR_PREDICTION: 2,
+  /**
+   * Minutes of remaining heating beyond which the projection is refused.
+   *
+   * A linear extrapolation has no idea it has left the range of anything it has
+   * seen. Combined with the rate floor above this is belt and braces: the floor
+   * catches "the meat is not moving", this catches "the arithmetic came out
+   * absurd" - a target the oven cannot reach, a probe reading that dropped, a
+   * fit over a flat early limb.
+   *
+   * It turns the 55.7-DAY projection the harness found into a refusal.
+   *
+   * Note this is heating time still NEEDED, not the length of the cook: a 12
+   * hour shoulder spends most of its life under this bound and only crosses it at
+   * the start, where a straight-line projection was worthless anyway.
+   *
+   * FIVE hours, measured, not four. The plan specified 240 minutes; swept against
+   * the deck, 240 sits exactly on a cliff:
+   *
+   *     horizon   blocked minutes (7 short cooks)   invariant errors
+   *       240                770.5                        11
+   *       300                545.5                         5
+   *       360                545.5                         5
+   *       480                545.5                         5
+   *
+   * At 240 two cooks lose their first advice window by a few minutes, never
+   * suggest a dial move, and so never log an oven event - which lets the sole
+   * opening event age past ovenTempStaleMinutes, at which point stale_oven_data
+   * latches for the rest of the cook and the app says nothing at all. The gate
+   * that asks the cook to confirm their oven setting can only be cleared by an
+   * oven event, and the app's own advice was what generated them.
+   *
+   * Above 300 the number stops mattering: nothing in seven realistic cooks ever
+   * legitimately projects further than five hours ahead. So 300 is the smallest
+   * value clear of the cliff - and the cliff itself is the stale-oven latch,
+   * which Phase 4 deals with directly.
+   */
+  MAX_PREDICTION_MINUTES: 300
 };
 
 /**
@@ -35,8 +86,16 @@ export const RECOMMENDATION_MESSAGES = {
   OVEN_OFF_SUGGESTED: 'Running very early. Your oven can\'t go low enough to slow down heating.',
   OVEN_OFF_ALTERNATIVE: 'Turn off oven for approximately {minutes} minutes, then restart at {ovenTemp}.',
   LOW_TEMP_DISABLED: 'Running early, but recommendations below {minTemp} are disabled.',
+  // Emitted when the oven is already as low as it goes, the cook is early, and
+  // the core is still under 140 F - so pausing is not offered. There is nothing
+  // to do but let it run.
+  EARLY_NO_PAUSE_YET: 'Running early with the oven already at {minTemp}. Let it run - pausing the oven is not safe until the core is above 140°F.',
   AT_TARGET: 'Target reached. Latest reading is {latestTemp}. Turn the oven off and rest the meat.',
   NEEDS_READING: 'Cooking is paused. Log a fresh reading to resume recommendations.',
+  // The oven is off and a reading since the pause exists, so the app knows where
+  // the meat is - but every other action it could suggest presumes a heating
+  // oven. Restarting is the only one that means anything.
+  RESTART_OVEN: 'Oven is off. Restart it at {ovenTemp} when you\'re ready - timing advice resumes once it\'s heating again.',
   NEED_MORE_READINGS: 'Need at least {count} readings to make recommendations.',
   NEED_MORE_TIME: 'Need readings spanning at least {minutes} minutes.',
   NO_SERVE_TIME: 'Set a desired serve time to get timing recommendations.',

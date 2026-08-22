@@ -7,7 +7,10 @@ import { toDisplayUnit, formatTemperature } from '../utils/temperatureUtils.js';
 
 export function useRecommendations() {
   const { readings, ovenEvents, currentOvenTemp, lastActiveOvenTemp, config, settings, displayUnits } = useSession();
-  const { scheduleVariance, scheduleStatus, confidence, predictedMinutesToTarget, currentRateRaw } = useCalculations();
+  const {
+    scheduleVariance, scheduleStatus, confidence, predictedMinutesToTarget,
+    currentRateRaw, projectionRefusedReason
+  } = useCalculations();
   
   // The eligibility gate ages the last oven event against the clock. Without a
   // tick this computed never re-ran, so "your oven setting is stale" only fired
@@ -48,6 +51,9 @@ export function useRecommendations() {
       settings: settings.value,
       predictedMinutesToTarget: predictedMinutesToTarget.value,
       currentRate: currentRateRaw.value,
+      // A refused projection has to reach the user as a blocker with a reason,
+      // not as "Unable to determine schedule status" dressed up as advice.
+      projectionRefusedReason: projectionRefusedReason.value,
       // The dial's markings depend on the unit on screen, so the service snaps
       // its suggestions in that unit rather than emitting 102°C.
       displayUnits: displayUnits.value,

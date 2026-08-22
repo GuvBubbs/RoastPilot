@@ -56,6 +56,30 @@ export function blockedMinutes(rows) {
 }
 
 /**
+ * Minutes the app had nothing useful to say - whatever it called that state.
+ *
+ * blockedMinutes counts only the eligibility gates. It is not the same question
+ * as "how long was the cook without advice", because there are two other ways to
+ * say nothing: action 'none', which carries the string "Unable to determine
+ * schedule status." into the advice band with canRecommend TRUE, and 'unknown'.
+ * A change that converts one into the other moves the blocked figure without
+ * changing a thing the cook sees.
+ *
+ * The two are equal across the deck as it stands, which is worth knowing: it
+ * means every minute of the deck's silence is currently an honest labelled
+ * blocker, and any future divergence is a non-answer being presented as advice.
+ *
+ * So: this is the metric for "did the change make the app quieter",
+ * blockedMinutes is the one for "which gate is doing it".
+ */
+export function noAdviceMinutes(rows) {
+  return stateBudget(rows)
+    .filter(([label]) =>
+      label.startsWith('blocked:') || label === 'none' || label === 'unknown')
+    .reduce((n, [, m]) => n + m, 0);
+}
+
+/**
  * |serve time - the moment the TRUE core reached target|, signed: positive is
  * late. Null if the cook never got there.
  *
@@ -93,6 +117,7 @@ export function scoreOutcome(outcome) {
     blindMinutes: over.blindMinutes,
     convergenceMinutes: convergenceMinutes(outcome),
     blockedMinutes: blockedMinutes(outcome.rows),
+    noAdviceMinutes: noAdviceMinutes(outcome.rows),
     settlingMinutes: budget.get('settling') ?? 0,
     dialMoves: moves,
     reversals
