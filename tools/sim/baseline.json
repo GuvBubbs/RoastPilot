@@ -99,6 +99,46 @@
       "noAdviceMinutes": 100,
       "reversals": 0
     },
+    "11-weight-driven-k-small": {
+      "convergenceAbs": 35,
+      "overshootF": 2.9,
+      "blindMinutes": 0,
+      "blockedMinutes": 35,
+      "noAdviceMinutes": 35,
+      "reversals": 0
+    },
+    "12-weight-driven-k-large": {
+      "convergenceAbs": null,
+      "overshootF": -1,
+      "blindMinutes": null,
+      "blockedMinutes": 80,
+      "noAdviceMinutes": 80,
+      "reversals": 2
+    },
+    "13-oven-off-danger-zone": {
+      "convergenceAbs": 395,
+      "overshootF": 3,
+      "blindMinutes": 10,
+      "blockedMinutes": 60,
+      "noAdviceMinutes": 60,
+      "reversals": 0
+    },
+    "15-reading-due-prompt": {
+      "convergenceAbs": 10,
+      "overshootF": 5.3,
+      "blindMinutes": 10,
+      "blockedMinutes": 60,
+      "noAdviceMinutes": 60,
+      "reversals": 0
+    },
+    "14-dst-cook": {
+      "convergenceAbs": null,
+      "overshootF": -0.6,
+      "blindMinutes": null,
+      "blockedMinutes": 40,
+      "noAdviceMinutes": 40,
+      "reversals": 0
+    },
     "08-celsius-eager-dial": {
       "convergenceAbs": null,
       "overshootF": -0.8,

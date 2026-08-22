@@ -12,6 +12,25 @@ real recommendation loop through them, asserts the properties that can be stated
 numerically, and renders screenshots at checkpoints so the rest can be judged by
 eye.
 
+**Fifteen cooks.** Four are excluded from the acceptance aggregate and say so in
+`SUMMARY.md`, because they are not representative of normal operation: the
+12-hour shoulder, whose thresholds are not these, and three *controls* whose bad
+numbers are the measurement rather than a failure.
+
+The controls are the most useful thing on the deck, because each isolates one
+intervention by removing it:
+
+| cook | what it removes | overshoot |
+|---|---|---|
+| `02-baseline-on-track` | nothing — the reference | 2.8 °F |
+| `10-forgetful-cook` | the cook ignores the reading prompt | **21.1 °F** |
+| `15-reading-due-prompt` | sparse habit, but the prompt obeyed and the ceiling set to 3 h so only the *derived* cadence can be doing the work | 5.3 °F |
+
+`15` takes 9 of its 11 readings because the app asked. Compared with `10` — the
+same sparse habit with the prompt ignored — that is 21.1 °F of overshoot turned
+into 5.3, attributable to the derivation alone rather than to the settings
+ceiling.
+
 It replaces regression testing on the recommendation loop. It does **not**
 replace real cooks — see [Limits](#limits).
 

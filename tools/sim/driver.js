@@ -44,7 +44,10 @@ const near = (a, b) => Math.abs(a - b) < EPS;
 export async function runScenario(scenario, deps) {
   const { vi, mount, defineComponent, h, nextTick } = deps;
 
-  const startMs = new Date(COOK_START_ISO).getTime();
+  // Per-scenario start, so a cook can be placed across a daylight-saving
+  // transition. Everything else in the run is relative to it.
+  const cookStartISO = scenario.startISO ?? COOK_START_ISO;
+  const startMs = new Date(cookStartISO).getTime();
   const units = scenario.config.units;
   const model = createMeatModel({ seed: scenario.seed, ...scenario.model });
 
@@ -465,7 +468,7 @@ export async function runScenario(scenario, deps) {
     pullDeadlineISO: new Date(
       startMs + (scenario.config.serveAfterMin - (scenario.config.restMinutes ?? 0)) * 60_000
     ).toISOString(),
-    cookStartISO: COOK_START_ISO,
+    cookStartISO,
     finalCoreF: round1(model.coreF),
     probeBiasF: round1(model.probeBiasF),
     settings: JSON.parse(JSON.stringify(session.settings.value)),

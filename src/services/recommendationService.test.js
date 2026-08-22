@@ -782,41 +782,68 @@ describe('generateRecommendation', () => {
       expect(result.message).toContain('{ovenTemp}');
     });
 
-    it('emits the same field set for every branch', () => {
-      const expectedKeys = [
-        'action',
-        'suggestedTemp',
-        'changeAmount',
-        'message',
-        'reasoning',
-        'alternativeMessage',
-        'ovenOffMinutes',
-        'practicalMinF',
-        'plannedTempF',
-        'latestReadingTemp',
-        'severity',
-        'canRecommend',
-        'blockerReason',
-        'blockerType',
-        'progress',
-        'awaitingEffect',
-        'ovenChangeMinutesAgo',
-        'waitMinutes'
+    describe('every branch emits the same shape', () => {
+      /**
+       * This used to pin an EXACT key set, transcribed as an array of eighteen
+       * strings. Two problems with that. It broke on every field the builder
+       * gained - `blockerCode` and `plannedTempF` both did, and a test that fails
+       * for a correct change teaches people to edit the test. And it did not
+       * actually assert the thing worth asserting: that the branches agree with
+       * EACH OTHER. A shared omission would have satisfied it perfectly.
+       *
+       * Two properties instead. Every branch carries the keys the UI reads, and
+       * every branch carries the same keys as every other. Neither has to be
+       * updated when the builder gains a field; both fail if one branch quietly
+       * stops emitting one.
+       */
+
+      /** The fields useRecommendations reads unconditionally. */
+      const REQUIRED = [
+        'action', 'suggestedTemp', 'changeAmount', 'message', 'reasoning',
+        'alternativeMessage', 'ovenOffMinutes', 'severity', 'canRecommend',
+        'blockerReason', 'blockerType', 'progress', 'awaitingEffect', 'waitMinutes'
       ];
 
-      const results = [
-        generateRecommendation(baseParams()),
-        generateRecommendation(baseParams({ readings: makeReadings([126]) })),
-        generateRecommendation(baseParams({ readings: makeReadings([100, 110]) })),
-        generateRecommendation(baseParams({
+      /** One result from each structurally different path through the service. */
+      const branches = () => ({
+        'normal advice': generateRecommendation(baseParams()),
+        'at target': generateRecommendation(baseParams({ readings: makeReadings([126]) })),
+        'blocked on readings': generateRecommendation(baseParams({
+          readings: makeReadings([100, 110])
+        })),
+        'needs a post-pause reading': generateRecommendation(baseParams({
           readings: makeReadings([100, 108, 116], { endISO: '2024-01-01T17:00:00.000Z' }),
           ovenEvents: [makeOvenEvent({ setTemp: 0, isOff: true, timestamp: '2024-01-01T17:30:00.000Z' })]
+        })),
+        'restart the oven': generateRecommendation(baseParams({
+          readings: makeReadings([100, 108, 116], { endISO: NOW }),
+          ovenEvents: [
+            makeOvenEvent({ timestamp: '2024-01-01T15:00:00.000Z' }),
+            makeOvenEvent({ setTemp: 0, isOff: true, timestamp: '2024-01-01T17:00:00.000Z', previousTemp: 225 })
+          ]
+        })),
+        'no projection': generateRecommendation(baseParams({
+          projectionRefusedReason: 'unreachable'
         }))
-      ];
+      });
 
-      for (const result of results) {
-        expect(Object.keys(result).sort()).toEqual(expectedKeys.slice().sort());
-      }
+      it('emits at least every field the UI reads', () => {
+        for (const [name, result] of Object.entries(branches())) {
+          for (const key of REQUIRED) {
+            expect(result, `${name} is missing ${key}`).toHaveProperty(key);
+          }
+        }
+      });
+
+      it('emits the same field set as every other branch', () => {
+        const entries = Object.entries(branches());
+        const [referenceName, reference] = entries[0];
+        const expected = Object.keys(reference).sort();
+        for (const [name, result] of entries.slice(1)) {
+          expect(Object.keys(result).sort(), `${name} differs from ${referenceName}`)
+            .toEqual(expected);
+        }
+      });
     });
   });
 });
@@ -1014,6 +1041,26 @@ describe('dial-settable suggestions', () => {
   // the simulated-cook harness, which flagged it in both Celsius scenarios and
   // in neither Fahrenheit one.
   describe('recommendationMaxStepF survives the dial snap', () => {
+    /**
+     * The cap is written out, not read back off the settings object.
+     *
+     * `expect(changeAmount).toBeLessThanOrEqual(settings.recommendationMaxStepF)`
+     * asserts against the same value the implementation reads, so it holds for
+     * ANY cap - raise the default to 100 °F and the app would emit 100 °F steps
+     * with this test still green. A test that cannot distinguish the intended
+     * behaviour from a changed constant is measuring the constant.
+     *
+     * So: the number, plus a separate assertion that the default is still what
+     * these cases were written against. Change the default and exactly one test
+     * fails, loudly, naming the reason.
+     */
+    const MAX_STEP_F = 25;
+
+    it('is written against the default this suite assumes', () => {
+      expect(settings.recommendationMaxStepF).toBe(MAX_STEP_F);
+      expect(settings.recommendationStepF).toBe(10);
+    });
+
     const cases = [
       { label: 'raise, Celsius', baseC: 95, status: 'late', variance: 40 },
       { label: 'raise, Celsius on an odd mark', baseC: 100, status: 'late', variance: 40 },
@@ -1034,7 +1081,7 @@ describe('dial-settable suggestions', () => {
           displayUnits: 'C'
         });
 
-        expect(result.changeAmount).toBeLessThanOrEqual(settings.recommendationMaxStepF);
+        expect(result.changeAmount).toBeLessThanOrEqual(MAX_STEP_F);
         // Still a real dial position, and still a real move.
         expect(fahrenheitToCelsius(result.suggestedTemp) % 5).toBe(0);
         expect(result.changeAmount).toBeGreaterThan(0);
@@ -1052,7 +1099,7 @@ describe('dial-settable suggestions', () => {
         displayUnits: 'F'
       });
       expect(raise.suggestedTemp).toBe(225);
-      expect(raise.changeAmount).toBe(settings.recommendationMaxStepF);
+      expect(raise.changeAmount).toBe(MAX_STEP_F);
     });
   });
 });
