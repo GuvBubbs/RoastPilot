@@ -209,7 +209,16 @@ export function predictTimeToTarget(
   const tempRemaining = targetTemp - currentTemp;
   
   if (tempRemaining <= 0) {
-    // Already at or past target as of the anchor reading
+    /**
+     * Already at or past target as of the anchor reading.
+     *
+     * NOT routed through assessPullProgress, deliberately. This is a numeric
+     * guard against dividing a negative remainder by a positive rate and
+     * projecting into the past - it is arithmetic, not a UI verdict, and it has
+     * to hold for any (currentTemp, targetTemp) pair including ones that have
+     * nothing to do with a pull temperature. The graded verdict is what the
+     * SCREENS read; this is what the division reads.
+     */
     return { minutes: 0, minutesFromNow: 0, targetTime: anchorTime, reason: null };
   }
   
@@ -343,6 +352,70 @@ export function assessConfidence({ readingCount, timeSpanMinutes, r2, rate, fitR
     reason: 'Adequate data for reasonable predictions'
   };
 }
+
+/**
+ * How close the roast is to coming out, as one graded verdict.
+ *
+ * Four states rather than the boolean `targetReached`, because the interesting
+ * band is the one before the target: a roast 3 °F short is a different situation
+ * from one 30 °F short, and the app had no way to say so - so it said nothing
+ * until the moment it said "done", by which time the harness measured it as
+ * 13.6 °F past target on average and 31.5 °F at worst.
+ *
+ *   heating      still climbing, nothing imminent
+ *   approaching  inside APPROACHING_BAND_F of the pull; the endgame
+ *   at-pull      at or past the pull temperature
+ *   over         past it by more than OVERSHOOT_BAND_F - the app was late
+ *
+ * ONE function, called from every surface that needs the verdict. There were
+ * four separate implementations of "is it done yet": here, in useCalculations,
+ * in the recommendation service's short circuit, and in TemperatureChart - and
+ * the chart's compared DISPLAY units, so on a Celsius session it could reach a
+ * different answer than the advice band about the same roast.
+ *
+ * @param {number|null} currentTempF - Newest reading, °F
+ * @param {number|null} pullTempF - Where the cook stops, °F
+ * @param {number|null} [startTempF] - For the progress fraction
+ * @returns {{state: 'heating'|'approaching'|'at-pull'|'over',
+ *   degreesToPull: number|null, degreesOver: number|null,
+ *   progressPercent: number|null}}
+ */
+export function assessPullProgress(currentTempF, pullTempF, startTempF = null) {
+  if (!Number.isFinite(currentTempF) || !Number.isFinite(pullTempF)) {
+    return { state: 'heating', degreesToPull: null, degreesOver: null, progressPercent: null };
+  }
+  
+  const degreesToPull = pullTempF - currentTempF;
+  
+  // UNCLAMPED, deliberately. The clamp belongs to the ARIA value and the rail
+  // width, which cannot render past 100%; a logic path that reads a clamped
+  // progress cannot tell "just done" from "30 °F past done".
+  const progressPercent = Number.isFinite(startTempF) && pullTempF > startTempF
+    ? ((currentTempF - startTempF) / (pullTempF - startTempF)) * 100
+    : null;
+  
+  if (degreesToPull > APPROACHING_BAND_F) {
+    return { state: 'heating', degreesToPull, degreesOver: null, progressPercent };
+  }
+  
+  if (degreesToPull > 0) {
+    return { state: 'approaching', degreesToPull, degreesOver: null, progressPercent };
+  }
+  
+  const degreesOver = -degreesToPull;
+  return {
+    state: degreesOver > OVERSHOOT_BAND_F ? 'over' : 'at-pull',
+    degreesToPull,
+    degreesOver,
+    progressPercent
+  };
+}
+
+/** °F below the pull at which the cook is in the endgame. */
+export const APPROACHING_BAND_F = 10;
+
+/** °F past the pull at which "done" becomes "you were late". */
+export const OVERSHOOT_BAND_F = 5;
 
 /**
  * The latest moment the meat can come out of the oven and still be rested in

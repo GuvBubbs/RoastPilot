@@ -1,6 +1,7 @@
 import { minutesBetween, addMinutes } from '../utils/timeUtils.js';
 import { fahrenheitToCelsius, celsiusToFahrenheit } from '../utils/temperatureUtils.js';
 import { RECOMMENDATION_MESSAGES } from '../constants/defaults.js';
+import { assessPullProgress } from './calculationService.js';
 
 /**
  * Increments a real oven dial can actually be set to, per display unit. A
@@ -152,6 +153,36 @@ export function checkRecommendationEligibility({
         current: Math.round(timeSpan),
         required: settings.minTimeSpanMinutes,
         message: `~${needed} more minutes of data needed`
+      }
+    };
+  }
+  
+  /**
+   * Is the newest reading still evidence?
+   *
+   * Inserted here, between the time-span gate and the oven gates, and it OUTRANKS
+   * `stale_oven_data` on purpose. That ordering is the bug: a dial change logged
+   * ten minutes ago satisfies the oven gate, so the app would happily advise from
+   * a projection whose newest actual measurement of the meat was three hours old.
+   * The oven setting is a thing the cook told the app; the reading is the only
+   * thing the app knows about the roast.
+   *
+   * A projection is only as fresh as its newest reading, and past this age the
+   * honest answer is to ask for another one rather than to keep extrapolating.
+   */
+  const staleAfter = settings.staleReadingMinutes ?? 45;
+  const newest = readings[readings.length - 1];
+  const readingAge = minutesBetween(newest.timestamp, now);
+  
+  if (readingAge > staleAfter) {
+    return {
+      canRecommend: false,
+      blockerReason: RECOMMENDATION_MESSAGES.STALE_READING,
+      blockerType: 'stale_reading',
+      progress: {
+        current: Math.round(readingAge),
+        required: staleAfter,
+        message: 'Log a fresh reading to resume advice'
       }
     };
   }
@@ -801,11 +832,26 @@ export function reconcileWithOvenChange({
   // cannot judge the size of - the change that has since been made. Reversing
   // on it is how "running 42 min early" ended up being told to raise the oven.
   // Hold, and let a reading decide.
+  //
+  // A HOLD counts as overshot for the same reason, and this is the case that
+  // produced a genuine oscillator once readings got dense enough to expose it:
+  //
+  //   the app asks for 215; the cook sets 215; the next reading still describes
+  //   200, and under 200 the projection now says on-track, so `hold` comes back
+  //   with suggestedTemp = 200 - the MEASURED set point, not a request. Read as
+  //   a target, that says "go to 200", so the dial is dragged back. One reading
+  //   later the 200 is itself unmeasured, evidence is 215, on-track again, and
+  //   the app asks for 215. Four reversals in seventy minutes, each one a trip
+  //   to the oven, and the roast fine throughout.
+  //
+  // The projection is not ASKING for anything when it holds. Its suggestedTemp is
+  // the set point it was measured at, and treating that as a request is the
+  // error. So: hold + an unmeasured change = settling, always.
   const overshot = recommendation.action === 'lower'
     ? gap > 0
     : recommendation.action === 'raise'
       ? gap < 0
-      : false;
+      : recommendation.action === 'hold';
   
   if (Math.abs(gap) <= tolerance) {
     return {
@@ -825,7 +871,11 @@ export function reconcileWithOvenChange({
   }
   
   if (overshot) {
-    const asked = recommendation.action === 'lower' ? 'a drop to' : 'a rise to';
+    const asked = recommendation.action === 'lower'
+      ? 'a drop to'
+      : recommendation.action === 'raise'
+        ? 'a rise to'
+        : 'no change from';
     return {
       action: 'settling',
       suggestedTemp: currentOvenTemp,
@@ -836,7 +886,7 @@ export function reconcileWithOvenChange({
       message: RECOMMENDATION_MESSAGES.SETTLING_BEYOND_PLAN,
       // {plannedTemp} rather than a formatted number: only the composable
       // knows which unit the cook is reading.
-      reasoning: `The oven was changed ${effect.minutesSinceChange} min ago, so the projection still describes the previous setting - it asked for ${asked} {plannedTemp} and you went further than that. Reversing now would be correcting a change no reading has measured yet.`,
+      reasoning: `The oven was changed ${effect.minutesSinceChange} min ago, so the projection still describes the previous setting - it asked for ${asked} {plannedTemp} and the dial has gone past that. Reversing now would be correcting a change no reading has measured yet.`,
       alternativeMessage: null,
       ovenOffMinutes: null,
       practicalMinF: null,
@@ -898,9 +948,15 @@ export function generateRecommendation({
 }) {
   const latestReading = readings.length > 0 ? readings[readings.length - 1] : null;
   
-  // Already at or past target - projections are meaningless from here, so skip
-  // straight to the done state rather than advising an oven change.
-  if (latestReading && typeof pullTempF === 'number' && latestReading.temp >= pullTempF) {
+  // Already at or past the pull temperature - projections are meaningless from
+  // here, so skip straight to the done state rather than advising an oven change.
+  //
+  // Through assessPullProgress, which is the app's one answer to "is it done
+  // yet". There were four separate implementations of this comparison and one of
+  // them compared in display units, so a Celsius session could get two different
+  // verdicts about the same roast on the same screen.
+  const pullProgress = assessPullProgress(latestReading?.temp ?? null, pullTempF);
+  if (latestReading && (pullProgress.state === 'at-pull' || pullProgress.state === 'over')) {
     return buildRecommendationResult({
       action: 'at-target',
       message: RECOMMENDATION_MESSAGES.AT_TARGET,

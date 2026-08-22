@@ -226,6 +226,47 @@ export function writeSummary(results) {
     'changing what the cook saw.');
   lines.push('');
 
+  // ---- The acceptance aggregate -----------------------------------------
+  // Printed rather than left to be worked out by hand, and computed over the
+  // representative cooks only. Two kinds are excluded, both declared on the
+  // scenario: the 12-hour shoulder, whose thresholds are not these, and the
+  // CONTROL cooks whose bad numbers are the measurement - averaging the
+  // forgetful cook's 32 °F overshoot in would report their choice as the app's
+  // failure.
+  const representative = results.filter(({ outcome }) => !outcome.excludeFromAcceptance);
+  const excluded = results.filter(({ outcome }) => outcome.excludeFromAcceptance);
+  if (representative.length) {
+    const scores = representative.map(({ outcome }) => scoreOutcome(outcome));
+    const convergences = scores
+      .map((s) => s.convergenceMinutes)
+      .filter((v) => v !== null)
+      .map(Math.abs);
+    const mean = (values) => (values.length
+      ? Math.round((values.reduce((a, b) => a + b, 0) / values.length) * 10) / 10
+      : null);
+
+    lines.push(`## Acceptance — ${representative.length} representative cooks`);
+    lines.push('');
+    lines.push('| metric | mean | worst | total |');
+    lines.push('|---|---|---|---|');
+    lines.push(`| \`|convergence|\` (min) | ${num(mean(convergences), 1)} | ` +
+      `${num(Math.max(...convergences))} | |`);
+    lines.push(`| overshoot (F) | ${num(mean(scores.map((s) => s.overshootF)), 1)} | ` +
+      `${num(Math.max(...scores.map((s) => s.overshootF)), 1)} | |`);
+    lines.push(`| blind (min) | ${num(mean(scores.map((s) => s.blindMinutes)), 1)} | ` +
+      `${num(Math.max(...scores.map((s) => s.blindMinutes)))} | |`);
+    lines.push(`| blocked (min) | | | ${num(scores.reduce((n, s) => n + s.blockedMinutes, 0))} |`);
+    lines.push(`| no advice (min) | | | ${num(scores.reduce((n, s) => n + s.noAdviceMinutes, 0))} |`);
+    lines.push(`| reversals | | | ${num(scores.reduce((n, s) => n + s.reversals, 0))} |`);
+    lines.push('');
+    if (excluded.length) {
+      lines.push(`Excluded from the aggregate: ${excluded
+        .map(({ outcome }) => `\`${outcome.scenario}\``).join(', ')}. Each is still ` +
+        'asserted against its own recorded baseline.');
+      lines.push('');
+    }
+  }
+
   lines.push('| scenario | convergence | advisories |');
   lines.push('|---|---|---|');
   for (const { outcome, evaluation } of results) {

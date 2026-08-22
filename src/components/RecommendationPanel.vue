@@ -159,6 +159,11 @@ const control = computed(() => {
       case 'no_oven_data':
       case 'stale_oven_data':
         return { kind: 'ghost', label: 'Update oven temp', event: 'openOvenModal' };
+      // The BottomBar already carries "+ Add reading" in the thumb zone, and the
+      // status band's prompt strip is already saying this louder. Spend the one
+      // control on the escape hatch nothing else reaches.
+      case 'stale_reading':
+        return pauseControl.value;
       // No "Add reading" control here: App.vue's BottomBar already carries
       // "+ Add reading" as its primary button whenever a session is active, and
       // this band renders directly above it - the two rendered as a stack of

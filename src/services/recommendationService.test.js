@@ -32,6 +32,9 @@ function makeOvenEvent({ setTemp = 225, isOff = false, timestamp = NOW, previous
 const highConfidence = { level: 'high', reason: 'Consistent readings' };
 
 describe('checkRecommendationEligibility', () => {
+  /** Minutes before NOW, as an ISO string. */
+  const ago = (minutes) => new Date(Date.parse(NOW) - minutes * 60_000).toISOString();
+
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(NOW));
@@ -53,6 +56,62 @@ describe('checkRecommendationEligibility', () => {
     expect(result.canRecommend).toBe(false);
     expect(result.blockerType).toBe('insufficient_readings');
     expect(result.progress).toEqual({ current: 2, required: 3, message: '1 more reading needed' });
+  });
+
+  it('blocks on a stale reading, AHEAD of the stale oven check', () => {
+    /**
+     * The ordering IS the bug being fixed. A dial change logged ten minutes ago
+     * satisfies the oven gate, so the app would go on advising from a projection
+     * whose newest actual measurement of the meat was three hours old. The oven
+     * setting is something the cook told the app; the reading is the only thing
+     * the app knows about the roast.
+     */
+    const result = checkRecommendationEligibility({
+      readings: makeReadings([100, 105, 110], { endISO: ago(180) }),
+      // Fresh oven data, so stale_oven_data cannot fire and the ordering is what
+      // decides the answer.
+      ovenEvents: [makeOvenEvent({ timestamp: ago(10) })],
+      desiredServeTime: '2024-01-01T22:00:00.000Z',
+      settings: createDefaultSettings(),
+      confidence: highConfidence,
+      now: NOW
+    });
+
+    expect(result.canRecommend).toBe(false);
+    expect(result.blockerType).toBe('stale_reading');
+    expect(result.progress.current).toBe(180);
+    expect(result.progress.required).toBe(45);
+  });
+
+  it('lets a fresh reading through', () => {
+    const result = checkRecommendationEligibility({
+      readings: makeReadings([100, 105, 110], { endISO: ago(20) }),
+      ovenEvents: [makeOvenEvent({ timestamp: ago(10) })],
+      desiredServeTime: '2024-01-01T22:00:00.000Z',
+      settings: createDefaultSettings(),
+      confidence: highConfidence,
+      now: NOW
+    });
+
+    expect(result.blockerType).not.toBe('stale_reading');
+  });
+
+  it('takes the stale-reading age from settings', () => {
+    const params = {
+      readings: makeReadings([100, 105, 110], { endISO: ago(50) }),
+      ovenEvents: [makeOvenEvent({ timestamp: ago(10) })],
+      desiredServeTime: '2024-01-01T22:00:00.000Z',
+      confidence: highConfidence,
+      now: NOW
+    };
+
+    expect(checkRecommendationEligibility({
+      ...params, settings: { ...createDefaultSettings(), staleReadingMinutes: 45 }
+    }).blockerType).toBe('stale_reading');
+
+    expect(checkRecommendationEligibility({
+      ...params, settings: { ...createDefaultSettings(), staleReadingMinutes: 90 }
+    }).blockerType).not.toBe('stale_reading');
   });
 
   it('blocks when readings do not span enough time', () => {

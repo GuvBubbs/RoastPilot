@@ -1,5 +1,5 @@
 /**
- * The scenario deck: nine simulated cooks.
+ * The scenario deck: ten simulated cooks.
  *
  * Default behaviour in all of them is the real cook's pattern, taken from
  * Docs/Reference/roast-session-2026-08-22.json: sparse irregular readings about
@@ -76,6 +76,14 @@ export function cadence({ seed, everyMin, jitterMin, untilMin, gaps = [] }) {
  * @property {number} maxMinutes - Give up after this long
  * @property {boolean} [advisoryConvergence] - Exclude from the convergence
  *   assertion (still reported)
+ * @property {boolean} [obeysReadingPrompt] - Default true. False models a cook
+ *   who ignores the app's request for a reading, which is the control for whether
+ *   the prompt is worth anything.
+ * @property {boolean} [excludeFromAcceptance] - Keep this cook out of the
+ *   deck-wide acceptance aggregate. For cooks that are not representative of
+ *   normal operation: the 12-hour shoulder, and the control cooks whose bad
+ *   numbers are the measurement rather than a failure. Still fully asserted
+ *   against its own recorded baseline.
  */
 
 /** Shared: a 6 lb bone-in prime rib out of the fridge. */
@@ -228,7 +236,10 @@ export const SCENARIOS = [
     },
     model: { weightLb: 9, cut: 'pork-shoulder', startCoreF: 40, ovenSetF: 225 },
     readingsAt: cadence({ seed: 505, everyMin: 60, jitterMin: 15, untilMin: 900 }),
-    maxMinutes: 960
+    maxMinutes: 960,
+    // A 12-hour cook against thresholds set for 3-hour ones. Asserted against its
+    // own baseline; kept out of the aggregate.
+    excludeFromAcceptance: true
   },
 
   {
@@ -334,6 +345,49 @@ export const SCENARIOS = [
     model: { ...PRIME_RIB_6LB, ovenSetF: 200 },
     readingsAt: cadence({ seed: 909, everyMin: 40, jitterMin: 8, untilMin: 400 }),
     maxMinutes: 420
+  },
+
+  {
+    name: '10-forgetful-cook',
+    title: 'Forgetful cook',
+    what:
+      'The same cook as 02, who ignores the reading prompt entirely and logs ' +
+      'on their own sparse schedule. This is the README\'s own stated limit of ' +
+      'the harness: every other scenario has a perfectly obedient cook, and a ' +
+      'control loop that only works with a perfectly obedient operator has not ' +
+      'been tested. It is also the honest control for the reading prompt - the ' +
+      'difference between this and 02 is what the prompt is worth.',
+    caveat:
+      'Overshoot here is expected to be BAD, and the baseline records it as ' +
+      'such. The number that matters is that the app says so: it must not ' +
+      'report "on track" beside a three-hour-old reading.',
+    seed: 1010,
+    obeysReadingPrompt: false,
+    config: {
+      targetTemp: 125,
+      units: 'F',
+      startingTemp: 48,
+      initialOvenTemp: 200,
+      serveAfterMin: 165,
+      meatType: 'Prime Rib',
+      meatCut: 'Bone-in',
+      weight: 6,
+      notes: null
+    },
+    model: { ...PRIME_RIB_6LB, ovenSetF: 200 },
+    // Deliberately sparse and irregular: 55 min apart on average, with one long
+    // stretch, which is what a cook who is cooking dinner rather than watching a
+    // dashboard actually does.
+    readingsAt: cadence({
+      seed: 1010, everyMin: 55, jitterMin: 12, untilMin: 400,
+      gaps: [{ afterMin: 70, gapMin: 85 }]
+    }),
+    maxMinutes: 440,
+    advisoryConvergence: true,
+    // THE CONTROL. Its overshoot is meant to be terrible - that is the
+    // measurement. Averaging it into the acceptance figures would report the
+    // cook's choice as the app's failure.
+    excludeFromAcceptance: true
   },
 
   {

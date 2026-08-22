@@ -1,6 +1,6 @@
 import { computed } from 'vue';
 import { useSession } from './useSession.js';
-import { computeSessionCalculations } from '../services/calculationService.js';
+import { computeSessionCalculations, assessPullProgress } from '../services/calculationService.js';
 import { toDisplayUnit, convertRate, formatRate } from '../utils/temperatureUtils.js';
 import {
   formatDuration, formatTime, formatTimeCompact, minutesBetween, addMinutes
@@ -268,29 +268,47 @@ export function useCalculations() {
     return formatTimeCompact(time);
   });
   
-  /**
-   * Progress percentage toward target (0-100)
-   */
-  const progressPercent = computed(() => {
-    if (currentTemp.value === null || !config.value) return 0;
-    
-    const startTemp = config.value.startingTemp ?? 
+  /** Where the cook started from, for the progress fraction. */
+  const startTempF = computed(() => {
+    if (!config.value) return null;
+    return config.value.startingTemp ??
       (readings.value.length > 0 ? readings.value[0].temp : currentTemp.value);
-    const target = config.value.pullTempF;
-    
-    if (target <= startTemp) return 100;
-    
-    const progress = (currentTemp.value - startTemp) / (target - startTemp);
-    return Math.min(100, Math.max(0, Math.round(progress * 100)));
   });
   
   /**
-   * Whether target has been reached
+   * Progress toward the pull, CLAMPED to 0-100.
+   *
+   * The clamp is for the two things that cannot render past 100%: the ARIA value
+   * and the rail's width. Logic that needs to tell "just done" from "30 °F past
+   * done" reads pullProgress.progressPercent, which is unclamped.
    */
-  const targetReached = computed(() => {
-    if (currentTemp.value === null || !config.value) return false;
-    return currentTemp.value >= config.value.pullTempF;
+  const progressPercent = computed(() => {
+    const raw = pullProgress.value.progressPercent;
+    if (raw === null) return currentTemp.value === null ? 0 : 100;
+    return Math.min(100, Math.max(0, Math.round(raw)));
   });
+  
+  /** True once the rail is pinned, so it can show a cap rather than overflow. */
+  const progressOverflows = computed(() => (pullProgress.value.progressPercent ?? 0) > 100);
+  
+  /**
+   * How close the roast is to coming out, graded. The single source of truth for
+   * "is it done yet" - see assessPullProgress.
+   */
+  const pullProgress = computed(() => {
+    if (!config.value) {
+      return { state: 'heating', degreesToPull: null, degreesOver: null, progressPercent: null };
+    }
+    return assessPullProgress(currentTemp.value, config.value.pullTempF, startTempF.value);
+  });
+  
+  /** Whether the pull temperature has been reached. Derived, not re-tested. */
+  const targetReached = computed(
+    () => pullProgress.value.state === 'at-pull' || pullProgress.value.state === 'over'
+  );
+  
+  /** Inside the last few degrees: the endgame, where overshoot happens. */
+  const isApproachingPull = computed(() => pullProgress.value.state === 'approaching');
   
   return {
     // Raw values (internal Fahrenheit)
@@ -308,7 +326,10 @@ export function useCalculations() {
     confidence,
     currentTemp,
     progressPercent,
+    progressOverflows,
+    pullProgress,
     targetReached,
+    isApproachingPull,
     canPredict,
     
     // The cook plan: pull -> rest -> serve

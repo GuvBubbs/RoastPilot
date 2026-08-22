@@ -112,6 +112,9 @@ export const RECOMMENDATION_MESSAGES = {
   RATE_TOO_LOW: 'Heating rate is very slow or negative. Check thermometer placement.',
   RATE_UNSTABLE: 'Temperature readings are fluctuating. Wait for more stable data.',
   OVEN_TEMP_STALE: 'Oven temperature hasn\'t been updated recently. Please confirm current oven setting.',
+  // Outranks OVEN_TEMP_STALE: a dial setting is something the cook told the app,
+  // but a reading is the only thing the app knows about the meat.
+  STALE_READING: 'The last reading is too old to advise from. Log a fresh one.',
   // Emitted while the last dial change has not yet shown up in the readings.
   // {ovenTemp} is the setting the user actually chose, which may differ from the
   // one that was suggested - saying it back to them is the confirmation.

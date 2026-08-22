@@ -16,7 +16,12 @@
         </div>
         <p class="mt-2 text-[13px] text-ink-dim truncate">
           internal · {{ doneLine }}
-          <span v-if="lastReadingAgo" class="text-ink-mute">· {{ lastReadingAgo }}</span>
+          <!-- ONE span, not two. Vue's whitespace: 'condense' drops a
+               whitespace-only text node that spans a newline between two
+               elements, so two adjacent spans rendered "2 mins ago· next 11:22"
+               with the separator welded to the previous clause. Building the
+               trailing clauses as a single string sidesteps the question. -->
+          <span v-if="recencyClause" class="text-ink-mute">{{ recencyClause }}</span>
         </p>
       </template>
 
@@ -48,6 +53,13 @@
       <div
         class="absolute inset-y-0 right-0 bg-raised transition-[width] duration-500"
         :style="{ width: `${100 - progressPercent}%` }"
+      ></div>
+      <!-- Past the pull the rail is pinned at full, and a pinned rail looks
+           identical whether the roast is 1 °F over or 30. A 2px cap says "this
+           has run past the end" without the rail overflowing its own track. -->
+      <div
+        v-if="progressOverflows"
+        class="absolute inset-y-0 right-0 w-[2px] bg-late"
       ></div>
     </div>
 
@@ -94,8 +106,15 @@
         <div class="stat-value">{{ predictedTargetTimeFormatted }}</div>
         <!-- Only when the third cell is showing SERVE (otherwise it would say
              the same thing twice) and only when there is a real projection —
-             a "--" stacked under a "--" is noise. -->
-        <div v-if="hasServeTime && canPredict" class="text-[11px] text-ink-mute truncate">
+             a "--" stacked under a "--" is noise.
+             Also suppressed while a reading is overdue, for the same reason the
+             verdict is: a projection anchored to a 100-minute-old reading was
+             printing a confident "Target reached" under the pull time about a
+             roast the app had not looked at since. -->
+        <div
+          v-if="hasServeTime && canPredict && readingStatus !== 'overdue'"
+          class="text-[11px] text-ink-mute truncate"
+        >
           {{ remainingText }}
         </div>
       </div>
@@ -121,6 +140,24 @@
           {{ thirdCell.note }}
         </div>
       </div>
+    </div>
+
+    <!-- Row 3b: the reading prompt. A full-bleed strip, same `band rule-t py-2.5`
+         construction as the verdict line below it.
+
+         NOT a fourth stat cell: this component already ruled on that (four cells
+         of clock times do not read at 320px, which is why oven state is a chip),
+         and a prompt is an instruction rather than a measurement. Nothing on the
+         chart either — the chart is measurement, and "you should measure" is not.
+
+         No button. The BottomBar already carries "+ Add reading" as its primary
+         control in the thumb zone whenever a session is active; a second one here
+         would render directly above it as a stack of identical buttons. -->
+    <div v-if="readingPromptText" class="band rule-t py-2.5">
+      <p class="flex items-center gap-2 text-[14px]" :class="readingPromptTone">
+        <span class="h-2 w-2 shrink-0 rounded-full bg-current"></span>
+        <span class="min-w-0 truncate">{{ readingPromptText }}</span>
+      </p>
     </div>
 
     <!-- Row 4: interpretation. Muted colours only — the stat row sits between
@@ -175,6 +212,7 @@ import { computed } from 'vue';
 import { useSession } from '../composables/useSession.js';
 import { useCalculations } from '../composables/useCalculations.js';
 import { useRefreshTimer } from '../composables/useRefreshTimer.js';
+import { useReadingSchedule } from '../composables/useReadingSchedule.js';
 import { formatTemperature } from '../utils/temperatureUtils.js';
 import {
   formatTimeCompact, formatTimeAgo, formatDuration, minutesBetween
@@ -186,6 +224,7 @@ const {
   pullTempDisplay,
   servingTempDisplay,
   progressPercent,
+  progressOverflows,
   timeRemainingFormatted,
   targetReached,
   predictedTargetTimeFormatted,
@@ -199,9 +238,18 @@ const {
   canPredict
 } = useCalculations();
 
+const {
+  status: readingStatus,
+  dueAtFormatted,
+  promptText: readingPromptText,
+  promptTone: readingPromptTone
+} = useReadingSchedule();
+
 // Anything measured against "now" needs this dependency, or it freezes at
 // first render.
 const { tick } = useRefreshTimer(30000);
+
+
 
 const lastReadingAgo = computed(() => {
   tick.value;
@@ -216,6 +264,22 @@ const hasServeTime = computed(() => Boolean(config.value?.desiredServeTime));
 const remainingText = computed(() =>
   targetReached.value ? 'Reached' : timeRemainingFormatted.value
 );
+
+/**
+ * The trailing half of the recency line: how old the reading is, and - while the
+ * due time is still comfortably ahead - when the next one is wanted.
+ *
+ * The due clause is suppressed once the prompt strip takes over, or the same fact
+ * is on screen twice in two registers.
+ */
+const recencyClause = computed(() => {
+  const parts = [];
+  if (lastReadingAgo.value) parts.push(lastReadingAgo.value);
+  if (readingStatus.value === 'scheduled' && dueAtFormatted.value) {
+    parts.push(`next ${dueAtFormatted.value}`);
+  }
+  return parts.length ? ` · ${parts.join(' · ')}` : null;
+});
 
 /**
  * "pull 121° · plate 125°", collapsing to one number when carryover is zero.
@@ -324,6 +388,16 @@ const ovenValueText = computed(() => {
 
 const showVerdict = computed(() => {
   if (!hasServeTime.value) return false;
+  /**
+   * An overdue reading suppresses the verdict.
+   *
+   * "On track for serve time" printed beside "reading 3h old" is the exact
+   * contradiction the missing prompt used to produce: the verdict is derived from
+   * a projection whose newest evidence is hours stale, and stating it next to the
+   * admission that the evidence is stale asks the cook to decide which of the two
+   * to believe. The prompt strip is the honest half, so it wins.
+   */
+  if (readingStatus.value === 'overdue') return false;
   return ['on-track', 'early', 'late'].includes(scheduleStatus.value);
 });
 

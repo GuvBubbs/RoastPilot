@@ -51,7 +51,8 @@ const props = defineProps({
 
 const { readings, ovenEvents, config, displayUnits } = useSession();
 const {
-  predictedTargetTime, currentTemp, canPredict, restMinutes, predictedServeTime
+  predictedTargetTime, currentTemp, canPredict, restMinutes, predictedServeTime,
+  targetReached
 } = useCalculations();
 
 const { width } = useWindowSize();
@@ -263,11 +264,11 @@ const projectionData = computed(() => {
 
   const lastReading = readings.value[readings.value.length - 1];
   const currentTempDisplay = toDisplayUnit(currentTemp.value, displayUnits.value);
-  // In °F, against the stored pull temperature, NOT in display units. The old
-  // comparison converted both sides and then compared - which on a Celsius
-  // session rounds to 0.1 °C and can land on the other side of the boundary from
-  // the advice band's own at-target test. Two verdicts about the same roast.
-  if (currentTemp.value >= config.value.pullTempF) return [];
+  // The shared verdict, not a fourth reimplementation of it. This used to
+  // compare DISPLAY units, which round to 0.1 °C - so on a Celsius session the
+  // chart could land on the other side of the boundary from the advice band and
+  // the two would disagree about whether the same roast was done.
+  if (targetReached.value) return [];
 
   const pullTempDisplay = toDisplayUnit(config.value.pullTempF, displayUnits.value);
 

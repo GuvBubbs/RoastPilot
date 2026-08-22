@@ -216,13 +216,13 @@ export function checkBounds(outcome) {
  *     is waiting - awaitingEffect true. Anything else means the projection is
  *     being read as if it had already seen the change.
  *
- * (b) Consecutive moves in the same direction with no settled state between them
- *     must not, in total, go further than the FIRST of them asked for by more
- *     than one step. The plan states this without the "no settled state"
- *     qualifier, but escalating a raise after a reading has confirmed the
- *     previous one is not enough is correct behaviour, not a bug - the property
- *     that matters is that the app never re-charges for a change it has not
- *     measured.
+ * (b) Consecutive moves in the same direction, DERIVED FROM THE SAME
+ *     MEASUREMENT, must not in total go further than the first of them asked for
+ *     by more than one step. The plan states this without the qualifier, but
+ *     escalating after a reading has shown the previous change was not enough is
+ *     correct behaviour, not a bug - the property that matters is that the app
+ *     never re-charges for a change it has not measured. "The same measurement"
+ *     is read off the evidence set point; see the note on newEvidenceBetween.
  */
 export function checkNoDoubleCharging(outcome) {
   const out = [];
@@ -291,9 +291,52 @@ export function checkNoDoubleCharging(outcome) {
   }
 
   // ---- (b) unsettled moves in one direction do not compound --------------
-  const settledAt = (fromMin, toMin) =>
-    outcome.rows.some((r) => r.atMin > fromMin && r.atMin <= toMin &&
-      r.canRecommend && !r.awaitingEffect && r.action !== 'at-target');
+  //
+  // "Unsettled" needs care, and the first attempt at it was wrong once the
+  // reading prompt made readings dense.
+  //
+  // The property is that the app never re-charges for a change it has not
+  // MEASURED. Walking the oven down five steps because each new reading says the
+  // roast is earlier still than the last one said is not that - it is the loop
+  // working. 04 does exactly that: 250 F against a four-hour serve, the variance
+  // going +15 -> -26 -> -110 as the rate climbs, and the dial stepping down from
+  // 235 to 185 over five readings. Every step is one increment off the newest
+  // MEASURED set point, in response to information the app did not have before.
+  //
+  // Requiring a fully settled row between moves called that a 50 F double
+  // charge, because with ovenChangeSettleReadings = 2 the evidence set point
+  // trails the dial and awaitingEffect is still true when the next reading
+  // arrives.
+  //
+  // So the discriminator is the EVIDENCE SET POINT, which is the precise
+  // statement of "what have the readings actually measured":
+  //
+  //   evidence moved between the two moves   new ground; a further step is a
+  //                                          response, not a re-charge
+  //   evidence unchanged                     both moves were derived from the
+  //                                          same measurement - that is stacking
+  //
+  // Read off the app's own assessOvenChangeEffect at each move's instant rather
+  // than restated here, for the same reason half (a) is.
+  const evidenceAt = (atMin) => {
+    // The row stamped by the driver at the moment the dial moved carries the
+    // session as it then stood.
+    const row = outcome.rows.find((r) => r.kind === 'apply' && Math.abs(r.atMin - atMin) < 0.01)
+      ?? [...outcome.rows].reverse().find((r) => r.atMin <= atMin && r.ovenHistory);
+    if (!row?.ovenHistory) return null;
+    return assessOvenChangeEffect({
+      readings: (row.readingTimes ?? []).map((timestamp) => ({ timestamp })),
+      ovenEvents: row.ovenHistory,
+      settings: outcome.settings,
+      now: row.atISO
+    }).evidenceTemp;
+  };
+
+  const newEvidenceBetween = (previousMove, move) => {
+    const before = evidenceAt(previousMove.atMin);
+    const after = evidenceAt(move.atMin);
+    return before !== null && after !== null && before !== after;
+  };
 
   let run = [];
   const flushRun = () => {
@@ -317,7 +360,7 @@ export function checkNoDoubleCharging(outcome) {
     const enriched = { ...move, toF: moveF };
     if (run.length === 0) { run = [enriched]; continue; }
     const previous = run[run.length - 1];
-    if (move.action !== previous.action || settledAt(previous.atMin, move.atMin)) {
+    if (move.action !== previous.action || newEvidenceBetween(previous, move)) {
       flushRun();
       run = [enriched];
     } else {
@@ -487,12 +530,59 @@ export function checkAcceptanceMetrics(outcome) {
   return out;
 }
 
+
+/**
+ * The app must not advise from evidence it has admitted is stale.
+ *
+ * "On track for serve time" printed beside a three-hour-old reading is the
+ * contradiction the missing reading prompt used to produce, and it is the one
+ * thing the forgetful cook - who ignores the prompt entirely - is there to test.
+ * The app cannot make that cook take a reading; it can decline to pretend it
+ * knows where the roast is.
+ *
+ * Asserted against the app's OWN staleness setting rather than a number restated
+ * here, so raising the setting cannot silently widen the window this check
+ * allows.
+ */
+export function checkNoStaleAdvice(outcome) {
+  const out = [];
+  const staleAfter = outcome.settings.staleReadingMinutes ?? 45;
+  // Advice derived from the projection. at-target is a fact about the newest
+  // reading, restart-oven is about the oven, and needs-reading is itself a
+  // request for fresher evidence - none of them claim to know the schedule.
+  const PROJECTION_ADVICE = ['raise', 'lower', 'hold', 'oven-off', 'settling'];
+  let breaches = 0;
+
+  for (const r of outcome.rows) {
+    if (!r.canRecommend || !PROJECTION_ADVICE.includes(r.action)) continue;
+    if (!r.latestReadingISO) continue;
+
+    const age = minutesBetween(r.latestReadingISO, r.atISO);
+    // One tick of slack: a row stamped exactly on the boundary is the gate
+    // firing, not the gate failing.
+    if (age > staleAfter + 5.1) {
+      breaches++;
+      out.push(finding('no-stale-advice', 'error',
+        `at ${r.atMin} min the app advised "${r.action}" (${r.scheduleStatus}) from a ` +
+        `reading ${age.toFixed(0)} min old, past the ${staleAfter} min staleness ` +
+        'limit', { row: r.atMin, ageMinutes: age }));
+    }
+  }
+
+  if (breaches === 0) {
+    out.push(finding('no-stale-advice', 'ok',
+      `no advice given from a reading older than ${staleAfter} min`));
+  }
+  return out;
+}
+
 export const CHECKS = [
   checkConvergence,
   checkAcceptanceMetrics,
   checkNoFlapping,
   checkBounds,
   checkNoDoubleCharging,
+  checkNoStaleAdvice,
   checkSaneNumbers,
   checkRenderedText,
   checkTerminalState

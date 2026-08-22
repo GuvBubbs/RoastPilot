@@ -82,7 +82,7 @@ import { estimateCarryoverF, pullTempFor, servingTempFor } from '../services/car
  * @property {string|null} blockerReason - If canRecommend is false, why (display string)
  * @property {string|null} blockerType - Machine-readable blocker discriminant, e.g.
  *   'insufficient_readings' | 'insufficient_time' | 'no_oven_data' |
- *   'stale_oven_data' | 'no_serve_time' | 'no_projection' |
+ *   'stale_reading' | 'stale_oven_data' | 'no_serve_time' | 'no_projection' |
  *   'insufficient_confidence' | 'bad_rate' | 'unstable_rate' | 'no_session'
  * @property {{current: number, required: number, message: string}|null} progress -
  *   Progress toward clearing a countable blocker
@@ -117,6 +117,11 @@ import { estimateCarryoverF, pullTempFor, servingTempFor } from '../services/car
  *   its preset does not name one. Per-session after that: a shoulder rests 30
  *   minutes and a tenderloin 15, so this is a starting point, not the value the
  *   projection reads.
+ * @property {number} readingIntervalMinutes - The longest the app will go without
+ *   asking for a reading (default 45). The actual cadence is derived from the
+ *   projection and is usually shorter - see useReadingSchedule.
+ * @property {number} staleReadingMinutes - Age at which the newest reading stops
+ *   being evidence and advice is withheld (default 45).
  */
 
 /**
@@ -298,7 +303,9 @@ export function createDefaultSettings() {
     ovenTempStaleMinutes: 60,
     ovenChangeLagMinutes: 15,
     ovenChangeSettleReadings: 2,
-    defaultRestMinutes: SESSION_DEFAULTS.REST_MINUTES
+    defaultRestMinutes: SESSION_DEFAULTS.REST_MINUTES,
+    readingIntervalMinutes: 45,
+    staleReadingMinutes: 45
   };
 }
 

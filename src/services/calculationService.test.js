@@ -8,7 +8,10 @@ import {
   assessConfidence,
   computeSessionCalculations,
   readingsForRateFit,
-  computeLatestPullTime
+  computeLatestPullTime,
+  assessPullProgress,
+  APPROACHING_BAND_F,
+  OVERSHOOT_BAND_F
 } from './calculationService.js';
 
 // Several suites pin the clock so that "now"-relative results are exact rather
@@ -339,6 +342,75 @@ describe('the rate fit does not span a pause', () => {
     expect(straddling.currentRate).toBeLessThan(8);
     // Confined to the post-restart segment, 105 -> 110 -> 115 over 60 minutes.
     expect(segmented.currentRate).toBeCloseTo(10, 1);
+  });
+});
+
+describe('assessPullProgress', () => {
+  /**
+   * The graded verdict, which replaced FOUR separate implementations of "is it
+   * done yet" - here, in useCalculations, in the recommendation service's short
+   * circuit, and in TemperatureChart. The chart's compared DISPLAY units, which
+   * round to 0.1 °C, so on a Celsius session it could reach a different answer
+   * than the advice band about the same roast on the same screen.
+   */
+  it('grades the four states', () => {
+    expect(assessPullProgress(80, 125).state).toBe('heating');
+    expect(assessPullProgress(120, 125).state).toBe('approaching');
+    expect(assessPullProgress(125, 125).state).toBe('at-pull');
+    expect(assessPullProgress(128, 125).state).toBe('at-pull');
+    expect(assessPullProgress(140, 125).state).toBe('over');
+  });
+
+  it('puts the boundaries where the bands say', () => {
+    expect(assessPullProgress(125 - APPROACHING_BAND_F, 125).state).toBe('approaching');
+    expect(assessPullProgress(125 - APPROACHING_BAND_F - 1, 125).state).toBe('heating');
+    expect(assessPullProgress(125 + OVERSHOOT_BAND_F, 125).state).toBe('at-pull');
+    expect(assessPullProgress(125 + OVERSHOOT_BAND_F + 1, 125).state).toBe('over');
+  });
+
+  it('reports the distance in both directions', () => {
+    expect(assessPullProgress(118, 125).degreesToPull).toBe(7);
+    expect(assessPullProgress(118, 125).degreesOver).toBeNull();
+    expect(assessPullProgress(140, 125).degreesOver).toBe(15);
+  });
+
+  it('leaves the progress fraction UNCLAMPED', () => {
+    // The clamp belongs to the ARIA value and the rail width, which cannot
+    // render past 100%. A logic path reading a clamped progress cannot tell
+    // "just done" from "30 °F past done", which is the whole distinction the
+    // graded verdict exists to make.
+    expect(assessPullProgress(125, 125, 45).progressPercent).toBeCloseTo(100, 5);
+    expect(assessPullProgress(165, 125, 45).progressPercent).toBeGreaterThan(100);
+    expect(assessPullProgress(45, 125, 45).progressPercent).toBe(0);
+  });
+
+  it('has no progress fraction without a start temperature', () => {
+    expect(assessPullProgress(100, 125).progressPercent).toBeNull();
+    // Nor when the target is at or below the start, which would divide by zero
+    // or invert.
+    expect(assessPullProgress(100, 45, 45).progressPercent).toBeNull();
+    expect(assessPullProgress(100, 40, 45).progressPercent).toBeNull();
+  });
+
+  it('is inert on missing numbers rather than reporting a false verdict', () => {
+    for (const [current, pull] of [[null, 125], [100, null], [NaN, 125], [100, NaN]]) {
+      const result = assessPullProgress(current, pull);
+      expect(result.state).toBe('heating');
+      expect(result.degreesToPull).toBeNull();
+    }
+  });
+
+  it('gives the same verdict whatever unit the caller thinks in', () => {
+    // The Celsius disagreement, as a property. Both sides in °F, always.
+    const cToF = (c) => c * 9 / 5 + 32;
+    for (const coreC of [50, 51, 51.6, 51.7, 52, 60]) {
+      const fromF = assessPullProgress(cToF(coreC), cToF(51.7));
+      // Rounding the same pair to 0.1 °C and comparing there is what the chart
+      // used to do; the verdict must not depend on it.
+      const roundedC = Math.round(coreC * 10) / 10;
+      const fromRounded = assessPullProgress(cToF(roundedC), cToF(51.7));
+      expect(fromF.state).toBe(fromRounded.state);
+    }
   });
 });
 
