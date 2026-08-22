@@ -46,9 +46,11 @@
     <!-- No active session -->
     <main v-else-if="!hasActiveSession" class="pb-bottombar">
       <div class="band py-10 text-center">
-        <!-- A probe in a roast: the one shape that says "instrument" and
-             "cooking" at once, and the same motif as the app icon. Held at
-             ink-dim so the heading below stays the loudest thing here. -->
+        <!-- A thermometer, not a cut of meat. Tested against four alternatives
+             rendered at their real 48px: the roast-and-probe silhouette only
+             resolves at ~96px and reads as an insect at the size actually used.
+             A thermometer is also the truer subject — the app's job is the
+             reading, which is what the sentence below says. -->
         <svg
           class="w-12 h-12 mx-auto mb-5 text-ink-dim"
           viewBox="0 0 24 24"
@@ -59,11 +61,9 @@
           stroke-linejoin="round"
           aria-hidden="true"
         >
-          <path d="M3 20c0-4 4-7 9-7s9 3 9 7Z" />
-          <path d="M12 17.5 18.6 9.5" />
-          <circle cx="19.9" cy="7.9" r="1.6" />
-          <path d="M5.6 11.2c0-1.5 1.7-1.5 1.7-3S5.6 6.7 5.6 5.2" />
-          <path d="M10.3 10.2c0-1.5 1.7-1.5 1.7-3s-1.7-1.5-1.7-3" />
+          <path d="M14 14.8V5a2 2 0 1 0-4 0v9.8a4 4 0 1 0 4 0Z" />
+          <path d="M12 8.5v6.8" />
+          <path d="M16.5 7h2.5M16.5 10.5h2.5M16.5 14h2.5" />
         </svg>
         <h2 class="text-[22px] font-semibold text-ink mb-2">Reverse sear, on schedule</h2>
         <p class="text-[15px] text-ink-dim max-w-sm mx-auto">
