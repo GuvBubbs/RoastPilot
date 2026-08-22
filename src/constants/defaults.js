@@ -42,7 +42,13 @@ export const RECOMMENDATION_MESSAGES = {
   NO_SERVE_TIME: 'Set a desired serve time to get timing recommendations.',
   RATE_TOO_LOW: 'Heating rate is very slow or negative. Check thermometer placement.',
   RATE_UNSTABLE: 'Temperature readings are fluctuating. Wait for more stable data.',
-  OVEN_TEMP_STALE: 'Oven temperature hasn\'t been updated recently. Please confirm current oven setting.'
+  OVEN_TEMP_STALE: 'Oven temperature hasn\'t been updated recently. Please confirm current oven setting.',
+  // Emitted while the last dial change has not yet shown up in the readings.
+  // {ovenTemp} is the setting the user actually chose, which may differ from the
+  // one that was suggested - saying it back to them is the confirmation.
+  SETTLING_ON_PLAN: 'Oven at {ovenTemp} is where it needs to be. Hold there - a reading in about {waitMinutes} min will confirm it.',
+  SETTLING_ON_PLAN_READY: 'Oven at {ovenTemp} is where it needs to be. Log a reading now to confirm it is working.',
+  SETTLING_RETARGET: 'Oven is at {ovenTemp}. Aim for {suggestedTemp} - that target already allows for the change you just made.'
 };
 
 /**

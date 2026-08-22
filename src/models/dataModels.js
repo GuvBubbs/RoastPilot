@@ -50,7 +50,7 @@
 
 /**
  * @typedef {Object} Recommendation
- * @property {'raise'|'lower'|'hold'|'oven-off'|'at-target'|'needs-reading'|'none'} action
+ * @property {'raise'|'lower'|'hold'|'oven-off'|'at-target'|'needs-reading'|'settling'|'none'} action
  * @property {number|null} suggestedTemp - New oven set temp in Fahrenheit
  * @property {number|null} changeAmount - Degrees to change (always positive)
  * @property {string|null} message - TEMPLATE with {placeholders}; substituted (and
@@ -70,6 +70,12 @@
  *   'bad_rate' | 'unstable_rate' | 'no_session'
  * @property {{current: number, required: number, message: string}|null} progress -
  *   Progress toward clearing a countable blocker
+ * @property {boolean} awaitingEffect - True while the last oven set-point change has
+ *   not yet appeared in the readings, so the projection still describes the previous
+ *   setting. Suggestions in this state are anchored to the pre-change set point.
+ * @property {number|null} ovenChangeMinutesAgo - Age of that change in minutes
+ * @property {number|null} waitMinutes - Minutes until the change should be visible in
+ *   a reading; 0 once enough time has passed and only a reading is missing
  */
 
 /**
@@ -87,6 +93,10 @@
  * @property {number} minReadingsForRecommendation - Minimum readings required (default 3)
  * @property {number} minTimeSpanMinutes - Minimum time span for recommendations (default 30)
  * @property {number} ovenTempStaleMinutes - Max age of oven temp for recommendations (default 60)
+ * @property {number} ovenChangeLagMinutes - Thermal lag before a dial change can show
+ *   up in the meat's heating rate (default 15)
+ * @property {number} ovenChangeSettleReadings - Readings needed past that lag before
+ *   the measured rate is treated as belonging to the new setting (default 2)
  */
 
 /**
@@ -145,7 +155,9 @@ export function createDefaultSettings() {
     enableLowTempRecommendations: true,
     minReadingsForRecommendation: 3,
     minTimeSpanMinutes: 30,
-    ovenTempStaleMinutes: 60
+    ovenTempStaleMinutes: 60,
+    ovenChangeLagMinutes: 15,
+    ovenChangeSettleReadings: 2
   };
 }
 

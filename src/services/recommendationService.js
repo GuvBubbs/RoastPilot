@@ -1,5 +1,40 @@
-import { minutesBetween } from '../utils/timeUtils.js';
+import { minutesBetween, addMinutes } from '../utils/timeUtils.js';
+import { fahrenheitToCelsius, celsiusToFahrenheit } from '../utils/temperatureUtils.js';
 import { RECOMMENDATION_MESSAGES } from '../constants/defaults.js';
+
+/**
+ * Increments a real oven dial can actually be set to, per display unit. A
+ * suggestion of 102°C is useless advice: the user rounds it themselves, which
+ * used to look to the app like a manual change (see assessOvenChangeEffect).
+ */
+const DIAL_STEP = { C: 5, F: 5 };
+
+/**
+ * Snap an oven temperature to the nearest dial increment in the unit the user
+ * is reading. Snapping in Fahrenheit would not help a Celsius dial - the two
+ * grids do not line up - so this converts, snaps, and converts back.
+ *
+ * @param {number} tempF - Temperature in Fahrenheit
+ * @param {'F'|'C'} units - Unit the dial is marked in
+ * @param {'nearest'|'up'|'down'} [mode] - Rounding direction
+ * @returns {number} Snapped temperature in Fahrenheit
+ */
+export function snapToDial(tempF, units, mode = 'nearest') {
+  const step = DIAL_STEP[units] ?? DIAL_STEP.F;
+  const inUnit = units === 'C' ? fahrenheitToCelsius(tempF) : tempF;
+  const snapped = mode === 'up'
+    ? Math.ceil(inUnit / step) * step
+    : mode === 'down'
+      ? Math.floor(inUnit / step) * step
+      : Math.round(inUnit / step) * step;
+  return units === 'C' ? celsiusToFahrenheit(snapped) : snapped;
+}
+
+/** One dial increment expressed in Fahrenheit. */
+function dialStepF(units) {
+  const step = DIAL_STEP[units] ?? DIAL_STEP.F;
+  return units === 'C' ? step * 9 / 5 : step;
+}
 
 /**
  * Whether a reading has been logged at or after the given timestamp
@@ -37,6 +72,9 @@ export function buildRecommendationResult(fields) {
     blockerReason: null,
     blockerType: null,
     progress: null,
+    awaitingEffect: false,
+    ovenChangeMinutesAgo: null,
+    waitMinutes: null,
     ...fields
   };
 }
@@ -218,6 +256,8 @@ function calculateOvenOffDuration(scheduleVarianceMinutes, predictedMinutesToTar
  * @param {AppSettings} params.settings
  * @param {number|null} params.predictedMinutesToTarget - Minutes until target
  * @param {number|null} params.currentRate - Current heating rate in °F/hour
+ * @param {'F'|'C'} [params.displayUnits] - Unit the user's dial is marked in;
+ *   suggestions are snapped to a settable increment in that unit
  * @returns {Object} Recommendation details
  */
 export function calculateRecommendation({
@@ -226,7 +266,8 @@ export function calculateRecommendation({
   scheduleStatus,
   settings,
   predictedMinutesToTarget,
-  currentRate
+  currentRate,
+  displayUnits = 'F'
 }) {
   const {
     recommendationStepF,
@@ -273,12 +314,19 @@ export function calculateRecommendation({
       severity = 'normal';
     }
     
-    // Calculate suggested temperature
-    let suggestedTemp = ovenBaseTemp + changeAmount;
+    // Snap to something the dial can actually be set to, then take the change
+    // amount back off the snapped value so the two can never disagree.
+    let suggestedTemp = snapToDial(ovenBaseTemp + changeAmount, displayUnits);
+    if (suggestedTemp <= ovenBaseTemp) {
+      // Snapping swallowed the whole step - move by one dial increment instead
+      // of emitting a "change" that leaves the dial where it already is.
+      suggestedTemp = snapToDial(ovenBaseTemp + dialStepF(displayUnits), displayUnits, 'up');
+    }
+    changeAmount = suggestedTemp - ovenBaseTemp;
     
     // Apply upper bound guardrail
     if (suggestedTemp > ovenTempMaxF) {
-      suggestedTemp = ovenTempMaxF;
+      suggestedTemp = snapToDial(ovenTempMaxF, displayUnits, 'down');
       changeAmount = suggestedTemp - ovenBaseTemp;
       
       // If already at max, can't recommend higher
@@ -337,14 +385,22 @@ export function calculateRecommendation({
       severity = 'normal';
     }
     
-    // Calculate suggested temperature
-    let suggestedTemp = ovenBaseTemp - changeAmount;
+    // Snap to something the dial can actually be set to (see the raise branch)
+    let suggestedTemp = snapToDial(ovenBaseTemp - changeAmount, displayUnits);
+    if (suggestedTemp >= ovenBaseTemp) {
+      suggestedTemp = snapToDial(ovenBaseTemp - dialStepF(displayUnits), displayUnits, 'down');
+    }
+    changeAmount = ovenBaseTemp - suggestedTemp;
     
-    // Check practical minimum first (most ovens can't go below ~175°F/80°C)
+    // Check practical minimum first (most ovens can't go below ~175°F/80°C).
+    // Compared against the lowest *settable* value, not the raw limit: on a
+    // Celsius dial 175°F falls between marks, and treating the unreachable
+    // value as the floor left a "lower by 0°" recommendation behind.
     const practicalMinF = settings.ovenTempPracticalMinF || 175;
+    const practicalMinSetting = snapToDial(practicalMinF, displayUnits, 'up');
     const enableLowTemp = settings.enableLowTempRecommendations !== false;
     
-    if (suggestedTemp < practicalMinF) {
+    if (suggestedTemp < practicalMinSetting) {
       // Calculate optimal oven-off duration using physics-based approach
       const ovenOffMinutes = calculateOvenOffDuration(absVariance, predictedMinutesToTarget, currentRate);
       
@@ -359,13 +415,14 @@ export function calculateRecommendation({
           reasoning: `Running ${Math.round(absVariance)} minutes early. Low temperature recommendations are disabled, but you can pause cooking temporarily.`,
           alternativeMessage: RECOMMENDATION_MESSAGES.OVEN_OFF_ALTERNATIVE,
           ovenOffMinutes,
-          practicalMinF: practicalMinF,
+          // The settable value, so the message names a temperature the dial has
+          practicalMinF: practicalMinSetting,
           severity: 'moderate'
         };
       }
       
       // Already at practical minimum - suggest turning oven off temporarily
-      if (ovenBaseTemp <= practicalMinF) {
+      if (ovenBaseTemp <= practicalMinSetting) {
         return {
           action: 'oven-off',
           suggestedTemp: ovenBaseTemp,
@@ -380,7 +437,7 @@ export function calculateRecommendation({
       }
       
       // Suggest lowering to practical minimum
-      suggestedTemp = practicalMinF;
+      suggestedTemp = practicalMinSetting;
       changeAmount = ovenBaseTemp - suggestedTemp;
       
       const messageTemplate = absVariance > 30 
@@ -402,7 +459,7 @@ export function calculateRecommendation({
     
     // Apply food safety lower bound guardrail
     if (suggestedTemp < ovenTempMinF) {
-      suggestedTemp = ovenTempMinF;
+      suggestedTemp = snapToDial(ovenTempMinF, displayUnits, 'up');
       changeAmount = ovenBaseTemp - suggestedTemp;
       
       // If already at min, can't recommend lower
@@ -454,6 +511,181 @@ export function calculateRecommendation({
 }
 
 /**
+ * Work out which oven set point the current readings actually describe.
+ *
+ * A dial change cannot show up in the meat's heating rate immediately - there is
+ * thermal lag, and then readings have to be taken. Until that has happened the
+ * measured rate, and every projection built on it, still describes the PREVIOUS
+ * setting. Recommendations that ignore this compound: each change is re-applied
+ * on top of the one just made, walking the oven a step further every update.
+ *
+ * The evidence set point is the newest one with enough post-lag readings behind
+ * it. Anything set after that is, so far, unmeasured.
+ *
+ * @param {Object} params
+ * @param {InternalReading[]} params.readings - Readings in chronological order
+ * @param {OvenTempEvent[]} params.ovenEvents - Oven events in chronological order
+ * @param {AppSettings} params.settings
+ * @param {string} [params.now]
+ * @returns {{settled: boolean, evidenceTemp: number|null, currentTemp: number|null,
+ *   minutesSinceChange: number|null, waitMinutes: number|null,
+ *   readingsSinceChange: number, readingsNeeded: number}}
+ */
+export function assessOvenChangeEffect({
+  readings,
+  ovenEvents,
+  settings,
+  now = new Date().toISOString()
+}) {
+  const lagMinutes = settings.ovenChangeLagMinutes ?? 15;
+  const readingsNeeded = settings.ovenChangeSettleReadings ?? 2;
+  
+  const settledResult = {
+    settled: true,
+    evidenceTemp: null,
+    currentTemp: null,
+    minutesSinceChange: null,
+    waitMinutes: null,
+    readingsSinceChange: 0,
+    readingsNeeded
+  };
+  
+  // Off events do not move the set point - they suspend it - so they are not
+  // changes to reason about here. The pause branch handles that state.
+  const active = ovenEvents.filter(e => e.isOff !== true);
+  if (active.length === 0) return settledResult;
+  
+  const readingsAfterLag = (timestamp) => {
+    const visibleFrom = addMinutes(timestamp, lagMinutes);
+    return readings.filter(r => minutesBetween(visibleFrom, r.timestamp) >= 0).length;
+  };
+  
+  const currentIndex = active.length - 1;
+  
+  let evidenceIndex = -1;
+  for (let i = currentIndex; i >= 0; i--) {
+    if (readingsAfterLag(active[i].timestamp) >= readingsNeeded) {
+      evidenceIndex = i;
+      break;
+    }
+  }
+  
+  // Nothing has been measured yet. With a single set point that is simply the
+  // start of the cook (the eligibility gate vouches for the data); with several,
+  // the oldest is the safest thing to anchor to - it is the one the earliest
+  // readings belong to.
+  const baseIndex = evidenceIndex === -1 ? 0 : evidenceIndex;
+  
+  const evidenceTemp = active[baseIndex].setTemp;
+  const currentTemp = active[currentIndex].setTemp;
+  const current = active[currentIndex];
+  
+  // A dial moved away and back again nets out: the readings describe the setting
+  // that is in force, so there is nothing to wait for.
+  if (baseIndex === currentIndex || evidenceTemp === currentTemp) {
+    return { ...settledResult, evidenceTemp, currentTemp };
+  }
+  
+  const visibleFrom = addMinutes(current.timestamp, lagMinutes);
+  
+  return {
+    settled: false,
+    evidenceTemp,
+    currentTemp,
+    minutesSinceChange: Math.round(minutesBetween(current.timestamp, now)),
+    waitMinutes: Math.max(0, Math.round(minutesBetween(now, visibleFrom))),
+    readingsSinceChange: readingsAfterLag(current.timestamp),
+    readingsNeeded
+  };
+}
+
+/**
+ * Turn a recommendation computed from the *measured* set point into advice about
+ * the set point the oven is actually on.
+ *
+ * Two cases matter. If the dial is already at (or acceptably near) the
+ * temperature the projection calls for, the change is accepted and nothing more
+ * is asked for - the app says so rather than re-issuing the same step. If the
+ * dial is somewhere else, the target is restated as an absolute temperature; it
+ * is never re-derived from the new set point, which is what made repeated
+ * changes drift.
+ *
+ * @param {Object} params
+ * @param {Object} params.recommendation - Result of calculateRecommendation for
+ *   the measured (pre-change) set point
+ * @param {number} params.currentOvenTemp - Set point the oven is on now (°F)
+ * @param {Object} params.effect - Result of assessOvenChangeEffect
+ * @param {AppSettings} params.settings
+ * @param {'F'|'C'} [params.displayUnits]
+ * @returns {Partial<Recommendation>}
+ */
+export function reconcileWithOvenChange({
+  recommendation,
+  currentOvenTemp,
+  effect,
+  settings,
+  displayUnits = 'F'
+}) {
+  const settleFields = {
+    awaitingEffect: true,
+    ovenChangeMinutesAgo: effect.minutesSinceChange,
+    waitMinutes: effect.waitMinutes
+  };
+  
+  // Pausing advice is about the clock, not the dial: it survives a set point
+  // change intact, except that the restart should name the new setting.
+  if (recommendation.action === 'oven-off') {
+    return { ...recommendation, suggestedTemp: currentOvenTemp, ...settleFields };
+  }
+  
+  const implied = recommendation.suggestedTemp;
+  if (implied === null || currentOvenTemp === null) {
+    return { ...recommendation, ...settleFields };
+  }
+  
+  const step = settings.recommendationStepF ?? 10;
+  // Half a dial increment covers a user rounding the suggestion to a mark they
+  // can actually hit; half a step covers the coarseness of the step itself.
+  const tolerance = Math.max(dialStepF(displayUnits) / 2, step / 2);
+  const gap = implied - currentOvenTemp; // positive: the oven is still too cool
+  
+  // Moving further than asked, in the direction that was asked for, is within
+  // the precision of a bucketed step - accept it rather than pulling them back.
+  const overshot = recommendation.action === 'lower'
+    ? gap > 0
+    : recommendation.action === 'raise'
+      ? gap < 0
+      : false;
+  
+  if (Math.abs(gap) <= tolerance || (overshot && Math.abs(gap) <= step)) {
+    return {
+      action: 'settling',
+      suggestedTemp: currentOvenTemp,
+      changeAmount: 0,
+      message: effect.waitMinutes > 0
+        ? RECOMMENDATION_MESSAGES.SETTLING_ON_PLAN
+        : RECOMMENDATION_MESSAGES.SETTLING_ON_PLAN_READY,
+      reasoning: `The oven was changed ${effect.minutesSinceChange} min ago and the readings so far still describe the previous setting. The setting you chose is what the projection calls for, so there is nothing to change until a reading shows the effect.`,
+      alternativeMessage: null,
+      ovenOffMinutes: null,
+      practicalMinF: null,
+      severity: 'normal',
+      ...settleFields
+    };
+  }
+  
+  return {
+    ...recommendation,
+    action: gap > 0 ? 'raise' : 'lower',
+    suggestedTemp: Math.round(implied),
+    changeAmount: Math.round(Math.abs(gap)),
+    message: RECOMMENDATION_MESSAGES.SETTLING_RETARGET,
+    reasoning: `The oven was changed ${effect.minutesSinceChange} min ago, so the projection still reflects the previous setting. This target comes from that projection - it is not stacked on top of the change you already made.`,
+    ...settleFields
+  };
+}
+
+/**
  * Generate the full recommendation result including eligibility check
  * 
  * Branch order matters: reaching the target and needing a post-pause reading both
@@ -471,6 +703,7 @@ export function calculateRecommendation({
  * @param {AppSettings} params.settings
  * @param {number|null} params.predictedMinutesToTarget - Minutes until target at current rate
  * @param {number|null} params.currentRate - Current heating rate in °F/hour
+ * @param {'F'|'C'} [params.displayUnits] - Unit the user's oven dial is marked in
  * @returns {Recommendation}
  */
 export function generateRecommendation({
@@ -485,6 +718,7 @@ export function generateRecommendation({
   settings,
   predictedMinutesToTarget,
   currentRate,
+  displayUnits = 'F',
   now = new Date().toISOString()
 }) {
   const latestReading = readings.length > 0 ? readings[readings.length - 1] : null;
@@ -534,6 +768,36 @@ export function generateRecommendation({
     });
   }
   
+  // A dial change that has not reached the readings yet is the one case where
+  // the current set point is the wrong thing to advise from: the projection
+  // still describes the previous setting, so the advice is anchored there and
+  // then reconciled against where the dial actually is. Without this the same
+  // step is re-applied on top of every change, manual or applied from here.
+  const changeEffect = assessOvenChangeEffect({ readings, ovenEvents, settings, now });
+  
+  if (!changeEffect.settled) {
+    const measured = calculateRecommendation({
+      ovenBaseTemp: changeEffect.evidenceTemp,
+      scheduleVarianceMinutes,
+      scheduleStatus,
+      settings,
+      predictedMinutesToTarget,
+      currentRate,
+      displayUnits
+    });
+    
+    return buildRecommendationResult({
+      ...reconcileWithOvenChange({
+        recommendation: measured,
+        currentOvenTemp: ovenBaseTemp,
+        effect: changeEffect,
+        settings,
+        displayUnits
+      }),
+      latestReadingTemp: latestReading ? latestReading.temp : null
+    });
+  }
+  
   // Normal recommendation - from the latest reading, whether or not the oven is
   // currently off (a post-pause reading is guaranteed by the branch above).
   const recommendation = calculateRecommendation({
@@ -542,7 +806,8 @@ export function generateRecommendation({
     scheduleStatus,
     settings,
     predictedMinutesToTarget,
-    currentRate
+    currentRate,
+    displayUnits
   });
   
   return buildRecommendationResult({

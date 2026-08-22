@@ -48,6 +48,9 @@ export function useRecommendations() {
       settings: settings.value,
       predictedMinutesToTarget: predictedMinutesToTarget.value,
       currentRate: currentRateRaw.value,
+      // The dial's markings depend on the unit on screen, so the service snaps
+      // its suggestions in that unit rather than emitting 102°C.
+      displayUnits: displayUnits.value,
       now: new Date().toISOString()
     });
   });
@@ -100,54 +103,63 @@ export function useRecommendations() {
   });
   
   /**
-   * Primary recommendation message with unit conversion
+   * Resolve the placeholders the service emits. One helper for every string it
+   * emits - message, alternative and reasoning all draw on the same values, and
+   * substituting them in only some of them is how a raw {ovenTemp} reaches the
+   * screen.
    */
-  const message = computed(() => {
-    let msg = rawRecommendation.value.message;
-    if (!msg) return null;
+  function substitute(text) {
+    if (!text) return null;
+    const raw = rawRecommendation.value;
+    let out = text;
     
-    // Handle {ovenTemp} placeholder - used in HOLD, OVEN_OFF_ALTERNATIVE, etc.
-    // lastActiveOvenTemp, not currentOvenTemp: the latter is 0 while the oven is
-    // off, which rendered "then restart at 0°F".
-    if (msg.includes('{ovenTemp}') && lastActiveOvenTemp.value !== null) {
-      const tempFormatted = formatTemperature(lastActiveOvenTemp.value, displayUnits.value);
-      msg = msg.replace(/{ovenTemp}/g, tempFormatted);
+    // {ovenTemp}: lastActiveOvenTemp, not currentOvenTemp - the latter is 0
+    // while the oven is off, which rendered "then restart at 0°F".
+    if (out.includes('{ovenTemp}') && lastActiveOvenTemp.value !== null) {
+      out = out.replace(/{ovenTemp}/g, formatTemperature(lastActiveOvenTemp.value, displayUnits.value));
     }
     
-    // Handle {suggestedTemp} placeholder - used in RAISE/LOWER messages
-    if (msg.includes('{suggestedTemp}') && rawRecommendation.value.suggestedTemp !== null) {
-      const tempFormatted = formatTemperature(rawRecommendation.value.suggestedTemp, displayUnits.value);
-      msg = msg.replace(/{suggestedTemp}/g, tempFormatted);
+    if (out.includes('{suggestedTemp}') && raw.suggestedTemp !== null) {
+      out = out.replace(/{suggestedTemp}/g, formatTemperature(raw.suggestedTemp, displayUnits.value));
     }
     
-    // Handle {minTemp} placeholder - used in LOW_TEMP_DISABLED and MIN_TEMP messages
-    if (msg.includes('{minTemp}')) {
-      const minTempF = rawRecommendation.value.practicalMinF || rawRecommendation.value.minTempF;
+    // Used by LOW_TEMP_DISABLED and the at-minimum hold
+    if (out.includes('{minTemp}')) {
+      const minTempF = raw.practicalMinF || raw.minTempF;
       if (minTempF !== null && minTempF !== undefined) {
-        const minTempFormatted = formatTemperature(minTempF, displayUnits.value);
-        msg = msg.replace(/{minTemp}/g, minTempFormatted);
+        out = out.replace(/{minTemp}/g, formatTemperature(minTempF, displayUnits.value));
       }
     }
     
-    // Handle {maxTemp} placeholder - used in MAX_TEMP message
-    if (msg.includes('{maxTemp}') && rawRecommendation.value.maxTempF !== null) {
-      const maxTempFormatted = formatTemperature(rawRecommendation.value.maxTempF, displayUnits.value);
-      msg = msg.replace(/{maxTemp}/g, maxTempFormatted);
+    if (out.includes('{maxTemp}') && raw.maxTempF !== null && raw.maxTempF !== undefined) {
+      out = out.replace(/{maxTemp}/g, formatTemperature(raw.maxTempF, displayUnits.value));
     }
     
-    // Handle {latestTemp} placeholder - used in the at-target message
-    if (msg.includes('{latestTemp}') && rawRecommendation.value.latestReadingTemp !== null) {
-      const latestFormatted = formatTemperature(rawRecommendation.value.latestReadingTemp, displayUnits.value);
-      msg = msg.replace(/{latestTemp}/g, latestFormatted);
+    if (out.includes('{latestTemp}') && raw.latestReadingTemp !== null) {
+      out = out.replace(/{latestTemp}/g, formatTemperature(raw.latestReadingTemp, displayUnits.value));
     }
     
-    return msg;
-  });
+    if (out.includes('{minutes}') && raw.ovenOffMinutes !== null) {
+      out = out.replace(/{minutes}/g, raw.ovenOffMinutes);
+    }
+    
+    // How long until a dial change should be visible in a reading
+    if (out.includes('{waitMinutes}') && raw.waitMinutes !== null) {
+      out = out.replace(/{waitMinutes}/g, raw.waitMinutes);
+    }
+    
+    return out;
+  }
+  
+  /**
+   * Primary recommendation message with unit conversion
+   */
+  const message = computed(() => substitute(rawRecommendation.value.message));
   
   /**
    * Detailed reasoning for the recommendation
    */
-  const reasoning = computed(() => rawRecommendation.value.reasoning);
+  const reasoning = computed(() => substitute(rawRecommendation.value.reasoning));
   
   /**
    * Reason why recommendation cannot be made
@@ -172,25 +184,9 @@ export function useRecommendations() {
   /**
    * Alternative message (e.g., turn oven off) with unit conversion
    */
-  const alternativeMessage = computed(() => {
-    let altMsg = rawRecommendation.value.alternativeMessage;
-    if (!altMsg) return null;
-    
-    // Handle {minutes} placeholder
-    if (altMsg.includes('{minutes}') && rawRecommendation.value.ovenOffMinutes !== null) {
-      altMsg = altMsg.replace(/{minutes}/g, rawRecommendation.value.ovenOffMinutes);
-    }
-    
-    // Same as above: OVEN_OFF_ALTERNATIVE reads "...then restart at {ovenTemp}",
-    // so it needs the temperature to restart at, not the 0 of an off event.
-    if (altMsg.includes('{ovenTemp}') && lastActiveOvenTemp.value !== null) {
-      const ovenTempFormatted = formatTemperature(lastActiveOvenTemp.value, displayUnits.value);
-      altMsg = altMsg.replace(/{ovenTemp}/g, ovenTempFormatted);
-    }
-
-    
-    return altMsg;
-  });
+  // OVEN_OFF_ALTERNATIVE reads "...then restart at {ovenTemp}", so it needs the
+  // temperature to restart at, not the 0 of an off event - see substitute().
+  const alternativeMessage = computed(() => substitute(rawRecommendation.value.alternativeMessage));
   
   /**
    * Suggested minutes to turn oven off
@@ -211,6 +207,16 @@ export function useRecommendations() {
    * Whether a fresh reading is required before recommendations can resume
    */
   const needsReading = computed(() => rawRecommendation.value.action === 'needs-reading');
+  
+  /**
+   * Whether the last oven change has yet to show up in the readings. While this
+   * is true the advice is anchored to the set point the readings describe, so it
+   * does not stack another step on top of a change already made.
+   */
+  const awaitingEffect = computed(() => rawRecommendation.value.awaitingEffect === true);
+  
+  /** Minutes until that change should be visible in a reading */
+  const waitMinutes = computed(() => rawRecommendation.value.waitMinutes);
   
   /**
    * Latest logged reading temperature in display units
@@ -289,6 +295,10 @@ export function useRecommendations() {
     // Pause state (when oven is off)
     isPaused,
     needsReading,
+    
+    // Settling state (oven changed, effect not measured yet)
+    awaitingEffect,
+    waitMinutes,
     latestReadingTemp,
     latestReadingTempFormatted,
     

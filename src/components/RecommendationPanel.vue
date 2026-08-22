@@ -74,6 +74,7 @@ const {
   alternativeMessage,
   ovenOffMinutes,
   isPaused,
+  awaitingEffect,
   blockerReason,
   blockerType,
   blockerProgress,
@@ -109,7 +110,13 @@ const detail = computed(() => {
   // it describes turning the oven off, so it is noise once the oven is already
   // off (and its {ovenTemp} resolves to 0° in that state).
   if (isPaused.value) return null;
-  return alternativeMessage.value;
+  if (alternativeMessage.value) return alternativeMessage.value;
+  // A suggestion issued while the last change is still unmeasured needs to say
+  // so, or it reads as a second correction on top of the first.
+  if (awaitingEffect.value && action.value !== 'settling') {
+    return 'Still measuring your last oven change — this is the same target, not another step.';
+  }
+  return null;
 });
 
 /** Muted interpretation colours only — the heat ramp is reserved for measurement. */
@@ -121,6 +128,8 @@ const dotClass = computed(() => {
     case 'raise': return 'bg-late';
     case 'lower': return 'bg-early';
     case 'oven-off': return 'bg-early';
+    // The dial is where it needs to be; we are only waiting to see it land.
+    case 'settling': return 'bg-ontrack';
     // Pause is an action, not a status, so it gets neutral treatment.
     case 'needs-reading': return 'bg-ink-dim';
     default: return 'bg-ink-mute';
@@ -163,6 +172,11 @@ const control = computed(() => {
   switch (action.value) {
     case 'needs-reading':
       // The locked decision: measure the meat, never estimate how far it cooled.
+      return { kind: 'primary', label: 'Add reading', event: 'openReadingModal' };
+
+    case 'settling':
+      // Nothing to apply - the change has been accepted, and the only thing that
+      // moves this state forward is a reading that shows its effect.
       return { kind: 'primary', label: 'Add reading', event: 'openReadingModal' };
 
     case 'raise':

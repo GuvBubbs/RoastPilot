@@ -3,9 +3,12 @@ import {
   checkRecommendationEligibility,
   calculateRecommendation,
   generateRecommendation,
-  analyzeOvenResponsiveness
+  analyzeOvenResponsiveness,
+  assessOvenChangeEffect,
+  snapToDial
 } from './recommendationService.js';
 import { createDefaultSettings } from '../models/dataModels.js';
+import { celsiusToFahrenheit, fahrenheitToCelsius } from '../utils/temperatureUtils.js';
 
 // Fixed "now" used by every clock-dependent test
 const NOW = '2024-01-01T18:00:00.000Z';
@@ -527,7 +530,10 @@ describe('generateRecommendation', () => {
         'canRecommend',
         'blockerReason',
         'blockerType',
-        'progress'
+        'progress',
+        'awaitingEffect',
+        'ovenChangeMinutesAgo',
+        'waitMinutes'
       ];
 
       const results = [
@@ -677,5 +683,251 @@ describe('stale oven data is measured against an injected clock', () => {
     const later = eligibilityAt('2024-01-01T18:00:00.000Z');
     expect(later.canRecommend).toBe(false);
     expect(later.blockerType).toBe('stale_oven_data');
+  });
+});
+
+describe('dial-settable suggestions', () => {
+  const settings = createDefaultSettings();
+
+  it('snaps to marks the user can actually set, in the unit on screen', () => {
+    // 102°C is not a dial position; 100°C is
+    expect(snapToDial(celsiusToFahrenheit(102), 'C')).toBe(celsiusToFahrenheit(100));
+    expect(snapToDial(celsiusToFahrenheit(103), 'C')).toBe(celsiusToFahrenheit(105));
+    expect(snapToDial(213, 'F')).toBe(215);
+    expect(snapToDial(213, 'F', 'down')).toBe(210);
+    expect(snapToDial(211, 'F', 'up')).toBe(215);
+  });
+
+  it('never suggests a Celsius temperature between the marks', () => {
+    const result = calculateRecommendation({
+      ovenBaseTemp: celsiusToFahrenheit(112),
+      scheduleVarianceMinutes: -20,
+      scheduleStatus: 'early',
+      settings,
+      predictedMinutesToTarget: 90,
+      currentRate: 12,
+      displayUnits: 'C'
+    });
+
+    expect(result.action).toBe('lower');
+    expect(fahrenheitToCelsius(result.suggestedTemp) % 5).toBe(0);
+    expect(result.suggestedTemp).toBeLessThan(celsiusToFahrenheit(112));
+  });
+
+  it('still moves the dial when snapping would have swallowed the whole step', () => {
+    // A 10°F step from 227°F lands on 237°F, which snaps back to 235°F - fine -
+    // but a base already on a mark with a sub-increment step must still move.
+    const result = calculateRecommendation({
+      ovenBaseTemp: 225,
+      scheduleVarianceMinutes: 10,
+      scheduleStatus: 'late',
+      settings: { ...settings, recommendationStepF: 5 },
+      predictedMinutesToTarget: 90,
+      currentRate: 12,
+      displayUnits: 'F'
+    });
+
+    expect(result.suggestedTemp).toBeGreaterThan(225);
+    expect(result.changeAmount).toBeGreaterThan(0);
+  });
+});
+
+describe('assessOvenChangeEffect', () => {
+  const settings = createDefaultSettings();
+
+  it('treats a cook with no oven change as settled', () => {
+    expect(assessOvenChangeEffect({
+      readings: makeReadings([100, 108, 116]),
+      ovenEvents: [makeOvenEvent({ timestamp: '2024-01-01T17:00:00.000Z' })],
+      settings,
+      now: NOW
+    }).settled).toBe(true);
+
+    expect(assessOvenChangeEffect({
+      readings: [], ovenEvents: [], settings, now: NOW
+    }).settled).toBe(true);
+  });
+
+  it('reports a fresh change as unmeasured and names the set point the readings describe', () => {
+    const effect = assessOvenChangeEffect({
+      readings: makeReadings([100, 108, 116]),
+      ovenEvents: [
+        makeOvenEvent({ setTemp: 225, timestamp: '2024-01-01T17:00:00.000Z' }),
+        makeOvenEvent({ setTemp: 200, timestamp: '2024-01-01T17:55:00.000Z' })
+      ],
+      settings,
+      now: NOW
+    });
+
+    expect(effect.settled).toBe(false);
+    expect(effect.evidenceTemp).toBe(225);
+    expect(effect.currentTemp).toBe(200);
+    expect(effect.minutesSinceChange).toBe(5);
+    expect(effect.waitMinutes).toBe(10); // 15 min lag, 5 of them elapsed
+  });
+
+  it('settles once enough readings sit past the thermal lag', () => {
+    const effect = assessOvenChangeEffect({
+      readings: makeReadings([100, 108, 116], { spacingMinutes: 20 }),
+      ovenEvents: [
+        makeOvenEvent({ setTemp: 225, timestamp: '2024-01-01T17:00:00.000Z' }),
+        makeOvenEvent({ setTemp: 200, timestamp: '2024-01-01T17:20:00.000Z' })
+      ],
+      settings,
+      now: NOW
+    });
+
+    expect(effect.settled).toBe(true);
+  });
+
+  it('anchors a chain of unmeasured changes to the oldest set point, not the previous one', () => {
+    const effect = assessOvenChangeEffect({
+      readings: makeReadings([100, 108, 116]),
+      ovenEvents: [
+        makeOvenEvent({ setTemp: 250, timestamp: '2024-01-01T17:00:00.000Z' }),
+        makeOvenEvent({ setTemp: 235, timestamp: '2024-01-01T17:50:00.000Z' }),
+        makeOvenEvent({ setTemp: 225, timestamp: '2024-01-01T17:55:00.000Z' })
+      ],
+      settings,
+      now: NOW
+    });
+
+    expect(effect.settled).toBe(false);
+    expect(effect.evidenceTemp).toBe(250);
+    expect(effect.currentTemp).toBe(225);
+  });
+
+  it('treats a dial moved away and back again as settled', () => {
+    const effect = assessOvenChangeEffect({
+      readings: makeReadings([100, 108, 116]),
+      ovenEvents: [
+        makeOvenEvent({ setTemp: 225, timestamp: '2024-01-01T17:00:00.000Z' }),
+        makeOvenEvent({ setTemp: 200, timestamp: '2024-01-01T17:50:00.000Z' }),
+        makeOvenEvent({ setTemp: 225, timestamp: '2024-01-01T17:55:00.000Z' })
+      ],
+      settings,
+      now: NOW
+    });
+
+    expect(effect.settled).toBe(true);
+  });
+
+  it('ignores oven-off events, which suspend the set point rather than move it', () => {
+    const effect = assessOvenChangeEffect({
+      readings: makeReadings([100, 108, 116]),
+      ovenEvents: [
+        makeOvenEvent({ setTemp: 225, timestamp: '2024-01-01T17:00:00.000Z' }),
+        makeOvenEvent({ setTemp: 0, isOff: true, timestamp: '2024-01-01T17:50:00.000Z' })
+      ],
+      settings,
+      now: NOW
+    });
+
+    expect(effect.settled).toBe(true);
+  });
+});
+
+describe('an oven change already made is not charged twice', () => {
+  const settings = createDefaultSettings();
+
+  // Running early at 225°F: the engine wants 210°F. Every case below shares that
+  // projection - only the set point the user actually chose differs.
+  function paramsWithDial(dialTemp, overrides = {}) {
+    return {
+      readings: makeReadings([100, 108, 116]),
+      ovenEvents: [
+        makeOvenEvent({ setTemp: 225, timestamp: '2024-01-01T17:00:00.000Z' }),
+        makeOvenEvent({ setTemp: dialTemp, timestamp: '2024-01-01T17:55:00.000Z' })
+      ],
+      ovenBaseTemp: dialTemp,
+      targetTemp: 125,
+      desiredServeTime: '2024-01-01T20:00:00.000Z',
+      scheduleVarianceMinutes: -20,
+      scheduleStatus: 'early',
+      confidence: highConfidence,
+      settings,
+      predictedMinutesToTarget: 90,
+      currentRate: 12,
+      displayUnits: 'F',
+      now: NOW,
+      ...overrides
+    };
+  }
+
+  it('accepts a change that lands where the projection asked for', () => {
+    const result = generateRecommendation(paramsWithDial(210));
+
+    expect(result.action).toBe('settling');
+    expect(result.awaitingEffect).toBe(true);
+    expect(result.changeAmount).toBe(0);
+    expect(result.suggestedTemp).toBe(210);
+    expect(result.waitMinutes).toBe(10);
+  });
+
+  it('accepts a change the user rounded to a mark they could hit', () => {
+    // 205°F rather than the 210°F asked for: inside the step's own precision
+    const result = generateRecommendation(paramsWithDial(205));
+
+    expect(result.action).toBe('settling');
+    expect(result.changeAmount).toBe(0);
+  });
+
+  it('does not re-apply the step from the new set point', () => {
+    // The regression: from a dial at 175°F the old code recommended 175 - 15 =
+    // 160°F, and would keep walking down a step per update. The target is the
+    // same 210°F the projection called for, reached from wherever the dial is.
+    const result = generateRecommendation(paramsWithDial(175));
+
+    expect(result.suggestedTemp).toBe(210);
+    expect(result.action).toBe('raise');
+    expect(result.awaitingEffect).toBe(true);
+    expect(result.changeAmount).toBe(35);
+  });
+
+  it('never chases the dial downward across a run of unmeasured changes', () => {
+    // The old behaviour: each of these returned dial - 15, so the advice walked
+    // away from the target every time the user logged a change.
+    for (const dial of [215, 205, 195, 185, 175]) {
+      const result = generateRecommendation(paramsWithDial(dial));
+
+      if (result.action === 'settling') {
+        expect(result.changeAmount).toBe(0);
+      } else {
+        expect(result.suggestedTemp).toBe(210);
+      }
+      expect(result.suggestedTemp).toBeGreaterThanOrEqual(175);
+    }
+  });
+
+  it('goes back to advising from the current set point once the change is measured', () => {
+    const result = generateRecommendation(paramsWithDial(200, {
+      readings: makeReadings([100, 108, 116], { spacingMinutes: 20 }),
+      ovenEvents: [
+        makeOvenEvent({ setTemp: 225, timestamp: '2024-01-01T17:00:00.000Z' }),
+        makeOvenEvent({ setTemp: 200, timestamp: '2024-01-01T17:20:00.000Z' })
+      ]
+    }));
+
+    expect(result.awaitingEffect).toBe(false);
+    expect(result.action).toBe('lower');
+    expect(result.suggestedTemp).toBe(185); // 200 - 15, from the measured setting
+  });
+
+  it('keeps pause advice intact but restarts at the new setting', () => {
+    // Measured at the practical minimum, so the only way to slow down is to
+    // pause - advice about the clock, which a dial change does not invalidate.
+    const result = generateRecommendation(paramsWithDial(200, {
+      scheduleVarianceMinutes: -40,
+      ovenEvents: [
+        makeOvenEvent({ setTemp: 175, timestamp: '2024-01-01T17:00:00.000Z' }),
+        makeOvenEvent({ setTemp: 200, timestamp: '2024-01-01T17:55:00.000Z' })
+      ]
+    }));
+
+    expect(result.action).toBe('oven-off');
+    expect(result.ovenOffMinutes).toBe(20);
+    // Restart at what the dial says now, not at the setting it was measured on
+    expect(result.suggestedTemp).toBe(200);
+    expect(result.awaitingEffect).toBe(true);
   });
 });
