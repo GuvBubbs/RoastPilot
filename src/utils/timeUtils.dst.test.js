@@ -33,7 +33,7 @@
  * existed were written and run somewhere the wall clock and the epoch agreed.
  */
 import { describe, it, expect, beforeAll } from 'vitest';
-import { addMinutes, minutesBetween, isSameLocalDay } from './timeUtils.js';
+import { addMinutes, minutesBetween, isSameLocalDay, localDayOffset } from './timeUtils.js';
 import { predictTimeToTarget, calculateScheduleVarianceWithThreshold } from '../services/calculationService.js';
 
 /** The two real 2026 Pacific/Auckland transitions, as UTC instants. */
@@ -246,6 +246,21 @@ describe('the projection survives a DST boundary', () => {
     );
     expect(buggyVariance.varianceMinutes).toBe(60);
     expect(buggyVariance.status).toBe('late');
+  });
+
+  it('counts a day correctly across a 23- and a 25-hour day', () => {
+    // The local interval between midnights is 23 hours on the spring-forward day
+    // and 25 on the fall-back day. Dividing the epoch difference by 86400000 and
+    // flooring gets both of them wrong.
+    // Local midnight to local midnight across spring forward: 23 REAL hours,
+    // one calendar day. Dividing the epoch difference by 86400000 gives 0.958,
+    // which floors to 0 - the day disappears.
+    expect(localDayOffset('2026-09-26T12:00:00.000Z', '2026-09-27T11:00:00.000Z')).toBe(1);
+    // And across fall back: 25 real hours, still one calendar day.
+    expect(localDayOffset('2026-04-04T11:00:00.000Z', '2026-04-05T12:00:00.000Z')).toBe(1);
+    // Eight hours that straddle the transition, and the same local day either
+    // side of it.
+    expect(localDayOffset('2026-09-26T12:00:00.000Z', '2026-09-26T20:00:00.000Z')).toBe(0);
   });
 
   it('recognises the same local day either side of a fall-back', () => {

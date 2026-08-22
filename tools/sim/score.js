@@ -80,8 +80,14 @@ export function noAdviceMinutes(rows) {
 }
 
 /**
- * |serve time - the moment the TRUE core reached target|, signed: positive is
- * late. Null if the cook never got there.
+ * |pull deadline - the moment the TRUE core reached the pull temperature|,
+ * signed: positive is late. Null if the cook never got there.
+ *
+ * Against the PULL DEADLINE (serve time less the rest), not the serve time. The
+ * app steers the meat out of the oven early enough to rest, so a cook that hits
+ * its pull temperature exactly at dinner time is half an hour late, not on time.
+ * With no rest declared the two instants coincide, which is why the existing
+ * deck's recorded convergence numbers do not move.
  *
  * Measured on the true core, not on the probe: the app can only be as right as
  * the probe lets it be, but the question a cook cares about is when the meat was
@@ -90,7 +96,7 @@ export function noAdviceMinutes(rows) {
 export function convergenceMinutes(outcome) {
   const hit = outcome.rows.find((r) => r.trueCoreF >= outcome.targetF);
   if (!hit) return null;
-  return Math.round(minutesBetween(outcome.serveISO, hit.atISO));
+  return Math.round(minutesBetween(outcome.pullDeadlineISO ?? outcome.serveISO, hit.atISO));
 }
 
 /** Direction reversals across one cook: a raise answered by a lower, or back. */

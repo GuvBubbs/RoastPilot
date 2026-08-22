@@ -43,7 +43,7 @@ export function useRecommendations() {
       // the oven is off - "0 + 25" produced a 25°F set point the Apply button
       // then wrote into the oven history.
       ovenBaseTemp: lastActiveOvenTemp.value,
-      targetTemp: config.value.targetTemp,
+      pullTempF: config.value.pullTempF,
       desiredServeTime: config.value.desiredServeTime,
       scheduleVarianceMinutes: scheduleVariance.value,
       scheduleStatus: scheduleStatus.value,

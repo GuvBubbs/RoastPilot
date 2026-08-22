@@ -448,7 +448,7 @@ describe('generateRecommendation', () => {
       readings: makeReadings([100, 108, 116]),
       ovenEvents: [makeOvenEvent()],
       ovenBaseTemp: 225,
-      targetTemp: 125,
+      pullTempF: 125,
       desiredServeTime: '2024-01-01T20:00:00.000Z',
       scheduleVarianceMinutes: 0,
       scheduleStatus: 'on-track',
@@ -728,7 +728,7 @@ describe('oven-off regressions', () => {
         { id: 'o2', setTemp: 0, timestamp: ago(45), previousTemp: 225, isOff: true }
       ],
       ovenBaseTemp: 225,
-      targetTemp: 200,
+      pullTempF: 200,
       desiredServeTime: ago(-20),
       scheduleVarianceMinutes: 25,
       scheduleStatus: 'late',
@@ -752,7 +752,7 @@ describe('oven-off regressions', () => {
         { id: 'o2', setTemp: 0, timestamp: ago(10), previousTemp: 225, isOff: true }
       ],
       ovenBaseTemp: 225,
-      targetTemp: 200,
+      pullTempF: 200,
       desiredServeTime: ago(-20),
       scheduleVarianceMinutes: 25,
       scheduleStatus: 'late',
@@ -1008,7 +1008,7 @@ describe('an oven change already made is not charged twice', () => {
         makeOvenEvent({ setTemp: dialTemp, timestamp: '2024-01-01T17:55:00.000Z' })
       ],
       ovenBaseTemp: dialTemp,
-      targetTemp: 125,
+      pullTempF: 125,
       desiredServeTime: '2024-01-01T20:00:00.000Z',
       scheduleVarianceMinutes: -20,
       scheduleStatus: 'early',

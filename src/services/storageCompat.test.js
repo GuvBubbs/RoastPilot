@@ -86,12 +86,79 @@ describe('forward compatibility with a pre-redesign stored session', () => {
     localStorage.setItem(STORAGE_KEYS.CURRENT_SESSION, JSON.stringify(legacySession()));
   });
 
-  it('loads without triggering a schema migration', () => {
-    // Version unchanged means migrateSchema never runs, so nothing is rewritten.
+  it('migrates v1 to v2 and keeps the session', () => {
     expect(storageService.getSchemaVersion()).toBe(1);
     storageService.initialize();
-    expect(storageService.getSchemaVersion()).toBe(1);
+    expect(storageService.getSchemaVersion()).toBe(2);
     expect(storageService.loadSession()).not.toBeNull();
+  });
+
+  it('maps the legacy targetTemp to the PULL temperature, not the plate', () => {
+    // The migration rule that matters most. The old build stopped the cook
+    // exactly at targetTemp, so that number is where the meat comes OUT. Reading
+    // it as a plate temperature would derive a pull 3-8 °F lower and move a
+    // running cook's finish line the moment the new build deployed - the roast
+    // would be declared done while it was still short.
+    storageService.initialize();
+    const stored = storageService.loadSession();
+
+    expect(stored.config.pullTempF).toBe(125);
+    expect(stored.config.servingTempF).toBe(129); // 125 + 4 carryover at 200 °F
+    expect(stored.config.carryoverF).toBe(4);
+    expect(stored.config.carryoverIsUserSet).toBe(false);
+    // Gone, so nothing downstream can read the ambiguous key again.
+    expect('targetTemp' in stored.config).toBe(false);
+  });
+
+  it('gives a migrated cook ZERO rest, not the new-session default', () => {
+    // A cook already running set their serve time against a projection with no
+    // rest in it. Inserting 20 minutes now would announce that dinner is late,
+    // about a decision the cook never made.
+    storageService.initialize();
+    expect(storageService.loadSession().config.restMinutes).toBe(0);
+  });
+
+  it('does not move the schedule verdict across the migration', () => {
+    // The whole point, stated as the number a cook would see. Same readings,
+    // same serve time, same projection - so the same verdict.
+    const before = computeSessionCalculations({
+      readings: legacySession().readings,
+      pullTempF: 125,
+      desiredServeTime: '2026-08-22T23:00:00.000Z',
+      settings: legacySession().settings,
+      now: '2026-08-22T21:30:00.000Z'
+    });
+
+    storageService.initialize();
+    const stored = storageService.loadSession();
+    const after = computeSessionCalculations({
+      readings: stored.readings,
+      ovenEvents: stored.ovenEvents,
+      pullTempF: stored.config.pullTempF,
+      desiredServeTime: stored.config.desiredServeTime,
+      restMinutes: stored.config.restMinutes,
+      settings: stored.settings,
+      now: '2026-08-22T21:30:00.000Z'
+    });
+
+    expect(after.predictedTargetTime).toBe(before.predictedTargetTime);
+    expect(after.scheduleVarianceMinutes).toBe(before.scheduleVarianceMinutes);
+    expect(after.scheduleStatus).toBe(before.scheduleStatus);
+  });
+
+  it('is idempotent: migrating twice changes nothing', () => {
+    storageService.initialize();
+    const once = JSON.parse(JSON.stringify(storageService.loadSession().config));
+
+    // Force the migration to run again over the already-migrated blob.
+    localStorage.setItem(STORAGE_KEYS.SCHEMA_VERSION, '1');
+    storageService.initialize();
+    const twice = storageService.loadSession().config;
+
+    expect(twice.pullTempF).toBe(once.pullTempF);
+    expect(twice.servingTempF).toBe(once.servingTempF);
+    expect(twice.carryoverF).toBe(once.carryoverF);
+    expect(twice.restMinutes).toBe(once.restMinutes);
   });
 
   it('resumes the cook with every reading and oven event intact', () => {
@@ -103,7 +170,7 @@ describe('forward compatibility with a pre-redesign stored session', () => {
     expect(readings.value.map((r) => r.temp)).toEqual([48, 71, 94, 103]);
     expect(ovenEvents.value).toHaveLength(2);
     expect(config.value.meatType).toBe('beef');
-    expect(config.value.targetTemp).toBe(125);
+    expect(config.value.pullTempF).toBe(125);
     expect(config.value.desiredServeTime).toBe('2026-08-22T23:00:00.000Z');
   });
 
@@ -165,7 +232,8 @@ describe('forward compatibility with a pre-redesign stored session', () => {
     // no component instance for the refresh timer.
     const result = computeSessionCalculations({
       readings: readings.value,
-      targetTemp: config.value.targetTemp,
+      pullTempF: config.value.pullTempF,
+      restMinutes: config.value.restMinutes,
       desiredServeTime: config.value.desiredServeTime,
       settings: settings.value,
       now: '2026-08-22T21:30:00.000Z'

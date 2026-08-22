@@ -13,7 +13,7 @@
         <div v-if="config" class="flex items-baseline justify-between gap-3 text-[13px]">
           <span class="section-label">Target</span>
           <span class="num text-[15px] text-ink-dim">
-            {{ formatTemperature(config.targetTemp, displayUnits) }}
+            {{ formatTemperature(config.pullTempF, displayUnits) }}
           </span>
         </div>
 

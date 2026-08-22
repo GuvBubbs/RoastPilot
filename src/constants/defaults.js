@@ -2,8 +2,18 @@
  * Default session configuration values
  */
 export const SESSION_DEFAULTS = {
-  TARGET_TEMP_F: 125, // Medium-rare beef (stored in F, but display defaults to C)
+  /**
+   * What the cook wants on the PLATE, in Fahrenheit - 125 °F is medium-rare
+   * beef. The pull temperature is derived from this by subtracting carryover, so
+   * a default 200 °F oven gives a pull at 121 °F.
+   *
+   * This used to be TARGET_TEMP_F and meant "where the cook stops", which is a
+   * different number. See carryoverService.js.
+   */
+  SERVING_TEMP_F: 125,
   INITIAL_OVEN_TEMP_F: 200,
+  /** Minutes on the board before carving. Per-preset where a preset says so. */
+  REST_MINUTES: 20,
   UNITS: 'C' // Default to Celsius
 };
 
@@ -98,7 +108,7 @@ export const RECOMMENDATION_MESSAGES = {
   RESTART_OVEN: 'Oven is off. Restart it at {ovenTemp} when you\'re ready - timing advice resumes once it\'s heating again.',
   NEED_MORE_READINGS: 'Need at least {count} readings to make recommendations.',
   NEED_MORE_TIME: 'Need readings spanning at least {minutes} minutes.',
-  NO_SERVE_TIME: 'Set a desired serve time to get timing recommendations.',
+  NO_SERVE_TIME: 'Set a serve time in the cook plan to get timing recommendations.',
   RATE_TOO_LOW: 'Heating rate is very slow or negative. Check thermometer placement.',
   RATE_UNSTABLE: 'Temperature readings are fluctuating. Wait for more stable data.',
   OVEN_TEMP_STALE: 'Oven temperature hasn\'t been updated recently. Please confirm current oven setting.',
@@ -120,43 +130,59 @@ export const RECOMMENDATION_MESSAGES = {
 export const DISCLAIMER = 'Ovens and roasts vary. Use this as a guide and rely on thermometer readings. This app does not provide food safety guarantees.';
 
 /**
- * Common meat presets
+ * Common meat presets.
+ *
+ * `servingTempF` is the PLATE temperature - the doneness the cook is after. The
+ * app subtracts its own carryover estimate to get the pull temperature, so the
+ * presets no longer carry a note telling the cook to subtract it themselves:
+ * Prime Rib and Leg of Lamb both said "Remove 5°F below target for carryover",
+ * which after this change would be counted twice.
+ *
+ * `restMinutes` is per cut because it genuinely is: a shoulder wants half an
+ * hour on the board, a tenderloin fifteen minutes.
  */
 export const MEAT_PRESETS = [
   {
     type: 'Prime Rib',
     cuts: ['Bone-in', 'Boneless'],
-    defaultTargetF: 125,
+    servingTempF: 125,
     suggestedOvenF: 200,
-    notes: 'Remove 5°F below target for carryover'
+    restMinutes: 20,
+    notes: 'Medium-rare on the plate; the app pulls it early for carryover'
   },
   {
     type: 'Beef Tenderloin',
     cuts: ['Whole', 'Center-cut'],
-    defaultTargetF: 125,
+    servingTempF: 125,
     suggestedOvenF: 225,
+    restMinutes: 15,
     notes: 'Cooks faster due to smaller diameter'
   },
   {
     type: 'Pork Loin',
     cuts: ['Bone-in', 'Boneless'],
-    defaultTargetF: 140,
+    servingTempF: 145,
     suggestedOvenF: 225,
-    notes: 'USDA recommends 145°F minimum'
+    restMinutes: 15,
+    // 140 was below the figure the note itself cited. The serving temperature is
+    // the one that has to clear the guideline, so it is the one set to 145.
+    notes: 'USDA recommends 145°F on the plate'
   },
   {
     type: 'Pork Shoulder',
     cuts: ['Bone-in', 'Boneless'],
-    defaultTargetF: 195,
+    servingTempF: 195,
     suggestedOvenF: 225,
+    restMinutes: 30,
     notes: 'For pulled pork, aim for 195-205°F'
   },
   {
     type: 'Leg of Lamb',
     cuts: ['Bone-in', 'Boneless'],
-    defaultTargetF: 130,
+    servingTempF: 130,
     suggestedOvenF: 225,
-    notes: 'Remove 5°F below target for carryover'
+    restMinutes: 20,
+    notes: 'Medium-rare on the plate; the app pulls it early for carryover'
   }
 ];
 

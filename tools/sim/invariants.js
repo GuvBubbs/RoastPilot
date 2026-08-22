@@ -37,6 +37,12 @@ const dialMoves = (outcome) =>
 export function checkConvergence(outcome) {
   const out = [];
   const hit = outcome.rows.find((r) => r.trueCoreF >= outcome.targetF);
+  // The instant the meat has to be OUT of the oven: the serve time less the
+  // rest. Identical to the serve time when no rest is declared.
+  const deadlineISO = outcome.pullDeadlineISO ?? outcome.serveISO;
+  const restNote = outcome.restMinutes
+    ? ` (serve less ${outcome.restMinutes} min rest)`
+    : '';
 
   if (!hit) {
     const shortfall = outcome.targetF - outcome.finalCoreF;
@@ -57,7 +63,7 @@ export function checkConvergence(outcome) {
     return out;
   }
 
-  const variance = Math.round(minutesBetween(outcome.serveISO, hit.atISO));
+  const variance = Math.round(minutesBetween(deadlineISO, hit.atISO));
   const label = variance >= 0 ? `${variance} min late` : `${-variance} min early`;
 
   // Severity comes from the baseline policy, not from the tolerance alone.
@@ -73,8 +79,8 @@ export function checkConvergence(outcome) {
     : judgeMetric(outcome.scenario, 'convergenceAbs', Math.abs(variance));
 
   out.push(finding('convergence', verdict.severity,
-    `target reached at ${hit.atMin} min, ${label} against the serve time ` +
-    `(tolerance ${CONVERGENCE_TOLERANCE_MIN} min) - ${verdict.message}`,
+    `pull temperature reached at ${hit.atMin} min, ${label} against the pull ` +
+    `deadline${restNote} (tolerance ${CONVERGENCE_TOLERANCE_MIN} min) - ${verdict.message}`,
     { varianceMinutes: variance, atMin: hit.atMin }));
   return out;
 }

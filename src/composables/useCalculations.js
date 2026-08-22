@@ -2,7 +2,9 @@ import { computed } from 'vue';
 import { useSession } from './useSession.js';
 import { computeSessionCalculations } from '../services/calculationService.js';
 import { toDisplayUnit, convertRate, formatRate } from '../utils/temperatureUtils.js';
-import { formatDuration, formatTime, minutesBetween } from '../utils/timeUtils.js';
+import {
+  formatDuration, formatTime, formatTimeCompact, minutesBetween, addMinutes
+} from '../utils/timeUtils.js';
 import { useRefreshTimer } from './useRefreshTimer.js';
 
 export function useCalculations() {
@@ -24,8 +26,11 @@ export function useCalculations() {
       readings: readings.value,
       // The rate fit must not span a pause; see readingsForRateFit.
       ovenEvents: ovenEvents.value,
-      targetTemp: config.value.targetTemp,
+      pullTempF: config.value.pullTempF,
       desiredServeTime: config.value.desiredServeTime,
+      // The projection is judged against the latest PULL time, not the serve
+      // time: the meat has to be out of the oven early enough to rest.
+      restMinutes: config.value.restMinutes ?? 0,
       settings: settings.value,
       // Pinned to the anchor, not the live clock: this computed deliberately has
       // no tick dependency, so the countdown is derived separately below. Left
@@ -121,13 +126,12 @@ export function useCalculations() {
    * Formatted predicted completion time
    */
   const predictedTargetTimeFormatted = computed(() => {
-    // formatTime qualifies with the date when the target is not today, and
-    // "today" is read from the clock - so this has to re-run on the tick or the
-    // qualifier is decided once, at whatever time the page happened to load.
+    // Compact, because this lands in a 96px stat cell. The day marker has to
+    // re-run on the tick or "today" is decided once, at page load.
     tick.value;
     const time = predictedTargetTime.value;
     if (!time) return '--';
-    return formatTime(time);
+    return formatTimeCompact(time);
   });
   
   /**
@@ -213,11 +217,55 @@ export function useCalculations() {
   });
   
   /**
-   * Target temperature in display units
+   * Pull temperature in display units - where the cook stops.
    */
-  const targetTempDisplay = computed(() => {
+  const pullTempDisplay = computed(() => {
     if (!config.value) return null;
-    return toDisplayUnit(config.value.targetTemp, displayUnits.value);
+    return toDisplayUnit(config.value.pullTempF, displayUnits.value);
+  });
+  
+  /**
+   * Serving temperature in display units - what lands on the plate.
+   */
+  const servingTempDisplay = computed(() => {
+    if (!config.value || !Number.isFinite(config.value.servingTempF)) return null;
+    return toDisplayUnit(config.value.servingTempF, displayUnits.value);
+  });
+  
+  /**
+   * Carryover as a DELTA in display units - no 32° offset. Converting it as an
+   * absolute temperature would turn +4 °F into -15.6 °C.
+   */
+  const carryoverDisplay = computed(() => {
+    const raw = config.value?.carryoverF;
+    if (!Number.isFinite(raw)) return null;
+    return displayUnits.value === 'C'
+      ? Math.round((raw * 5 / 9) * 10) / 10
+      : raw;
+  });
+  
+  /** Minutes the meat rests before carving. */
+  const restMinutes = computed(() => config.value?.restMinutes ?? 0);
+  
+  /**
+   * When dinner is actually going to be on the table: the projected pull, plus
+   * the rest.
+   *
+   * The third stat cell used to show the serve time the cook had already chosen,
+   * which tells them nothing they did not type in themselves. This is the
+   * prediction.
+   */
+  const predictedServeTime = computed(() => {
+    const pull = predictedTargetTime.value;
+    if (!pull) return null;
+    return addMinutes(pull, restMinutes.value);
+  });
+  
+  const predictedServeTimeFormatted = computed(() => {
+    tick.value;
+    const time = predictedServeTime.value;
+    if (!time) return '--';
+    return formatTimeCompact(time);
   });
   
   /**
@@ -228,7 +276,7 @@ export function useCalculations() {
     
     const startTemp = config.value.startingTemp ?? 
       (readings.value.length > 0 ? readings.value[0].temp : currentTemp.value);
-    const target = config.value.targetTemp;
+    const target = config.value.pullTempF;
     
     if (target <= startTemp) return 100;
     
@@ -241,7 +289,7 @@ export function useCalculations() {
    */
   const targetReached = computed(() => {
     if (currentTemp.value === null || !config.value) return false;
-    return currentTemp.value >= config.value.targetTemp;
+    return currentTemp.value >= config.value.pullTempF;
   });
   
   return {
@@ -263,13 +311,20 @@ export function useCalculations() {
     targetReached,
     canPredict,
     
+    // The cook plan: pull -> rest -> serve
+    restMinutes,
+    predictedServeTime,
+    
     // Display values
     currentRateFormatted,
     timeRemainingFormatted,
     predictedTargetTimeFormatted,
+    predictedServeTimeFormatted,
     scheduleVarianceFormatted,
     currentTempDisplay,
-    targetTempDisplay
+    pullTempDisplay,
+    servingTempDisplay,
+    carryoverDisplay
   };
 }
 

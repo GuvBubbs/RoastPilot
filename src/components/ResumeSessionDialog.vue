@@ -16,9 +16,19 @@
         </div>
 
         <div class="flex items-baseline justify-between gap-3 py-2.5">
-          <dt class="text-ink-dim shrink-0">Target</dt>
+          <dt class="text-ink-dim shrink-0">Pull at</dt>
           <dd class="num min-w-0 truncate text-right text-ink">
-            {{ formatTemperature(sessionInfo.targetTemp, sessionInfo.units) }}
+            {{ formatTemperature(sessionInfo.pullTempF, sessionInfo.units) }}
+          </dd>
+        </div>
+
+        <div
+          v-if="sessionInfo.servingTempF !== null && sessionInfo.servingTempF !== undefined"
+          class="flex items-baseline justify-between gap-3 py-2.5"
+        >
+          <dt class="text-ink-dim shrink-0">Serve at</dt>
+          <dd class="num min-w-0 truncate text-right text-ink">
+            {{ formatTemperature(sessionInfo.servingTempF, sessionInfo.units) }}
           </dd>
         </div>
 
@@ -71,7 +81,7 @@ defineProps({
     validator: (info) => {
       return info && 
         typeof info.createdAt === 'string' &&
-        typeof info.targetTemp === 'number' &&
+        typeof info.pullTempF === 'number' &&
         typeof info.readingCount === 'number';
     }
   }

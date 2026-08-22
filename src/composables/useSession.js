@@ -243,11 +243,19 @@ export function useSession() {
    * @param {Partial<SessionConfig>} configOverrides
    */
   function startSession(configOverrides) {
-    // Seed the unit preference from the last cook unless this one names its own.
+    // Seed the unit preference from the last cook unless this one names its own,
+    // and the rest from the standing setting unless this cook names one - a
+    // per-preset rest arrives through configOverrides and wins.
+    const seeded = {
+      ...(Number.isFinite(persistedSettings?.defaultRestMinutes)
+        ? { restMinutes: persistedSettings.defaultRestMinutes }
+        : {}),
+      ...configOverrides
+    };
     session.value = createSession(
-      configOverrides.units
-        ? configOverrides
-        : { ...configOverrides, units: persistedUnits.value ?? SESSION_DEFAULTS.UNITS }
+      seeded.units
+        ? seeded
+        : { ...seeded, units: persistedUnits.value ?? SESSION_DEFAULTS.UNITS }
     );
     
     // If initial oven temp was provided, create the first oven event

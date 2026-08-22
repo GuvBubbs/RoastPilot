@@ -79,7 +79,15 @@ export async function runScenario(scenario, deps) {
   // it wrong, not the app - it showed up as a -13.9 C opening reading.
   const openingProbeF = Math.round(model.probeF() * 10) / 10;
   session.startSession({
-    targetTemp: scenario.config.targetTemp,
+    // pullTempF, not servingTempF: every scenario's `targetTemp` names the
+    // temperature the cook stops at, which is what the deck measures against.
+    // Passing it as a plate temperature would silently move every scenario's
+    // finish line by the carryover.
+    pullTempF: scenario.config.targetTemp,
+    // Rest defaults to 0 for the existing deck so the recorded convergence
+    // numbers still mean the same thing. The rest-and-carryover scenario sets
+    // its own.
+    restMinutes: scenario.config.restMinutes ?? 0,
     units,
     startingTemp: openingProbeF,
     desiredServeTime: new Date(startMs + scenario.config.serveAfterMin * 60_000).toISOString(),
@@ -393,6 +401,19 @@ export async function runScenario(scenario, deps) {
     targetF,
     serveAfterMin: scenario.config.serveAfterMin,
     serveISO: new Date(startMs + scenario.config.serveAfterMin * 60_000).toISOString(),
+    /**
+     * Minutes of rest, and the deadline it implies.
+     *
+     * Convergence is measured against the PULL deadline, not the serve time: the
+     * app steers the roast out of the oven early enough to rest, so a cook that
+     * lands on the serve time with 30 minutes of rest declared is 30 minutes
+     * LATE, not on time. With no rest the two are the same instant, which is why
+     * the existing deck's recorded numbers do not move.
+     */
+    restMinutes: scenario.config.restMinutes ?? 0,
+    pullDeadlineISO: new Date(
+      startMs + (scenario.config.serveAfterMin - (scenario.config.restMinutes ?? 0)) * 60_000
+    ).toISOString(),
     cookStartISO: COOK_START_ISO,
     finalCoreF: round1(model.coreF),
     probeBiasF: round1(model.probeBiasF),

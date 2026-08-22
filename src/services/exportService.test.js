@@ -100,7 +100,10 @@ function makeSession(overrides = {}) {
   return {
     config: {
       units: 'F',
-      targetTemp: 130,
+      pullTempF: 125,
+      servingTempF: 130,
+      carryoverF: 5,
+      restMinutes: 20,
       initialOvenTemp: 225,
       createdAt: '2026-08-22T14:31:00.000Z',
       ...overrides.config

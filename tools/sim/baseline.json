@@ -83,6 +83,14 @@
       "noAdviceMinutes": 55,
       "reversals": 1
     },
+    "09-rest-and-carryover": {
+      "convergenceAbs": 5,
+      "overshootF": 23.3,
+      "blindMinutes": 40,
+      "blockedMinutes": 45,
+      "noAdviceMinutes": 45,
+      "reversals": 2
+    },
     "08-celsius-eager-dial": {
       "convergenceAbs": 30,
       "overshootF": 4.8,

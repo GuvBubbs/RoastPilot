@@ -9,13 +9,30 @@ import { celsiusToFahrenheit } from './temperatureUtils.js';
 export function validateSessionConfig(config, units) {
   const errors = {};
   
-  // Target temp is required
-  if (config.targetTemp === undefined || config.targetTemp === null) {
-    errors.targetTemp = 'Target temperature is required';
+  // The plate temperature is the one the cook chooses, so it is the one that has
+  // to be present and in range. pullTempF is derived from it and is checked
+  // separately below only for internal consistency.
+  if (config.servingTempF === undefined || config.servingTempF === null) {
+    errors.servingTempF = 'Serving temperature is required';
   } else {
-    const targetF = units === 'C' ? celsiusToFahrenheit(config.targetTemp) : config.targetTemp;
-    if (targetF < 32 || targetF > 212) {
-      errors.targetTemp = 'Target must be between 32°F and 212°F (0°C and 100°C)';
+    const servingF = units === 'C' ? celsiusToFahrenheit(config.servingTempF) : config.servingTempF;
+    if (servingF < 32 || servingF > 212) {
+      errors.servingTempF = 'Serving temperature must be between 32°F and 212°F (0°C and 100°C)';
+    }
+  }
+  
+  // The pull has to be at or below the plate temperature: carryover only ever
+  // adds heat. A pull above it would mean the app aiming past where the cook
+  // wants to end up.
+  if (config.pullTempF !== undefined && config.pullTempF !== null &&
+      config.servingTempF !== undefined && config.servingTempF !== null &&
+      config.pullTempF > config.servingTempF) {
+    errors.pullTempF = 'Pull temperature cannot be above the serving temperature';
+  }
+  
+  if (config.restMinutes !== undefined && config.restMinutes !== null) {
+    if (!Number.isFinite(config.restMinutes) || config.restMinutes < 0 || config.restMinutes > 240) {
+      errors.restMinutes = 'Rest must be between 0 and 240 minutes';
     }
   }
   
@@ -57,6 +74,15 @@ export function validateSessionConfig(config, units) {
     errors
   };
 }
+
+/*
+ * There used to be a `validateSettings` here. It had no call sites, and every
+ * bound it checked is already enforced by the `min`/`max` props on the settings
+ * steppers - which is the enforcement the user actually experiences, since the
+ * only way to change a setting is through one of them. Two statements of the
+ * same bound, one of them never executed, is one more place for them to
+ * disagree.
+ */
 
 /**
  * Validate a temperature reading input
@@ -130,63 +156,6 @@ export function validateOvenTemp(temp, units) {
   return { valid: true, error: null };
 }
 
-/**
- * Validate settings values
- * @param {Partial<AppSettings>} settings
- * @returns {{valid: boolean, errors: Object<string, string>}}
- */
-export function validateSettings(settings) {
-  const errors = {};
-  
-  if (settings.smoothingWindowReadings !== undefined) {
-    if (settings.smoothingWindowReadings < 2 || settings.smoothingWindowReadings > 10) {
-      errors.smoothingWindowReadings = 'Must be between 2 and 10';
-    }
-  }
-  
-  if (settings.smoothingWindowMinutes !== undefined) {
-    if (settings.smoothingWindowMinutes < 5 || settings.smoothingWindowMinutes > 120) {
-      errors.smoothingWindowMinutes = 'Must be between 5 and 120 minutes';
-    }
-  }
-  
-  if (settings.onTrackThresholdMinutes !== undefined) {
-    if (settings.onTrackThresholdMinutes < 1 || settings.onTrackThresholdMinutes > 60) {
-      errors.onTrackThresholdMinutes = 'Must be between 1 and 60 minutes';
-    }
-  }
-  
-  if (settings.recommendationStepF !== undefined) {
-    if (settings.recommendationStepF < 5 || settings.recommendationStepF > 50) {
-      errors.recommendationStepF = 'Must be between 5 and 50 degrees';
-    }
-  }
-  
-  if (settings.ovenTempMinF !== undefined && settings.ovenTempMaxF !== undefined) {
-    if (settings.ovenTempMinF >= settings.ovenTempMaxF) {
-      errors.ovenTempMinF = 'Minimum must be less than maximum';
-    }
-  }
-  
-  if (settings.ovenTempPracticalMinF !== undefined) {
-    if (settings.ovenTempPracticalMinF < 150 || settings.ovenTempPracticalMinF > 350) {
-      errors.ovenTempPracticalMinF = 'Must be between 150°F and 350°F';
-    }
-    
-    if (settings.ovenTempMinF !== undefined && settings.ovenTempPracticalMinF < settings.ovenTempMinF) {
-      errors.ovenTempPracticalMinF = 'Practical minimum must be at or above food safety minimum';
-    }
-    
-    if (settings.ovenTempMaxF !== undefined && settings.ovenTempPracticalMinF >= settings.ovenTempMaxF) {
-      errors.ovenTempPracticalMinF = 'Practical minimum must be less than maximum';
-    }
-  }
-  
-  return {
-    valid: Object.keys(errors).length === 0,
-    errors
-  };
-}
 
 /**
  * Sanitize string input
@@ -198,8 +167,3 @@ export function sanitizeString(input, maxLength = 500) {
   if (!input) return '';
   return String(input).trim().slice(0, maxLength);
 }
-
-
-
-
-

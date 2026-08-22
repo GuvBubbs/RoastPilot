@@ -326,11 +326,11 @@ describe('the rate fit does not span a pause', () => {
     const wide = { smoothingWindowReadings: 5, onTrackThresholdMinutes: 10 };
 
     const straddling = computeSessionCalculations({
-      readings, targetTemp: 125, desiredServeTime: null, settings: wide,
+      readings, pullTempF: 125, desiredServeTime: null, settings: wide,
       now: '2024-01-01T14:10:00.000Z'
     });
     const segmented = computeSessionCalculations({
-      readings, ovenEvents, targetTemp: 125, desiredServeTime: null, settings: wide,
+      readings, ovenEvents, pullTempF: 125, desiredServeTime: null, settings: wide,
       now: '2024-01-01T14:10:00.000Z'
     });
 
@@ -379,7 +379,7 @@ describe('computeLatestPullTime', () => {
     ];
     const settings = { smoothingWindowReadings: 3, onTrackThresholdMinutes: 10 };
     const common = {
-      readings, targetTemp: 125,
+      readings, pullTempF: 125,
       // Rate is 20 F/hr, 5 F to go, so the pull lands at 13:15.
       desiredServeTime: '2024-01-01T13:15:00.000Z',
       settings, now: '2024-01-01T13:00:00.000Z'
@@ -580,7 +580,7 @@ describe('computeSessionCalculations', () => {
   it('handles empty readings gracefully', () => {
     const result = computeSessionCalculations({
       readings: [],
-      targetTemp: 125,
+      pullTempF: 125,
       desiredServeTime: null,
       settings: defaultSettings
     });
@@ -603,7 +603,7 @@ describe('computeSessionCalculations', () => {
     
     const result = computeSessionCalculations({
       readings,
-      targetTemp: 125,
+      pullTempF: 125,
       desiredServeTime: null,
       settings: defaultSettings
     });
@@ -625,7 +625,7 @@ describe('computeSessionCalculations', () => {
     
     const result = computeSessionCalculations({
       readings,
-      targetTemp: 125,
+      pullTempF: 125,
       desiredServeTime: '2024-01-01T16:00:00Z', // 1 hour after last reading
       settings: defaultSettings
     });
@@ -652,7 +652,7 @@ describe('computeSessionCalculations', () => {
     
     const result = computeSessionCalculations({
       readings,
-      targetTemp: 125,
+      pullTempF: 125,
       desiredServeTime: '2024-06-01T14:30:00.000Z', // now + 150 minutes
       settings: defaultSettings
     });
@@ -674,7 +674,7 @@ describe('computeSessionCalculations', () => {
     
     const result = computeSessionCalculations({
       readings,
-      targetTemp: 125,
+      pullTempF: 125,
       desiredServeTime: null,
       settings: defaultSettings,
       now: '2024-06-01T12:45:00.000Z'
@@ -695,7 +695,7 @@ describe('computeSessionCalculations', () => {
     
     const result = computeSessionCalculations({
       readings,
-      targetTemp: 125,
+      pullTempF: 125,
       desiredServeTime: null,
       settings: { ...defaultSettings, smoothingWindowReadings: 2 },
       now: '2024-01-01T16:00:00Z'
@@ -721,7 +721,7 @@ describe('computeSessionCalculations', () => {
     
     const result = computeSessionCalculations({
       readings,
-      targetTemp: 125,
+      pullTempF: 125,
       desiredServeTime: null,
       settings: customSettings
     });

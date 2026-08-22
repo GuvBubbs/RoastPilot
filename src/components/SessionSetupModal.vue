@@ -10,10 +10,15 @@
            They are first and need no unfolding. Everything below them is a
            refinement of a working default. -->
       <div class="space-y-5">
-        <!-- Target ------------------------------------------------------- -->
+        <!-- On the plate --------------------------------------------------
+             The cook states the doneness they want to EAT. The temperature to
+             pull at is derived from it, because that is a fact about the roast
+             rather than a decision the cook should have to make in their head -
+             two of the presets used to carry a note telling them to do exactly
+             that arithmetic. -->
         <section>
           <div class="flex items-center justify-between gap-3">
-            <span class="section-label">Target</span>
+            <span class="section-label">On the plate</span>
             <UnitToggle
               :model-value="form.units.value"
               @update:model-value="handleUnitChange"
@@ -22,14 +27,14 @@
 
           <div class="mt-3">
             <NumberStepper
-              v-model="form.targetTemp.value"
-              label="Internal temperature"
+              v-model="form.servingTemp.value"
+              label="Internal temperature when served"
               :suffix="'°' + form.units.value"
               :step="1"
               :min="tempRanges.min"
               :max="tempRanges.max"
-              :error="form.targetTemp.touched ? form.targetTemp.error : ''"
-              @blur="form.targetTemp.touched = true"
+              :error="form.servingTemp.touched ? form.servingTemp.error : ''"
+              @blur="form.servingTemp.touched = true"
             />
           </div>
 
@@ -45,6 +50,39 @@
               <span class="truncate">{{ preset.name }}</span>
               <span class="num text-ink-mute">{{ formatTemperature(preset.targetF, form.units.value) }}</span>
             </button>
+          </div>
+
+          <!-- The derived half, stated rather than hidden: this is the number
+               the app will actually steer to, and a cook who disagrees with the
+               carryover estimate needs to see it to know that. -->
+          <p class="mt-3 text-[13px] text-ink-dim">
+            Comes out of the oven at
+            <span class="num text-ink">{{ derivedPullText }}</span>,
+            then climbs about
+            <span class="num text-ink">{{ carryoverText }}</span>
+            while it rests.
+          </p>
+        </section>
+
+        <!-- Rest ----------------------------------------------------------
+             Subtracted from the serve time to get the moment the meat has to be
+             out of the oven. Nothing subtracted it before, which is why dinner
+             ran 20-45 minutes late as a matter of course. -->
+        <section class="rule-t pt-5">
+          <span class="section-label">Rest</span>
+          <p class="mt-1 text-[13px] text-ink-mute">
+            Time on the board before carving. The app aims to have the meat out
+            of the oven this far ahead of your serve time.
+          </p>
+          <div class="mt-3">
+            <NumberStepper
+              v-model="form.restMinutes.value"
+              label="Minutes resting"
+              suffix="min"
+              :step="5"
+              :min="0"
+              :max="90"
+            />
           </div>
         </section>
 
@@ -268,6 +306,8 @@ import { sanitizeString } from '../utils/validationUtils.js';
 import { toStorageUnit, formatTemperature, fahrenheitToCelsius, celsiusToFahrenheit } from '../utils/temperatureUtils.js';
 import { addMinutes } from '../utils/timeUtils.js';
 import { MEAT_PRESETS, SESSION_DEFAULTS } from '../constants/defaults.js';
+import { estimateCarryoverF, pullTempFor } from '../services/carryoverService.js';
+import { validateSessionConfig } from '../utils/validationUtils.js';
 
 const props = defineProps({
   modelValue: {
@@ -287,12 +327,13 @@ const emit = defineEmits(['update:modelValue', 'submit', 'cancel']);
 const { preferredUnits } = useSession();
 
 // Defaults are stored in Fahrenheit; the form works in display units.
-const getInitialTargetTemp = (units) => {
+const getInitialServingTemp = (units) => {
   if (units === 'C') {
-    // Target temp with 1 decimal place for Celsius
-    return Math.round(fahrenheitToCelsius(SESSION_DEFAULTS.TARGET_TEMP_F) * 10) / 10;
+    // 1 decimal place for Celsius: 1 °F is finer than 1 °C, and a doneness
+    // target rounded to the whole degree Celsius moves by nearly two °F.
+    return Math.round(fahrenheitToCelsius(SESSION_DEFAULTS.SERVING_TEMP_F) * 10) / 10;
   }
-  return SESSION_DEFAULTS.TARGET_TEMP_F;
+  return SESSION_DEFAULTS.SERVING_TEMP_F;
 };
 
 const getInitialOvenTemp = (units) => {
@@ -313,7 +354,8 @@ const startingUnits = preferredUnits.value;
 
 // Form state
 const form = reactive({
-  targetTemp: { value: getInitialTargetTemp(startingUnits), error: '', touched: false },
+  servingTemp: { value: getInitialServingTemp(startingUnits), error: '', touched: false },
+  restMinutes: { value: SESSION_DEFAULTS.REST_MINUTES, error: '', touched: false },
   units: { value: startingUnits, error: '', touched: false },
   startingTemp: { value: null, error: '', touched: false },
   desiredServeTime: { value: '', error: '', touched: false },
@@ -333,6 +375,44 @@ const timeRemaining = reactive({
 const showMeatDetails = ref(false);
 const userHasEditedTarget = ref(false);
 const userHasEditedOven = ref(false);
+const userHasEditedRest = ref(false);
+
+/**
+ * Carryover for the oven the cook has chosen, in °F.
+ *
+ * Computed live *while setting up*, which is the one moment it is safe to: no
+ * cook is running, so there is no finish line to move and no loop from the
+ * recommendation engine back into its own target. Once the session exists the
+ * value is frozen on it - see carryoverService.js.
+ */
+const carryoverF = computed(() => {
+  const ovenF = form.initialOvenTemp.value === null
+    ? SESSION_DEFAULTS.INITIAL_OVEN_TEMP_F
+    : toStorageUnit(form.initialOvenTemp.value, form.units.value);
+  return estimateCarryoverF(ovenF);
+});
+
+/** The serving temperature in °F, whatever unit the form is in. */
+const servingTempF = computed(() =>
+  form.servingTemp.value === null
+    ? null
+    : toStorageUnit(form.servingTemp.value, form.units.value)
+);
+
+const pullTempF = computed(() =>
+  servingTempF.value === null ? null : pullTempFor(servingTempF.value, carryoverF.value)
+);
+
+const derivedPullText = computed(() =>
+  pullTempF.value === null ? '--' : formatTemperature(pullTempF.value, form.units.value)
+);
+
+/** A DELTA, so no 32° offset: +4 °F is +2.2 °C, not -15.6 °C. */
+const carryoverText = computed(() => {
+  const raw = carryoverF.value;
+  const value = form.units.value === 'C' ? Math.round((raw * 5 / 9) * 10) / 10 : raw;
+  return `+${value}°${form.units.value}`;
+});
 
 // Quick select targets
 const quickSelectTargets = [
@@ -365,9 +445,9 @@ const selectedMeatPreset = computed(() => {
 
 // Form validation
 const isFormValid = computed(() => {
-  return form.targetTemp.value !== null && 
-         form.targetTemp.value >= tempRanges.value.min && 
-         form.targetTemp.value <= tempRanges.value.max &&
+  return form.servingTemp.value !== null && 
+         form.servingTemp.value >= tempRanges.value.min && 
+         form.servingTemp.value <= tempRanges.value.max &&
          form.initialOvenTemp.value !== null &&
          form.initialOvenTemp.value >= ovenTempRanges.value.min &&
          form.initialOvenTemp.value <= ovenTempRanges.value.max;
@@ -381,7 +461,7 @@ function quickTargetValue(preset) {
 }
 
 function isQuickTarget(preset) {
-  return form.targetTemp.value === quickTargetValue(preset);
+  return form.servingTemp.value === quickTargetValue(preset);
 }
 
 // Handle unit change - convert displayed values
@@ -395,12 +475,12 @@ function handleUnitChange(newUnit) {
   
   if (oldUnit === newUnit) return;
   
-  // Convert target temp with 1 decimal for Celsius, whole number for Fahrenheit
-  if (form.targetTemp.value !== null) {
+  // Convert serving temp with 1 decimal for Celsius, whole number for Fahrenheit
+  if (form.servingTemp.value !== null) {
     if (newUnit === 'C') {
-      form.targetTemp.value = Math.round(fahrenheitToCelsius(form.targetTemp.value) * 10) / 10;
+      form.servingTemp.value = Math.round(fahrenheitToCelsius(form.servingTemp.value) * 10) / 10;
     } else {
-      form.targetTemp.value = Math.round(celsiusToFahrenheit(form.targetTemp.value));
+      form.servingTemp.value = Math.round(celsiusToFahrenheit(form.servingTemp.value));
     }
   }
   
@@ -428,7 +508,7 @@ function handleUnitChange(newUnit) {
 
 // Select quick target
 function selectQuickTarget(preset) {
-  form.targetTemp.value = quickTargetValue(preset);
+  form.servingTemp.value = quickTargetValue(preset);
   userHasEditedTarget.value = true;
 }
 
@@ -437,14 +517,19 @@ function handleMeatTypeChange() {
   const preset = selectedMeatPreset.value;
   if (!preset) return;
   
-  // Auto-populate target and oven temps if not manually edited
+  // Auto-populate serving temp, oven temp and rest if not manually edited
   if (!userHasEditedTarget.value) {
     if (form.units.value === 'F') {
-      form.targetTemp.value = preset.defaultTargetF;
+      form.servingTemp.value = preset.servingTempF;
     } else {
-      // Use precise conversion with 1 decimal place for target temp
-      form.targetTemp.value = Math.round(fahrenheitToCelsius(preset.defaultTargetF) * 10) / 10;
+      form.servingTemp.value = Math.round(fahrenheitToCelsius(preset.servingTempF) * 10) / 10;
     }
+  }
+  
+  // A shoulder rests 30 minutes and a tenderloin 15. Per-preset because it
+  // genuinely varies by cut, not as a nicety.
+  if (!userHasEditedRest.value && Number.isFinite(preset.restMinutes)) {
+    form.restMinutes.value = preset.restMinutes;
   }
   
   if (!userHasEditedOven.value) {
@@ -461,9 +546,15 @@ function handleMeatTypeChange() {
 }
 
 // Track manual edits
-watch(() => form.targetTemp.value, () => {
-  if (form.targetTemp.touched) {
+watch(() => form.servingTemp.value, () => {
+  if (form.servingTemp.touched) {
     userHasEditedTarget.value = true;
+  }
+});
+
+watch(() => form.restMinutes.value, () => {
+  if (form.restMinutes.touched) {
+    userHasEditedRest.value = true;
   }
 });
 
@@ -482,7 +573,8 @@ function resetForm() {
   const units = preferredUnits.value;
 
   form.units.value = units;
-  form.targetTemp.value = getInitialTargetTemp(units);
+  form.servingTemp.value = getInitialServingTemp(units);
+  form.restMinutes.value = SESSION_DEFAULTS.REST_MINUTES;
   form.initialOvenTemp.value = getInitialOvenTemp(units);
   form.startingTemp.value = null;
   form.timeInputMode.value = 'serveTime';
@@ -502,6 +594,7 @@ function resetForm() {
   showMeatDetails.value = false;
   userHasEditedTarget.value = false;
   userHasEditedOven.value = false;
+  userHasEditedRest.value = false;
 
   const fourHoursFromNow = new Date();
   fourHoursFromNow.setHours(fourHoursFromNow.getHours() + 4);
@@ -531,7 +624,6 @@ function handleSubmit() {
   }
   
   // Convert temps to Fahrenheit for storage
-  const targetTempF = toStorageUnit(form.targetTemp.value, form.units.value);
   const ovenTempF = toStorageUnit(form.initialOvenTemp.value, form.units.value);
   const startingTempF = form.startingTemp.value !== null 
     ? toStorageUnit(form.startingTemp.value, form.units.value) 
@@ -548,9 +640,15 @@ function handleSubmit() {
     }
   }
   
-  // Build config
+  // Build config. servingTempF is what the cook chose; pullTempF and carryoverF
+  // are derived by createSession from it and the oven temperature, so they are
+  // passed explicitly here rather than recomputed there from a stale oven value.
   const config = {
-    targetTemp: targetTempF,
+    servingTempF: servingTempF.value,
+    pullTempF: pullTempF.value,
+    carryoverF: carryoverF.value,
+    carryoverIsUserSet: false,
+    restMinutes: form.restMinutes.value ?? 0,
     units: form.units.value,
     startingTemp: startingTempF,
     desiredServeTime: desiredServeTime,
@@ -561,6 +659,30 @@ function handleSubmit() {
     notes: sanitizeString(form.notes.value) || null
   };
   
+  /**
+   * The last gate before a session exists.
+   *
+   * validateSessionConfig had ZERO call sites, so none of its rules had ever
+   * run - including the weight bound, and now the pull-below-plate and rest
+   * bounds this wave added. A validator nothing calls is a validator whose rules
+   * are wrong and nobody knows.
+   *
+   * Called with °F values, so `units: 'F'` regardless of what the form is in:
+   * everything in `config` has already been through toStorageUnit.
+   */
+  const validation = validateSessionConfig(config, 'F');
+  if (!validation.valid) {
+    Object.entries(validation.errors).forEach(([field, message]) => {
+      // Surface it where the field lives if the form has that field; the derived
+      // temperatures have no control of their own, so they land on the one the
+      // cook can actually change.
+      const target = form[field] ?? form.servingTemp;
+      target.error = message;
+      target.touched = true;
+    });
+    return;
+  }
+
   emit('submit', config);
   emit('update:modelValue', false);
 }

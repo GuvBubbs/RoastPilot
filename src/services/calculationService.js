@@ -372,7 +372,9 @@ export function computeLatestPullTime(desiredServeTime, restMinutes = 0) {
  * @param {InternalReading[]} params.readings
  * @param {OvenTempEvent[]} [params.ovenEvents] - Used to keep the rate fit
  *   inside one oven-state segment; see readingsForRateFit
- * @param {number} params.targetTemp
+ * @param {number} params.pullTempF - Where the cook stops. NOT the serving
+ *   temperature: the projection aims at the pull, and carryover carries the meat
+ *   from there to the plate. See carryoverService.js.
  * @param {string|null} params.desiredServeTime
  * @param {AppSettings} params.settings
  * @param {number} [params.restMinutes] - Rest the meat needs before it is
@@ -384,7 +386,7 @@ export function computeLatestPullTime(desiredServeTime, restMinutes = 0) {
 export function computeSessionCalculations({
   readings,
   ovenEvents = [],
-  targetTemp,
+  pullTempF,
   desiredServeTime,
   settings,
   restMinutes = 0,
@@ -428,7 +430,7 @@ export function computeSessionCalculations({
   // Predict time to target, anchored to when the last reading was taken
   const prediction = predictTimeToTarget(
     currentTemp,
-    targetTemp,
+    pullTempF,
     rateResult.rate,
     lastReading.timestamp,
     now

@@ -15,7 +15,7 @@
           </span>
         </div>
         <p class="mt-2 text-[13px] text-ink-dim truncate">
-          internal · target {{ targetTempDisplay }}°{{ displayUnits }}
+          internal · {{ doneLine }}
           <span v-if="lastReadingAgo" class="text-ink-mute">· {{ lastReadingAgo }}</span>
         </p>
       </template>
@@ -27,7 +27,7 @@
           No readings yet
         </p>
         <p class="mt-2 text-[13px] text-ink-mute truncate">
-          target {{ targetTempDisplay }}°{{ displayUnits }} · add your first reading
+          {{ doneLine }} · add your first reading
         </p>
       </template>
     </div>
@@ -57,7 +57,11 @@
     <div class="band rule-t grid grid-cols-3 divide-x divide-rule">
       <div class="stat pr-3">
         <div class="flex items-center gap-1 min-w-0">
-          <span class="stat-label">ETA</span>
+          <!-- "Pull", not "ETA". The projection aims at the temperature the meat
+               comes OUT at, and after the carryover split that is a different
+               number from the one on the plate. Pull / Rest / Serve is the same
+               vocabulary the chart and the cook plan use. -->
+          <span class="stat-label">Pull</span>
           <!-- Confidence is interpretation *about* the ETA, so it rides with
                it rather than sitting centred underneath the whole band. -->
           <template v-if="canPredict">
@@ -101,12 +105,20 @@
         <div class="stat-value">{{ currentRateFormatted }}</div>
       </div>
 
-      <!-- No serve time is the common case, so the cell carries the countdown
-           rather than leaving a hole in the row. -->
+      <!-- The third cell, which has three jobs depending on the plan:
+             no serve time      the countdown, rather than a hole in the row
+             rest declared      the PREDICTED serve - pull plus rest. Showing the
+                                planned time the cook typed in told them nothing.
+             no rest            the PLANNED serve. With zero rest the predicted
+                                serve IS the predicted pull, and two cells
+                                rendering the same clock time is a duplicate, not
+                                a readout - so the cell carries the thing the
+                                pull is being measured against instead. -->
       <div class="stat pl-3">
-        <span class="stat-label">{{ hasServeTime ? 'Serve' : 'Remaining' }}</span>
-        <div class="stat-value">
-          {{ hasServeTime ? serveTimeFormatted : remainingText }}
+        <span class="stat-label">{{ thirdCell.label }}</span>
+        <div class="stat-value">{{ thirdCell.value }}</div>
+        <div v-if="thirdCell.note" class="text-[11px] text-ink-mute truncate">
+          {{ thirdCell.note }}
         </div>
       </div>
     </div>
@@ -164,16 +176,22 @@ import { useSession } from '../composables/useSession.js';
 import { useCalculations } from '../composables/useCalculations.js';
 import { useRefreshTimer } from '../composables/useRefreshTimer.js';
 import { formatTemperature } from '../utils/temperatureUtils.js';
-import { formatTime, formatTimeAgo, formatDuration, minutesBetween } from '../utils/timeUtils.js';
+import {
+  formatTimeCompact, formatTimeAgo, formatDuration, minutesBetween
+} from '../utils/timeUtils.js';
 
 const { latestReading, currentOvenTemp, ovenEvents, config, displayUnits, settings } = useSession();
 const {
   currentTempDisplay,
-  targetTempDisplay,
+  pullTempDisplay,
+  servingTempDisplay,
   progressPercent,
   timeRemainingFormatted,
   targetReached,
   predictedTargetTimeFormatted,
+  predictedServeTimeFormatted,
+  predictedServeTime,
+  restMinutes,
   currentRateFormatted,
   scheduleStatus,
   scheduleVarianceFormatted,
@@ -199,9 +217,60 @@ const remainingText = computed(() =>
   targetReached.value ? 'Reached' : timeRemainingFormatted.value
 );
 
-const serveTimeFormatted = computed(() => {
-  if (!config.value?.desiredServeTime) return '--';
-  return formatTime(config.value.desiredServeTime);
+/**
+ * "pull 121° · plate 125°", collapsing to one number when carryover is zero.
+ *
+ * Two temperatures in a 13px line that already carries a reading age, so the
+ * plate half is dropped rather than truncated when it adds nothing.
+ */
+const doneLine = computed(() => {
+  const pull = pullTempDisplay.value;
+  if (pull === null) return 'no target set';
+  const plate = servingTempDisplay.value;
+  const unit = `°${displayUnits.value}`;
+  if (plate === null || plate === pull) return `pull ${pull}${unit}`;
+  return `pull ${pull}${unit} · plate ${plate}${unit}`;
+});
+
+/**
+ * How the predicted serve compares to the one the cook asked for. Suppressed
+ * when there is nothing to say.
+ */
+const serveDriftNote = computed(() => {
+  tick.value;
+  const planned = config.value?.desiredServeTime;
+  if (!planned || !predictedServeTime.value) return null;
+  const drift = Math.round(minutesBetween(planned, predictedServeTime.value));
+  if (Math.abs(drift) < 5) return 'as planned';
+  return `${formatDuration(Math.abs(drift))} ${drift > 0 ? 'later' : 'earlier'} than planned`;
+});
+
+const thirdCell = computed(() => {
+  if (!hasServeTime.value) {
+    return { label: 'Remaining', value: remainingText.value, note: null };
+  }
+  
+  if (restMinutes.value > 0) {
+    return {
+      label: 'Serve',
+      value: predictedServeTimeFormatted.value,
+      note: serveDriftNote.value ?? `incl. ${restMinutes.value}m rest`
+    };
+  }
+  
+  // No rest: the predicted serve and the predicted pull are the same instant, so
+  // this cell shows what the pull is being measured AGAINST instead.
+  return {
+    label: 'Planned',
+    value: plannedServeFormatted.value,
+    note: canPredict.value ? serveDriftNote.value : null
+  };
+});
+
+const plannedServeFormatted = computed(() => {
+  tick.value;
+  const planned = config.value?.desiredServeTime;
+  return planned ? formatTimeCompact(planned) : '--';
 });
 
 /**

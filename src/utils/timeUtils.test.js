@@ -16,6 +16,8 @@ import {
   addMinutes,
   formatDuration,
   formatTime,
+  formatTimeCompact,
+  localDayOffset,
   formatDateTime,
   formatTimeAgo,
   isWithinMinutes,
@@ -161,6 +163,39 @@ describe('formatTime', () => {
     expect(formatTime(null)).toBe('--');
     expect(formatTime(undefined)).toBe('--');
     expect(formatTime('')).toBe('--');
+  });
+});
+
+describe('formatTimeCompact / localDayOffset', () => {
+  /** Local components, so the fixtures mean the same thing in any zone. */
+  const local = (y, m, d, h, min) => new Date(y, m, d, h, min).toISOString();
+
+  it('gives a bare clock time for the same local day', () => {
+    const text = formatTimeCompact(local(2026, 7, 22, 20, 19), local(2026, 7, 22, 9, 0));
+    expect(text).toMatch(/\d{1,2}:\d{2}/);
+    expect(text).not.toMatch(/[+−]/);
+  });
+
+  it('marks the day offset instead of spelling out the date', () => {
+    // "Aug 23, 12:22 AM" does not fit a 96px stat cell, and a truncated date
+    // reads as a rendering fault rather than as a time.
+    expect(formatTimeCompact(local(2026, 7, 23, 0, 22), local(2026, 7, 22, 22, 0)))
+      .toMatch(/\+1$/);
+    expect(formatTimeCompact(local(2026, 7, 25, 12, 0), local(2026, 7, 22, 12, 0)))
+      .toMatch(/\+3$/);
+    expect(formatTimeCompact(local(2026, 7, 21, 12, 0), local(2026, 7, 22, 12, 0)))
+      .toMatch(/−1$/);
+  });
+
+  it('counts calendar days, not elapsed hours', () => {
+    // Two hours apart, but tomorrow.
+    expect(localDayOffset(local(2026, 7, 22, 23, 0), local(2026, 7, 23, 1, 0))).toBe(1);
+    // Twenty-three hours apart, and the same day.
+    expect(localDayOffset(local(2026, 7, 22, 0, 30), local(2026, 7, 22, 23, 30))).toBe(0);
+  });
+
+  it('returns the placeholder for no timestamp', () => {
+    expect(formatTimeCompact(null)).toBe('--');
   });
 });
 

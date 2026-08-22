@@ -166,6 +166,10 @@ const control = computed(() => {
       // bottom bar does not offer.
       case 'insufficient_readings':
         return pauseControl.value;
+      // This used to be a dead end: the button opened the settings sheet, which
+      // had no serve-time control anywhere in it. Settings now leads with an
+      // editable Cook plan section, so the one action this blocker offers can
+      // actually clear it.
       case 'no_serve_time':
         return { kind: 'ghost', label: 'Set serve time', event: 'openSettings' };
       // Nothing the cook can do but take another reading, which the BottomBar

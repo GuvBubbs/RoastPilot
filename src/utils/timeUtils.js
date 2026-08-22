@@ -138,6 +138,52 @@ export function formatTime(timestampISO, referenceISO = null) {
 }
 
 /**
+ * Whole local days between two instants, by calendar date rather than by
+ * elapsed time. `+1` for tomorrow however few hours away it is.
+ *
+ * @param {string} fromISO
+ * @param {string} toISO
+ * @returns {number}
+ */
+export function localDayOffset(fromISO, toISO) {
+  const midnight = (iso) => {
+    const d = new Date(iso);
+    d.setHours(0, 0, 0, 0);
+    return d.getTime();
+  };
+  // Rounded, not floored: the interval between two local midnights is 23 or 25
+  // hours across a DST boundary, and floor would lose a day.
+  return Math.round((midnight(toISO) - midnight(fromISO)) / 86_400_000);
+}
+
+/**
+ * A clock time with a compact day marker: "8:19 PM", or "8:19 PM +1" tomorrow.
+ *
+ * For the stat row, where formatTime's "Aug 23, 12:22 AM" does not fit. Those
+ * cells are 96px wide at 320px viewport - the reason oven state is a chip there
+ * rather than a fourth cell - and a truncated date is worse than no date, because
+ * "Aug 23, 12:2…" reads as a rendering fault.
+ *
+ * @param {string} timestampISO
+ * @param {string} [referenceISO] - The day to read as "today"; defaults to now
+ * @returns {string}
+ */
+export function formatTimeCompact(timestampISO, referenceISO = null) {
+  if (!timestampISO) return '--';
+  
+  const reference = referenceISO ?? new Date().toISOString();
+  const clock = new Date(timestampISO).toLocaleTimeString(undefined, {
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true
+  });
+  
+  const offset = localDayOffset(reference, timestampISO);
+  if (offset === 0) return clock;
+  return `${clock} ${offset > 0 ? '+' : '−'}${Math.abs(offset)}`;
+}
+
+/**
  * Format a timestamp to local date and time
  * @param {string} timestampISO - ISO 8601 timestamp
  * @returns {string} Formatted date and time

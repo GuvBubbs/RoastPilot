@@ -866,7 +866,8 @@ export function reconcileWithOvenChange({
  * @param {InternalReading[]} params.readings - Readings in chronological order
  * @param {OvenTempEvent[]} params.ovenEvents
  * @param {number} params.ovenBaseTemp - Current oven temp in °F
- * @param {number} params.targetTemp - Target internal meat temp in °F
+ * @param {number} params.pullTempF - The temperature the cook stops at, in °F.
+ *   NOT the serving temperature - see carryoverService.js.
  * @param {string|null} params.desiredServeTime
  * @param {number|null} params.scheduleVarianceMinutes
  * @param {'early'|'late'|'on-track'|'unknown'} params.scheduleStatus
@@ -883,7 +884,7 @@ export function generateRecommendation({
   readings,
   ovenEvents,
   ovenBaseTemp,
-  targetTemp,
+  pullTempF,
   desiredServeTime,
   scheduleVarianceMinutes,
   scheduleStatus,
@@ -899,7 +900,7 @@ export function generateRecommendation({
   
   // Already at or past target - projections are meaningless from here, so skip
   // straight to the done state rather than advising an oven change.
-  if (latestReading && typeof targetTemp === 'number' && latestReading.temp >= targetTemp) {
+  if (latestReading && typeof pullTempF === 'number' && latestReading.temp >= pullTempF) {
     return buildRecommendationResult({
       action: 'at-target',
       message: RECOMMENDATION_MESSAGES.AT_TARGET,
@@ -978,7 +979,7 @@ export function generateRecommendation({
       predictedMinutesToTarget,
       currentRate,
       latestCoreTempF: latestReading ? latestReading.temp : null,
-      targetTempF: targetTemp,
+      targetTempF: pullTempF,
       displayUnits
     });
     
@@ -1003,7 +1004,7 @@ export function generateRecommendation({
     predictedMinutesToTarget,
     currentRate,
     latestCoreTempF: latestReading ? latestReading.temp : null,
-    targetTempF: targetTemp,
+    targetTempF: pullTempF,
     displayUnits
   });
   

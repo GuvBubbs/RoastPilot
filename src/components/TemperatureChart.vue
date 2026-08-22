@@ -36,6 +36,7 @@ import {
   defaultChartOptions,
   createOvenScale,
   createTargetAnnotation,
+  createRestBandAnnotation,
   createServeTimeAnnotation,
   createCrossingMarker,
   createDataLabel,
@@ -49,7 +50,9 @@ const props = defineProps({
 });
 
 const { readings, ovenEvents, config, displayUnits } = useSession();
-const { predictedTargetTime, currentTemp, canPredict } = useCalculations();
+const {
+  predictedTargetTime, currentTemp, canPredict, restMinutes, predictedServeTime
+} = useCalculations();
 
 const { width } = useWindowSize();
 
@@ -193,7 +196,7 @@ const meatRange = computed(() => {
   const temps = readings.value.map(r => toDisplayUnit(r.temp, displayUnits.value));
 
   if (config.value) {
-    temps.push(toDisplayUnit(config.value.targetTemp, displayUnits.value));
+    temps.push(toDisplayUnit(config.value.pullTempF, displayUnits.value));
   }
 
   if (temps.length === 0) return { min: 0, max: 200 };
@@ -260,14 +263,17 @@ const projectionData = computed(() => {
 
   const lastReading = readings.value[readings.value.length - 1];
   const currentTempDisplay = toDisplayUnit(currentTemp.value, displayUnits.value);
-  const targetTempDisplay = toDisplayUnit(config.value.targetTemp, displayUnits.value);
+  // In °F, against the stored pull temperature, NOT in display units. The old
+  // comparison converted both sides and then compared - which on a Celsius
+  // session rounds to 0.1 °C and can land on the other side of the boundary from
+  // the advice band's own at-target test. Two verdicts about the same roast.
+  if (currentTemp.value >= config.value.pullTempF) return [];
 
-  // Nothing left to project once the target is reached.
-  if (currentTempDisplay >= targetTempDisplay) return [];
+  const pullTempDisplay = toDisplayUnit(config.value.pullTempF, displayUnits.value);
 
   return [
     { x: new Date(lastReading.timestamp).getTime(), y: currentTempDisplay },
-    { x: new Date(predictedTargetTime.value).getTime(), y: targetTempDisplay }
+    { x: new Date(predictedTargetTime.value).getTime(), y: pullTempDisplay }
   ];
 });
 
@@ -412,8 +418,11 @@ const annotations = computed(() => {
 
   if (config.value) {
     result.targetRule = createTargetAnnotation(
-      toDisplayUnit(config.value.targetTemp, displayUnits.value),
-      displayUnits.value
+      toDisplayUnit(config.value.pullTempF, displayUnits.value),
+      displayUnits.value,
+      Number.isFinite(config.value.servingTempF)
+        ? toDisplayUnit(config.value.servingTempF, displayUnits.value)
+        : null
     );
   }
 
@@ -446,6 +455,16 @@ const annotations = computed(() => {
       vertical: 'above',
       tone: 'quiet'
     });
+  }
+
+  // The rest, as a band whose LEFT edge is the pull deadline. Behind the
+  // datasets, so it is a region of the plot rather than a mark in it. Only when
+  // there is both a projection to hang it off and a rest to draw.
+  if (projectionData.value.length > 0 && restMinutes.value > 0 && predictedServeTime.value) {
+    result.restBand = createRestBandAnnotation(
+      projectionData.value[1].x,
+      new Date(predictedServeTime.value).getTime()
+    );
   }
 
   // The signature. Only drawn when there is a projection to land.

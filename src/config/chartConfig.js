@@ -42,6 +42,10 @@ export const chartPalette = {
   ink: '#F5F0EA',
   inkDim: '#A79C91',
   inkMute: '#776C62',
+  // The rest band. Interpretation, so neutral - and barely there: it is a region
+  // of the plot, not a mark in it, and the meat trace runs straight through it.
+  // Two notches under `grid` in effective lightness once alpha is applied.
+  restBand: 'rgba(167, 156, 145, 0.09)',
 
   heatCold: '#4E7FA8',
   heatWarm: '#D98324',
@@ -164,24 +168,38 @@ export function createOvenScale(max) {
 }
 
 /**
- * Horizontal rule at the target temperature. Interpretation, so it stays in the
+ * Horizontal rule at the PULL temperature. Interpretation, so it stays in the
  * neutral inks — it must never read as a third heat series.
  *
- * @param {number} targetTemp - Target temperature in display units
+ * ONE rule, not two. There are now two temperatures worth naming, but they are
+ * typically 3–8° apart, which at this plot's scale is a handful of pixels: two
+ * rules would overlap, and their labels certainly would. So the rule is drawn
+ * where the projection actually lands — the pull — and the plate temperature
+ * rides in the same label.
+ *
+ * @param {number} pullTemp - Pull temperature in display units
  * @param {'F'|'C'} units - Display units
+ * @param {number|null} [servingTemp] - Plate temperature in display units, named
+ *   alongside when it differs
  * @returns {Object} Annotation configuration
  */
-export function createTargetAnnotation(targetTemp, units) {
+export function createTargetAnnotation(pullTemp, units, servingTemp = null) {
+  const showPlate = servingTemp !== null &&
+    servingTemp !== undefined &&
+    Math.round(servingTemp) !== Math.round(pullTemp);
+  
   return {
     type: 'line',
-    yMin: targetTemp,
-    yMax: targetTemp,
+    yMin: pullTemp,
+    yMax: pullTemp,
     borderColor: chartPalette.inkMute,
     borderWidth: 1,
     borderDash: [2, 4],
     label: {
       display: true,
-      content: `TARGET ${Math.round(targetTemp)}°${units}`,
+      content: showPlate
+        ? `PULL ${Math.round(pullTemp)}° · PLATE ${Math.round(servingTemp)}°`
+        : `PULL ${Math.round(pullTemp)}°${units}`,
       position: 'start',
       rotation: 0,
       // Inset from the left edge, lifted clear of the rule itself.
@@ -191,6 +209,45 @@ export function createTargetAnnotation(targetTemp, units) {
       borderWidth: 0,
       color: chartPalette.inkDim,
       font: { family: DISPLAY_FONT, size: 10, weight: 600 },
+      padding: 0
+    }
+  };
+}
+
+/**
+ * The rest, as a shaded band from the projected pull to the projected serve.
+ *
+ * Its LEFT edge is the thing worth seeing: that is the moment the meat has to be
+ * out of the oven, which is the deadline the app is actually steering towards.
+ * The serve rule sits at the right-hand end, and the width between them is the
+ * rest — so a cook can see at a glance why "on track" means coming out of the
+ * oven well before dinner.
+ *
+ * Drawn behind everything (`drawTime: 'beforeDatasetsDraw'`) so the meat and
+ * oven traces stay on top of it.
+ *
+ * @param {number} fromMs - Projected pull time
+ * @param {number} toMs - Projected serve time
+ * @returns {Object} Annotation configuration
+ */
+export function createRestBandAnnotation(fromMs, toMs) {
+  return {
+    type: 'box',
+    xMin: fromMs,
+    xMax: toMs,
+    backgroundColor: chartPalette.restBand,
+    borderWidth: 0,
+    drawTime: 'beforeDatasetsDraw',
+    label: {
+      display: true,
+      content: 'REST',
+      position: { x: 'center', y: 'start' },
+      rotation: 0,
+      yAdjust: 8,
+      backgroundColor: 'transparent',
+      borderWidth: 0,
+      color: chartPalette.inkMute,
+      font: { family: DISPLAY_FONT, size: 9, weight: 600 },
       padding: 0
     }
   };

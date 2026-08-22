@@ -1,5 +1,5 @@
 /**
- * The scenario deck: eight simulated cooks.
+ * The scenario deck: nine simulated cooks.
  *
  * Default behaviour in all of them is the real cook's pattern, taken from
  * Docs/Reference/roast-session-2026-08-22.json: sparse irregular readings about
@@ -295,6 +295,45 @@ export const SCENARIOS = [
       { atMin: 135, kind: 'restart-oven' }
     ],
     maxMinutes: 460
+  },
+
+  {
+    name: '09-rest-and-carryover',
+    title: 'Rest and carryover',
+    what:
+      'The same 6 lb prime rib as 02, but with a 30 minute rest declared and ' +
+      'the pull temperature set 4 F below the plate temperature. The schedule ' +
+      'is judged against the latest PULL time, so the app has to steer the ' +
+      'roast out of the oven 30 minutes before dinner rather than at dinner. ' +
+      'Nothing subtracted the rest before this, which is why dinner was ' +
+      'systematically 20-45 min late.',
+    caveat:
+      'Convergence is measured against the PULL DEADLINE - serve time less the ' +
+      'rest - which is what the app steers to. This scenario is the reason the ' +
+      'harness measures it that way: against the raw serve time a correct cook ' +
+      'here would score 30 min early.',
+    seed: 909,
+    config: {
+      // 121 F pull for a 125 F plate at a 200 F oven: the app derives this
+      // itself for a new cook, and it is stated here so the deck measures the
+      // pull the same way the app does.
+      targetTemp: 121,
+      units: 'F',
+      startingTemp: 48,
+      initialOvenTemp: 200,
+      restMinutes: 30,
+      // 165 min was 02's serve time with no rest. With 30 minutes of rest the
+      // meat has to be out at +135, which the model reaches at about +145 - so
+      // the app should be asking for a little more heat, not less.
+      serveAfterMin: 175,
+      meatType: 'Prime Rib',
+      meatCut: 'Bone-in',
+      weight: 6,
+      notes: null
+    },
+    model: { ...PRIME_RIB_6LB, ovenSetF: 200 },
+    readingsAt: cadence({ seed: 909, everyMin: 40, jitterMin: 8, untilMin: 400 }),
+    maxMinutes: 420
   },
 
   {

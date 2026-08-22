@@ -28,7 +28,7 @@ describe('a Celsius cook told to lower the oven', () => {
     session = useSession();
     session.startSession({
       units: 'C',
-      targetTemp: celsiusToFahrenheit(65),
+      pullTempF: celsiusToFahrenheit(65),
       initialOvenTemp: celsiusToFahrenheit(112),
       desiredServeTime: at(16)
     });
