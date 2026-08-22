@@ -27,7 +27,9 @@ jobs:
     # The release job's own commit is tagged [skip ci], which already stops it
     # starting a second deploy. This is the belt to that braces — without one
     # of the two, every deploy would trigger another deploy forever.
-    if: github.event_name != 'push' || !startsWith(github.event.head_commit.message, 'chore: release v')
+    # (Quoted: the ": " inside the message prefix would otherwise end the
+    # YAML key, which is a hard parse error, not a silent misread.)
+    if: "github.event_name != 'push' || !startsWith(github.event.head_commit.message, 'chore: release v')"
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.bump.outputs.version }}
