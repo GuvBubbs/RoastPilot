@@ -309,7 +309,7 @@ function toLocalInputValue(date) {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
-const startingUnits = preferredUnits.value ?? SESSION_DEFAULTS.UNITS;
+const startingUnits = preferredUnits.value;
 
 // Form state
 const form = reactive({
@@ -479,7 +479,7 @@ watch(() => form.initialOvenTemp.value, () => {
  * a unit choice from a cook that never started.
  */
 function resetForm() {
-  const units = preferredUnits.value ?? SESSION_DEFAULTS.UNITS;
+  const units = preferredUnits.value;
 
   form.units.value = units;
   form.targetTemp.value = getInitialTargetTemp(units);

@@ -109,10 +109,17 @@ const lastOvenTemp = computed(() => {
 });
 
 // Initialize restart temperature with last oven temp (in display units)
+const maxTime = ref(new Date().toISOString());
+
 watch(() => props.modelValue, (isOpening) => {
   if (isOpening) {
     ovenOffTime.value = new Date().toISOString();
     ovenOnTime.value = new Date().toISOString();
+    // Refreshed on every open, not derived once. As a dependency-free computed
+    // this froze at the sheet's first-ever render, and since the component stays
+    // mounted the pickers then clamped every later edit back to that instant -
+    // so a pause could not be logged at the time it actually happened.
+    maxTime.value = new Date().toISOString();
     hasRestartTime.value = false;
 
     if (lastOvenTemp.value) {
@@ -123,7 +130,6 @@ watch(() => props.modelValue, (isOpening) => {
   }
 }, { immediate: true });
 
-const maxTime = computed(() => new Date().toISOString());
 
 const sessionStartTime = computed(() => {
   return config.value?.createdAt ?? null;

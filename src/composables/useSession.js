@@ -7,7 +7,7 @@ import {
   createDefaultSettings 
 } from '../models/dataModels.js';
 import { toStorageUnit } from '../utils/temperatureUtils.js';
-import { UI_CONSTANTS } from '../constants/defaults.js';
+import { UI_CONSTANTS, SESSION_DEFAULTS } from '../constants/defaults.js';
 
 // Singleton state - shared across all component instances
 const session = ref(null);
@@ -71,12 +71,17 @@ function normalizeOvenEvents() {
   const events = session.value.ovenEvents;
   events.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
   
-  // Before the first logged event the oven was at whatever the session was set
-  // up with, which is what addOvenEvent used to record by hand.
-  let previous = session.value.config?.initialOvenTemp ?? null;
+  // The opening event has no predecessor. Seeding from config.initialOvenTemp
+  // was wrong: startSession creates that first event FROM initialOvenTemp, so
+  // the seed equalled the event's own setTemp and the log rendered
+  // "200°F from 200°F".
+  let previous = null;
   for (const event of events) {
     event.previousTemp = previous;
-    previous = event.setTemp;
+    // An off event stores setTemp 0. Carrying that forward would tell the next
+    // event it resumed "from 0", which the log reads as having no predecessor.
+    // Hold the last real setting across the pause instead.
+    if (!event.isOff) previous = event.setTemp;
   }
 }
 
@@ -132,8 +137,10 @@ export function useSession() {
       };
       session.value = existingSession;
       
-      // Stored sessions from older builds may not be in timestamp order.
+      // Stored sessions from older builds may not be in timestamp order, and
+      // the tail of each list is treated as "the latest" everywhere.
       normalizeReadings();
+      normalizeOvenEvents();
     }
     
     persistedSettings = storedSettings ?? session.value?.settings ?? createDefaultSettings();
@@ -222,7 +229,10 @@ export function useSession() {
    * The unit preference to offer a *new* session, before any config exists.
    * Reads the module cache so it survives endSession().
    */
-  const preferredUnits = computed(() => persistedUnits.value ?? 'F');
+  // SESSION_DEFAULTS.UNITS, not a literal 'F': this is the app's documented
+  // first-run default (Celsius), and hardcoding 'F' here silently flipped it
+  // for every fresh install and every user upgrading from the old build.
+  const preferredUnits = computed(() => persistedUnits.value ?? SESSION_DEFAULTS.UNITS);
   
   const displayUnits = computed(() => {
     return config.value?.units ?? 'F';
@@ -237,7 +247,7 @@ export function useSession() {
     session.value = createSession(
       configOverrides.units
         ? configOverrides
-        : { ...configOverrides, units: persistedUnits.value ?? 'F' }
+        : { ...configOverrides, units: persistedUnits.value ?? SESSION_DEFAULTS.UNITS }
     );
     
     // If initial oven temp was provided, create the first oven event
@@ -273,6 +283,7 @@ export function useSession() {
       session.value = stored;
       // A session stored by an older build may not be in timestamp order
       normalizeReadings();
+      normalizeOvenEvents();
       return true;
     }
     return false;

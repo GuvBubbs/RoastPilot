@@ -11,9 +11,7 @@ export const SESSION_DEFAULTS = {
  * Calculation thresholds
  */
 export const CALCULATION_THRESHOLDS = {
-  MIN_READINGS_FOR_RATE: 2,
-  MIN_READINGS_FOR_PROJECTION: 2,
-  RATE_VARIANCE_THRESHOLD: 0.5, // Coefficient of variation threshold for "noisy" data
+  MIN_READINGS_FOR_RATE: 2, // Coefficient of variation threshold for "noisy" data
   MIN_RATE_FOR_PREDICTION: 0.1 // °F/hr minimum to consider valid heating
 };
 
@@ -21,7 +19,6 @@ export const CALCULATION_THRESHOLDS = {
  * UI-related constants
  */
 export const UI_CONSTANTS = {
-  CHART_UPDATE_DEBOUNCE_MS: 250,
   AUTO_SAVE_DEBOUNCE_MS: 1000,
   TOAST_DURATION_MS: 3000
 };

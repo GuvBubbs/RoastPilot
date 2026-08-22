@@ -8,7 +8,7 @@ import { RECOMMENDATION_MESSAGES } from '../constants/defaults.js';
  * @param {string} sinceISO - ISO timestamp to compare against
  * @returns {boolean}
  */
-function hasReadingSince(readings, sinceISO) {
+export function hasReadingSince(readings, sinceISO) {
   if (readings.length === 0) return false;
   const latest = readings[readings.length - 1];
   return minutesBetween(sinceISO, latest.timestamp) >= 0;
@@ -21,7 +21,7 @@ function hasReadingSince(readings, sinceISO) {
  * @param {Partial<Recommendation>} fields
  * @returns {Recommendation}
  */
-function buildRecommendationResult(fields) {
+export function buildRecommendationResult(fields) {
   return {
     action: 'none',
     suggestedTemp: null,
@@ -57,7 +57,8 @@ export function checkRecommendationEligibility({
   ovenEvents,
   desiredServeTime,
   settings,
-  confidence
+  confidence,
+  now = new Date().toISOString()
 }) {
   // Check minimum readings requirement
   if (readings.length < settings.minReadingsForRecommendation) {
@@ -104,7 +105,7 @@ export function checkRecommendationEligibility({
   }
   
   const lastOvenEvent = ovenEvents[ovenEvents.length - 1];
-  const ovenDataAge = minutesBetween(lastOvenEvent.timestamp, new Date().toISOString());
+  const ovenDataAge = minutesBetween(lastOvenEvent.timestamp, now);
   
   // Skip stale check if oven is currently off (we'll handle restart recommendations separately)
   const isOvenOff = lastOvenEvent.isOff === true;
@@ -209,7 +210,9 @@ function calculateOvenOffDuration(scheduleVarianceMinutes, predictedMinutesToTar
  * Calculate the recommended oven temperature adjustment
  * 
  * @param {Object} params
- * @param {number} params.currentOvenTemp - Current oven set temperature (°F)
+ * @param {number} params.ovenBaseTemp - The oven temperature to adjust FROM (°F).
+ *   This is the last temperature actually set, not `currentOvenTemp`, which is 0
+ *   while the oven is off - adjusting from 0 yields a nonsense set point.
  * @param {number} params.scheduleVarianceMinutes - Positive = late, negative = early
  * @param {'early'|'late'|'on-track'} params.scheduleStatus
  * @param {AppSettings} params.settings
@@ -218,7 +221,7 @@ function calculateOvenOffDuration(scheduleVarianceMinutes, predictedMinutesToTar
  * @returns {Object} Recommendation details
  */
 export function calculateRecommendation({
-  currentOvenTemp,
+  ovenBaseTemp,
   scheduleVarianceMinutes,
   scheduleStatus,
   settings,
@@ -237,7 +240,7 @@ export function calculateRecommendation({
   if (scheduleStatus === 'on-track') {
     return {
       action: 'hold',
-      suggestedTemp: currentOvenTemp,
+      suggestedTemp: ovenBaseTemp,
       changeAmount: 0,
       message: RECOMMENDATION_MESSAGES.HOLD,
       reasoning: `Predicted to finish within ${onTrackThresholdMinutes} minutes of your target time.`,
@@ -271,18 +274,18 @@ export function calculateRecommendation({
     }
     
     // Calculate suggested temperature
-    let suggestedTemp = currentOvenTemp + changeAmount;
+    let suggestedTemp = ovenBaseTemp + changeAmount;
     
     // Apply upper bound guardrail
     if (suggestedTemp > ovenTempMaxF) {
       suggestedTemp = ovenTempMaxF;
-      changeAmount = suggestedTemp - currentOvenTemp;
+      changeAmount = suggestedTemp - ovenBaseTemp;
       
       // If already at max, can't recommend higher
       if (changeAmount <= 0) {
         return {
           action: 'hold',
-          suggestedTemp: currentOvenTemp,
+          suggestedTemp: ovenBaseTemp,
           changeAmount: 0,
           message: `Already at maximum recommended temperature ({maxTemp}). Consider extending your timeline if possible.`,
           reasoning: `Running ${Math.round(absVariance)} minutes late, but oven is already at the upper limit for low-and-slow cooking.`,
@@ -335,7 +338,7 @@ export function calculateRecommendation({
     }
     
     // Calculate suggested temperature
-    let suggestedTemp = currentOvenTemp - changeAmount;
+    let suggestedTemp = ovenBaseTemp - changeAmount;
     
     // Check practical minimum first (most ovens can't go below ~175°F/80°C)
     const practicalMinF = settings.ovenTempPracticalMinF || 175;
@@ -350,7 +353,7 @@ export function calculateRecommendation({
         // Suggest oven-off instead of just saying "hold steady"
         return {
           action: 'oven-off',
-          suggestedTemp: currentOvenTemp,
+          suggestedTemp: ovenBaseTemp,
           changeAmount: 0,
           message: RECOMMENDATION_MESSAGES.LOW_TEMP_DISABLED,
           reasoning: `Running ${Math.round(absVariance)} minutes early. Low temperature recommendations are disabled, but you can pause cooking temporarily.`,
@@ -362,10 +365,10 @@ export function calculateRecommendation({
       }
       
       // Already at practical minimum - suggest turning oven off temporarily
-      if (currentOvenTemp <= practicalMinF) {
+      if (ovenBaseTemp <= practicalMinF) {
         return {
           action: 'oven-off',
-          suggestedTemp: currentOvenTemp,
+          suggestedTemp: ovenBaseTemp,
           changeAmount: 0,
           message: RECOMMENDATION_MESSAGES.OVEN_OFF_SUGGESTED,
           reasoning: `Running ${Math.round(absVariance)} minutes early. Your oven is already at the practical minimum temperature.`,
@@ -378,7 +381,7 @@ export function calculateRecommendation({
       
       // Suggest lowering to practical minimum
       suggestedTemp = practicalMinF;
-      changeAmount = currentOvenTemp - suggestedTemp;
+      changeAmount = ovenBaseTemp - suggestedTemp;
       
       const messageTemplate = absVariance > 30 
         ? RECOMMENDATION_MESSAGES.LOWER_LARGE 
@@ -400,13 +403,13 @@ export function calculateRecommendation({
     // Apply food safety lower bound guardrail
     if (suggestedTemp < ovenTempMinF) {
       suggestedTemp = ovenTempMinF;
-      changeAmount = currentOvenTemp - suggestedTemp;
+      changeAmount = ovenBaseTemp - suggestedTemp;
       
       // If already at min, can't recommend lower
       if (changeAmount <= 0) {
         return {
           action: 'hold',
-          suggestedTemp: currentOvenTemp,
+          suggestedTemp: ovenBaseTemp,
           changeAmount: 0,
           message: `Already at minimum recommended temperature ({minTemp}). You may finish early.`,
           reasoning: `Running ${Math.round(absVariance)} minutes early, but oven is already at the lower limit for food safety.`,
@@ -459,7 +462,7 @@ export function calculateRecommendation({
  * @param {Object} params
  * @param {InternalReading[]} params.readings - Readings in chronological order
  * @param {OvenTempEvent[]} params.ovenEvents
- * @param {number} params.currentOvenTemp - Current oven temp in °F
+ * @param {number} params.ovenBaseTemp - Current oven temp in °F
  * @param {number} params.targetTemp - Target internal meat temp in °F
  * @param {string|null} params.desiredServeTime
  * @param {number|null} params.scheduleVarianceMinutes
@@ -473,7 +476,7 @@ export function calculateRecommendation({
 export function generateRecommendation({
   readings,
   ovenEvents,
-  currentOvenTemp,
+  ovenBaseTemp,
   targetTemp,
   desiredServeTime,
   scheduleVarianceMinutes,
@@ -481,7 +484,8 @@ export function generateRecommendation({
   confidence,
   settings,
   predictedMinutesToTarget,
-  currentRate
+  currentRate,
+  now = new Date().toISOString()
 }) {
   const latestReading = readings.length > 0 ? readings[readings.length - 1] : null;
   
@@ -517,7 +521,8 @@ export function generateRecommendation({
     ovenEvents,
     desiredServeTime,
     settings,
-    confidence
+    confidence,
+    now
   });
   
   if (!eligibility.canRecommend) {
@@ -532,7 +537,7 @@ export function generateRecommendation({
   // Normal recommendation - from the latest reading, whether or not the oven is
   // currently off (a post-pause reading is guaranteed by the branch above).
   const recommendation = calculateRecommendation({
-    currentOvenTemp,
+    ovenBaseTemp,
     scheduleVarianceMinutes,
     scheduleStatus,
     settings,

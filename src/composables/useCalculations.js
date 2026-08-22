@@ -24,7 +24,14 @@ export function useCalculations() {
       readings: readings.value,
       targetTemp: config.value.targetTemp,
       desiredServeTime: config.value.desiredServeTime,
-      settings: settings.value
+      settings: settings.value,
+      // Pinned to the anchor, not the live clock: this computed deliberately has
+      // no tick dependency, so the countdown is derived separately below. Left
+      // implicit, the result object would carry a permanently stale
+      // predictedMinutesFromNow.
+      now: readings.value.length > 0
+        ? readings.value[readings.value.length - 1].timestamp
+        : undefined
     });
   });
   

@@ -5,8 +5,23 @@
          permanent slot next to the title. -->
     <header class="sticky top-0 z-40 bg-ground/95 backdrop-blur rule pt-safe">
       <div class="band h-12 flex items-center gap-3">
-        <h1 class="flex-1 min-w-0 text-[17px] font-semibold text-ink truncate">
-          <span aria-hidden="true">🔥</span> Roast Tracker
+        <h1 class="flex-1 min-w-0 flex items-center gap-2 text-[17px] font-semibold text-ink">
+          <!-- Wordmark, not a readout: the flame takes text-ink so the lockup
+               reads as one unit. Saturated heat-* is reserved for live
+               measurement. -->
+          <svg
+            class="w-5 h-5 shrink-0"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.8"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M12 3c.6 2.6 2.1 4.5 4 6.1 1.9 1.6 2.9 3.4 2.9 5.4a6.9 6.9 0 0 1-13.8 0c0-1.1.4-2.2 1-2.9a2.5 2.5 0 0 0 2.5 2.5A2.5 2.5 0 0 0 11 11.6c0-1.3-.5-2-1-3-1-2.1-.2-4 2-5.6Z" />
+          </svg>
+          <span class="truncate">Roast Tracker</span>
         </h1>
         <button
           type="button"
@@ -31,7 +46,25 @@
     <!-- No active session -->
     <main v-else-if="!hasActiveSession" class="pb-bottombar">
       <div class="band py-10 text-center">
-        <div class="text-5xl mb-5" aria-hidden="true">🥩</div>
+        <!-- A probe in a roast: the one shape that says "instrument" and
+             "cooking" at once, and the same motif as the app icon. Held at
+             ink-dim so the heading below stays the loudest thing here. -->
+        <svg
+          class="w-12 h-12 mx-auto mb-5 text-ink-dim"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.8"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <path d="M3 20c0-4 4-7 9-7s9 3 9 7Z" />
+          <path d="M12 17.5 18.6 9.5" />
+          <circle cx="19.9" cy="7.9" r="1.6" />
+          <path d="M5.6 11.2c0-1.5 1.7-1.5 1.7-3S5.6 6.7 5.6 5.2" />
+          <path d="M10.3 10.2c0-1.5 1.7-1.5 1.7-3s-1.7-1.5-1.7-3" />
+        </svg>
         <h2 class="text-[22px] font-semibold text-ink mb-2">Reverse sear, on schedule</h2>
         <p class="text-[15px] text-ink-dim max-w-sm mx-auto">
           Log internal temperature as you go. Roast Tracker fits the heating rate,

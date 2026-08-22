@@ -149,6 +149,7 @@ import { useToast } from '../composables/useToast.js';
 import { validateOvenTemp } from '../utils/validationUtils.js';
 import { toDisplayUnit, formatTemperature, formatDelta } from '../utils/temperatureUtils.js';
 import { formatTime, formatDuration, minutesBetween, now } from '../utils/timeUtils.js';
+import { useRefreshTimer } from '../composables/useRefreshTimer.js';
 
 const { ovenEvents, displayUnits, updateOvenEvent, deleteOvenEvent } = useSession();
 const { showToast } = useToast();
@@ -169,7 +170,10 @@ const editInput = ref(null);
  * Display order is newest-first. `.map()` already produced a fresh array, so
  * reversing it cannot touch the stored (chronological) event list.
  */
+const { tick } = useRefreshTimer(30000);
+
 const rows = computed(() => {
+  tick.value; // the current setting's "active for" is measured against the clock
   const chronological = ovenEvents.value;
   return chronological
     .map((event, index) => {
@@ -202,7 +206,7 @@ function detailText(row) {
     parts.push(
       row.previousTemp ? `Turned off from ${formatTemperature(row.previousTemp, displayUnits.value)}` : 'Oven turned off'
     );
-  } else if (row.previousTemp === null || row.previousTemp === 0) {
+  } else if (row.previousTemp === null) {
     parts.push('Initial setting');
   } else {
     const change = formatDelta(row.setTemp - row.previousTemp, displayUnits.value, true);

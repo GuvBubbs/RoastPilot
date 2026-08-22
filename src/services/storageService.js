@@ -1,4 +1,4 @@
-import { createSession, createDefaultSettings } from '../models/dataModels.js';
+import { createDefaultSettings } from '../models/dataModels.js';
 
 const STORAGE_KEYS = {
   CURRENT_SESSION: 'rstt_current_session',

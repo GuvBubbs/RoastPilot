@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { nextTick } from 'vue';
 import { useSession } from './useSession.js';
 import { storageService } from '../services/storageService.js';
-import { UI_CONSTANTS } from '../constants/defaults.js';
+import { UI_CONSTANTS, SESSION_DEFAULTS } from '../constants/defaults.js';
 
 const SETTINGS_KEY = 'rstt_settings';
 
@@ -285,11 +285,13 @@ describe('useSession oven-event invariants', () => {
     expect(session.ovenEvents.value.map(e => e.setTemp)).toEqual([225, 250, 275]);
   });
 
-  it('derives previousTemp as a chain, seeded from the configured initial temp', () => {
+  it('derives previousTemp as a chain, with no predecessor for the first event', () => {
     session.addOvenEvent(225, at(10));
     session.addOvenEvent(275, at(11));
 
-    expect(session.ovenEvents.value.map(e => e.previousTemp)).toEqual([200, 225]);
+    // null, not config.initialOvenTemp: startSession builds the opening event
+    // FROM that value, so seeding with it rendered "200°F from 200°F".
+    expect(session.ovenEvents.value.map(e => e.previousTemp)).toEqual([null, 225]);
   });
 
   it('re-derives the next event\'s previousTemp when one is edited', () => {
@@ -302,7 +304,7 @@ describe('useSession oven-event invariants', () => {
     // Without re-derivation the second event would still claim it changed
     // from 225, describing a step that never happened.
     expect(session.ovenEvents.value.map(e => e.setTemp)).toEqual([240, 275]);
-    expect(session.ovenEvents.value.map(e => e.previousTemp)).toEqual([200, 240]);
+    expect(session.ovenEvents.value.map(e => e.previousTemp)).toEqual([null, 240]);
   });
 
   it('re-derives previousTemp when an event is deleted from the middle', () => {
@@ -314,7 +316,7 @@ describe('useSession oven-event invariants', () => {
     session.deleteOvenEvent(middle.id);
 
     expect(session.ovenEvents.value.map(e => e.setTemp)).toEqual([225, 275]);
-    expect(session.ovenEvents.value.map(e => e.previousTemp)).toEqual([200, 225]);
+    expect(session.ovenEvents.value.map(e => e.previousTemp)).toEqual([null, 225]);
   });
 
   it('reports the last temperature actually set, not the zero of an off event', () => {
@@ -338,6 +340,26 @@ describe('useSession oven-event invariants', () => {
     session.logOvenOn(225, at(12));
 
     expect(session.lastActiveOvenTemp.value).toBe(225);
+  });
+
+  it('holds the last real setting across an oven-off event', () => {
+    session.addOvenEvent(225, at(10));
+    session.logOvenOff(at(11));
+    session.logOvenOn(250, at(12));
+
+    // The restart resumed from 225, not from the off event's stored 0 - which
+    // the log would otherwise read as "no predecessor", i.e. an initial setting.
+    expect(session.ovenEvents.value.map(e => e.previousTemp)).toEqual([null, 225, 225]);
+  });
+
+  it('leaves the opening event with no predecessor when startSession logged it', () => {
+    session.endSession();
+    session.startSession({ targetTemp: 200, units: 'F', initialOvenTemp: 200 });
+    // The opening event exists; a later mutation must not rewrite its origin.
+    session.addOvenEvent(225, at(10));
+
+    expect(session.ovenEvents.value[0].previousTemp).toBeNull();
+    expect(session.ovenEvents.value[0].setTemp).toBe(200);
   });
 });
 
@@ -412,6 +434,15 @@ describe('useSession units preference', () => {
     const s = await freshSession();
     s.initialize();
     s.setUnits('K');
-    expect(s.preferredUnits.value).toBe('F');
+    expect(s.preferredUnits.value).toBe(SESSION_DEFAULTS.UNITS);
+  });
+
+  it('offers the documented first-run default with nothing stored', async () => {
+    const s = await freshSession();
+    s.initialize();
+    // Celsius. A hardcoded 'F' here silently changed the app's first-run
+    // default for every fresh install and every upgrade from the old build.
+    expect(s.preferredUnits.value).toBe('C');
+    expect(SESSION_DEFAULTS.UNITS).toBe('C');
   });
 });

@@ -28,6 +28,7 @@ import { computed } from 'vue';
 import { Line } from 'vue-chartjs';
 import { useWindowSize } from '@vueuse/core';
 import { useSession } from '../composables/useSession.js';
+import { hasReadingSince } from '../services/recommendationService.js';
 import { useCalculations } from '../composables/useCalculations.js';
 import { toDisplayUnit } from '../utils/temperatureUtils.js';
 import { formatTime } from '../utils/timeUtils.js';
@@ -232,12 +233,30 @@ const internalTempData = computed(() =>
 );
 
 /**
+ * Cooking is paused and no reading post-dates the pause. Shares the service's
+ * own predicate so the chart and the advice cannot disagree.
+ */
+const awaitingPostPauseReading = computed(() => {
+  const events = ovenEvents.value;
+  const last = events.length > 0 ? events[events.length - 1] : null;
+  if (!last || last.isOff !== true) return false;
+  return !hasReadingSince(readings.value, last.timestamp);
+});
+
+/**
  * Dashed projection from the latest reading to the predicted crossing.
  */
 const projectionData = computed(() => {
   if (!canPredict.value || !predictedTargetTime.value || currentTemp.value === null) {
     return [];
   }
+
+  // While cooking is paused with nothing logged since, the app deliberately
+  // refuses to estimate the meat - the advice band asks for a fresh reading.
+  // Projecting here would contradict it with the brightest mark on the screen,
+  // and it would be wrong in a known direction: the fit is the pre-pause
+  // heating rate, but the meat is cooling.
+  if (awaitingPostPauseReading.value) return [];
 
   const lastReading = readings.value[readings.value.length - 1];
   const currentTempDisplay = toDisplayUnit(currentTemp.value, displayUnits.value);
@@ -279,14 +298,22 @@ const ovenTrackData = computed(() => {
     }
   });
 
-  // Finding 15: the last setting holds to the data horizon — the same right edge
-  // the x axis uses — not to `new Date()`. Reading the clock inside a computed
-  // froze the track at its first evaluation, so it stopped growing for the rest
-  // of the cook.
+  // The last setting holds to the end of the MEASURED period, not to the right
+  // edge of the plot. Two constraints meet here: reading `new Date()` inside a
+  // computed froze the track at its first evaluation (it stopped growing for
+  // the rest of the cook), but running it out to `xDomain.max` drew the
+  // saturated oven bar hours into the future, asserting the oven would still be
+  // at that setting at the predicted crossing. The latest thing actually
+  // observed satisfies both: no clock read, no claim about the future.
   const last = events[events.length - 1];
   if (last && !last.isOff) {
+    const lastReading = readings.value[readings.value.length - 1];
+    const measuredUntil = Math.max(
+      new Date(last.timestamp).getTime(),
+      lastReading ? new Date(lastReading.timestamp).getTime() : 0
+    );
     data.push({
-      x: xDomain.value.max,
+      x: measuredUntil,
       y: toDisplayUnit(last.setTemp, displayUnits.value)
     });
   }

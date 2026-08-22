@@ -164,7 +164,7 @@ describe('calculateRecommendation', () => {
 
   it('recommends holding when on track', () => {
     const result = calculateRecommendation({
-      currentOvenTemp: 225,
+      ovenBaseTemp: 225,
       scheduleVarianceMinutes: 2,
       scheduleStatus: 'on-track',
       settings,
@@ -180,7 +180,7 @@ describe('calculateRecommendation', () => {
 
   it('raises by one step when slightly late', () => {
     const result = calculateRecommendation({
-      currentOvenTemp: 225,
+      ovenBaseTemp: 225,
       scheduleVarianceMinutes: 10,
       scheduleStatus: 'late',
       settings,
@@ -196,7 +196,7 @@ describe('calculateRecommendation', () => {
 
   it('raises by the maximum step and flags urgency when very late', () => {
     const result = calculateRecommendation({
-      currentOvenTemp: 225,
+      ovenBaseTemp: 225,
       scheduleVarianceMinutes: 45,
       scheduleStatus: 'late',
       settings,
@@ -212,7 +212,7 @@ describe('calculateRecommendation', () => {
 
   it('holds with a warning when already at the maximum oven temperature', () => {
     const result = calculateRecommendation({
-      currentOvenTemp: 300,
+      ovenBaseTemp: 300,
       scheduleVarianceMinutes: 40,
       scheduleStatus: 'late',
       settings,
@@ -228,7 +228,7 @@ describe('calculateRecommendation', () => {
 
   it('lowers the oven when running early', () => {
     const result = calculateRecommendation({
-      currentOvenTemp: 250,
+      ovenBaseTemp: 250,
       scheduleVarianceMinutes: -20,
       scheduleStatus: 'early',
       settings,
@@ -243,7 +243,7 @@ describe('calculateRecommendation', () => {
 
   it('suggests pausing when the oven is already at the practical minimum', () => {
     const result = calculateRecommendation({
-      currentOvenTemp: 175,
+      ovenBaseTemp: 175,
       scheduleVarianceMinutes: -40,
       scheduleStatus: 'early',
       settings,
@@ -260,7 +260,7 @@ describe('calculateRecommendation', () => {
 
   it('suggests pausing instead of a low temperature when low temps are disabled', () => {
     const result = calculateRecommendation({
-      currentOvenTemp: 180,
+      ovenBaseTemp: 180,
       scheduleVarianceMinutes: -40,
       scheduleStatus: 'early',
       settings: { ...settings, enableLowTempRecommendations: false },
@@ -275,7 +275,7 @@ describe('calculateRecommendation', () => {
 
   it('falls back to a simple pause heuristic without prediction data', () => {
     const result = calculateRecommendation({
-      currentOvenTemp: 175,
+      ovenBaseTemp: 175,
       scheduleVarianceMinutes: -50,
       scheduleStatus: 'early',
       settings,
@@ -289,7 +289,7 @@ describe('calculateRecommendation', () => {
 
   it('returns no recommendation for an unknown schedule status', () => {
     const result = calculateRecommendation({
-      currentOvenTemp: 225,
+      ovenBaseTemp: 225,
       scheduleVarianceMinutes: null,
       scheduleStatus: 'unknown',
       settings,
@@ -303,11 +303,11 @@ describe('calculateRecommendation', () => {
 
   it('emits placeholders rather than pre-rendered Fahrenheit temperatures', () => {
     const cases = [
-      { scheduleStatus: 'on-track', scheduleVarianceMinutes: 0, currentOvenTemp: 225 },
-      { scheduleStatus: 'late', scheduleVarianceMinutes: 12, currentOvenTemp: 225 },
-      { scheduleStatus: 'late', scheduleVarianceMinutes: 45, currentOvenTemp: 225 },
-      { scheduleStatus: 'early', scheduleVarianceMinutes: -12, currentOvenTemp: 250 },
-      { scheduleStatus: 'early', scheduleVarianceMinutes: -45, currentOvenTemp: 200 }
+      { scheduleStatus: 'on-track', scheduleVarianceMinutes: 0, ovenBaseTemp: 225 },
+      { scheduleStatus: 'late', scheduleVarianceMinutes: 12, ovenBaseTemp: 225 },
+      { scheduleStatus: 'late', scheduleVarianceMinutes: 45, ovenBaseTemp: 225 },
+      { scheduleStatus: 'early', scheduleVarianceMinutes: -12, ovenBaseTemp: 250 },
+      { scheduleStatus: 'early', scheduleVarianceMinutes: -45, ovenBaseTemp: 200 }
     ];
 
     for (const testCase of cases) {
@@ -335,7 +335,7 @@ describe('generateRecommendation', () => {
     return {
       readings: makeReadings([100, 108, 116]),
       ovenEvents: [makeOvenEvent()],
-      currentOvenTemp: 225,
+      ovenBaseTemp: 225,
       targetTemp: 125,
       desiredServeTime: '2024-01-01T20:00:00.000Z',
       scheduleVarianceMinutes: 0,
@@ -573,5 +573,109 @@ describe('analyzeOvenResponsiveness', () => {
     expect(result.segments).toHaveLength(2);
     expect(result.responsiveness).toBeGreaterThan(0);
     expect(result.descriptionType.type).toBe('high');
+  });
+});
+
+describe('oven-off regressions', () => {
+  const settings = createDefaultSettings();
+
+  /** Minutes before NOW, as an ISO string. */
+  function ago(minutes) {
+    return new Date(Date.parse(NOW) - minutes * 60000).toISOString();
+  }
+
+  /** Three readings spanning 90 minutes, climbing steadily. */
+  const readings = [
+    { id: 'a', temp: 100, timestamp: ago(90), deltaFromStart: 0, deltaFromPrevious: 0 },
+    { id: 'b', temp: 110, timestamp: ago(60), deltaFromStart: 10, deltaFromPrevious: 10 },
+    { id: 'c', temp: 120, timestamp: ago(30), deltaFromStart: 20, deltaFromPrevious: 10 }
+  ];
+
+  it('adjusts from the last temperature actually set, not the 0 of an off event', () => {
+    // The cook paused, then logged a fresh reading, and is running late. Before
+    // the fix this adjusted from currentOvenTemp (0), producing a 25°F set
+    // point that the Apply button wrote straight into the oven history.
+    const result = generateRecommendation({
+      readings,
+      ovenEvents: [
+        { id: 'o1', setTemp: 225, timestamp: ago(120), previousTemp: null, isOff: false },
+        { id: 'o2', setTemp: 0, timestamp: ago(45), previousTemp: 225, isOff: true }
+      ],
+      ovenBaseTemp: 225,
+      targetTemp: 200,
+      desiredServeTime: ago(-20),
+      scheduleVarianceMinutes: 25,
+      scheduleStatus: 'late',
+      confidence: { level: 'high', reason: 'good' },
+      settings,
+      predictedMinutesToTarget: 60,
+      currentRate: 20,
+      now: NOW
+    });
+
+    expect(result.action).toBe('raise');
+    expect(result.suggestedTemp).toBeGreaterThan(225);
+    expect(Number.isNaN(result.suggestedTemp)).toBe(false);
+  });
+
+  it('still asks for a reading when nothing has been logged since the pause', () => {
+    const result = generateRecommendation({
+      readings,
+      ovenEvents: [
+        { id: 'o1', setTemp: 225, timestamp: ago(120), previousTemp: null, isOff: false },
+        { id: 'o2', setTemp: 0, timestamp: ago(10), previousTemp: 225, isOff: true }
+      ],
+      ovenBaseTemp: 225,
+      targetTemp: 200,
+      desiredServeTime: ago(-20),
+      scheduleVarianceMinutes: 25,
+      scheduleStatus: 'late',
+      confidence: { level: 'high', reason: 'good' },
+      settings,
+      predictedMinutesToTarget: 60,
+      currentRate: 20,
+      now: NOW
+    });
+
+    expect(result.action).toBe('needs-reading');
+  });
+});
+
+describe('stale oven data is measured against an injected clock', () => {
+  const settings = createDefaultSettings();
+
+  const readings = [
+    { id: 'a', temp: 100, timestamp: '2024-01-01T16:00:00.000Z', deltaFromStart: 0, deltaFromPrevious: 0 },
+    { id: 'b', temp: 110, timestamp: '2024-01-01T16:45:00.000Z', deltaFromStart: 10, deltaFromPrevious: 10 },
+    { id: 'c', temp: 120, timestamp: '2024-01-01T17:30:00.000Z', deltaFromStart: 20, deltaFromPrevious: 10 }
+  ];
+  const ovenEvents = [
+    { id: 'o1', setTemp: 225, timestamp: '2024-01-01T15:55:00.000Z', previousTemp: null, isOff: false }
+  ];
+
+  function eligibilityAt(now) {
+    return checkRecommendationEligibility({
+      readings,
+      ovenEvents,
+      desiredServeTime: '2024-01-01T20:00:00.000Z',
+      settings,
+      confidence: { level: 'high', reason: 'good' },
+      now
+    });
+  }
+
+  it('passes while the oven reading is fresh', () => {
+    // 65 min after the oven event but the default threshold is 60... so use a
+    // deliberately close-in clock to prove the boundary is the clock, not luck.
+    expect(eligibilityAt('2024-01-01T16:30:00.000Z').canRecommend).toBe(true);
+  });
+
+  it('blocks once the same data has aged past the threshold', () => {
+    // Nothing about the session changed - only `now`. Before the fix this was
+    // read from the real clock inside a tick-free computed, so the block never
+    // appeared while the app sat idle.
+    const later = eligibilityAt('2024-01-01T18:00:00.000Z');
+    expect(later.canRecommend).toBe(false);
+    expect(later.blockerType).toBe('stale_oven_data');
   });
 });

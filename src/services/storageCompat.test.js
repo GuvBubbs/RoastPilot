@@ -211,6 +211,26 @@ describe('forward compatibility with a pre-redesign stored session', () => {
     expect(readings.value).toHaveLength(3);
   });
 
+  it('repairs a session whose oven events were stored out of order', () => {
+    // The tail of ovenEvents is "the current setting" for currentOvenTemp,
+    // lastActiveOvenTemp, isPaused, the chart's oven track and the
+    // responsiveness analysis. Readings were normalised on load; oven events
+    // were not, so a reversed list reported the wrong oven temperature.
+    const stored = legacySession();
+    stored.ovenEvents = [
+      { id: 'o2', setTemp: 275, timestamp: '2026-08-22T20:00:00.000Z', previousTemp: 200, isOff: false },
+      { id: 'o1', setTemp: 200, timestamp: '2026-08-22T18:00:00.000Z', previousTemp: null, isOff: false }
+    ];
+    localStorage.setItem(STORAGE_KEYS.CURRENT_SESSION, JSON.stringify(stored));
+
+    const { initialize, ovenEvents, currentOvenTemp } = freshSession();
+    initialize();
+
+    expect(ovenEvents.value.map((e) => e.id)).toEqual(['o1', 'o2']);
+    expect(currentOvenTemp.value).toBe(275);
+    expect(ovenEvents.value.map((e) => e.previousTemp)).toEqual([null, 200]);
+  });
+
   it('survives a stored session carrying keys this build does not know', () => {
     const stored = legacySession();
     stored.config.someFutureField = 'ignore me';

@@ -1,36 +1,45 @@
 import { computed } from 'vue';
 import { useSession } from './useSession.js';
 import { useCalculations } from './useCalculations.js';
-import { generateRecommendation, analyzeOvenResponsiveness } from '../services/recommendationService.js';
+import { useRefreshTimer } from './useRefreshTimer.js';
+import { generateRecommendation, analyzeOvenResponsiveness, buildRecommendationResult } from '../services/recommendationService.js';
 import { toDisplayUnit, formatTemperature } from '../utils/temperatureUtils.js';
 
 export function useRecommendations() {
   const { readings, ovenEvents, currentOvenTemp, lastActiveOvenTemp, config, settings, displayUnits } = useSession();
   const { scheduleVariance, scheduleStatus, confidence, predictedMinutesToTarget, currentRateRaw } = useCalculations();
   
+  // The eligibility gate ages the last oven event against the clock. Without a
+  // tick this computed never re-ran, so "your oven setting is stale" only fired
+  // if some unrelated mutation happened to invalidate it - meanwhile the status
+  // band's oven chip, which IS tick-driven, showed the stale warning. The two
+  // bands contradicted each other on screen.
+  const { tick } = useRefreshTimer(30000);
+  
   /**
    * Raw recommendation result (internal units)
    */
   const rawRecommendation = computed(() => {
+    tick.value; // re-read the clock on each tick
+    
     if (!config.value || currentOvenTemp.value === null) {
-      return {
-        action: 'none',
+      // Through the shared builder, so this branch emits the same key set as
+      // every other - it is the one path that used to hand-roll its object and
+      // silently omit severity, alternativeMessage and ovenOffMinutes.
+      return buildRecommendationResult({
         canRecommend: false,
         blockerReason: 'No active session',
-        blockerType: 'no_session',
-        suggestedTemp: null,
-        changeAmount: null,
-        message: null,
-        reasoning: null,
-        latestReadingTemp: null,
-        progress: null
-      };
+        blockerType: 'no_session'
+      });
     }
     
     return generateRecommendation({
       readings: readings.value,
       ovenEvents: ovenEvents.value,
-      currentOvenTemp: currentOvenTemp.value,
+      // The temperature to adjust FROM. Not currentOvenTemp, which is 0 while
+      // the oven is off - "0 + 25" produced a 25°F set point the Apply button
+      // then wrote into the oven history.
+      ovenBaseTemp: lastActiveOvenTemp.value,
       targetTemp: config.value.targetTemp,
       desiredServeTime: config.value.desiredServeTime,
       scheduleVarianceMinutes: scheduleVariance.value,
@@ -38,7 +47,8 @@ export function useRecommendations() {
       confidence: confidence.value,
       settings: settings.value,
       predictedMinutesToTarget: predictedMinutesToTarget.value,
-      currentRate: currentRateRaw.value
+      currentRate: currentRateRaw.value,
+      now: new Date().toISOString()
     });
   });
   

@@ -221,7 +221,16 @@ const ovenSetMinutesAgo = computed(() => {
   return minutesBetween(ovenSetAt.value, new Date().toISOString());
 });
 
+/** The oven is off, per its own last logged event - not per a 0 temperature. */
+const isOvenOff = computed(() => {
+  const events = ovenEvents.value;
+  return events.length > 0 && events[events.length - 1].isOff === true;
+});
+
 const isOvenStale = computed(() => {
+  // An off oven is not stale data - it is a deliberate state, and the
+  // recommendation service skips its own stale check for the same reason.
+  if (isOvenOff.value) return false;
   if (currentOvenTemp.value === null) return true;
   const minutes = ovenSetMinutesAgo.value;
   if (minutes === null) return true;
@@ -235,6 +244,9 @@ const showOvenChip = computed(() => Boolean(config.value));
  * because the age is the evidence for the warning.
  */
 const ovenValueText = computed(() => {
+  // currentOvenTemp is 0 while the oven is off, which read as "Oven 0°F" - and
+  // as "-17.8°C" for a Celsius cook.
+  if (isOvenOff.value) return 'off';
   if (currentOvenTemp.value === null) return 'not set';
   const temp = formatTemperature(currentOvenTemp.value, displayUnits.value);
   if (!isOvenStale.value || ovenSetMinutesAgo.value === null) return temp;

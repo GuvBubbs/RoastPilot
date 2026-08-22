@@ -18,7 +18,7 @@
         </button>
         <button
           type="button"
-          class="tap flex-1 min-w-0 rounded-xl px-4 text-[15px] font-semibold text-white transition-colors duration-150"
+          class="tap flex-1 rounded-xl px-4 text-[15px] font-semibold text-white transition-colors duration-150"
           :class="confirmClass"
           @click="handleConfirm"
         >
