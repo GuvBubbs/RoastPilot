@@ -353,13 +353,28 @@ describe('useSession oven-event invariants', () => {
   });
 
   it('leaves the opening event with no predecessor when startSession logged it', () => {
-    session.endSession();
-    session.startSession({ targetTemp: 200, units: 'F', initialOvenTemp: 200 });
-    // The opening event exists; a later mutation must not rewrite its origin.
-    session.addOvenEvent(225, at(10));
+    // The opening event is stamped with `new Date()`, and every other event
+    // here is stamped from at(), whose base day is fixed. Left to the real
+    // clock this test asserts on whichever side of at(10) today happens to
+    // fall - it passed for months and then failed on 2026-08-22, when the
+    // fixture day WAS today and the opening event sorted second.
+    //
+    // Date only: the composable's autosave debounce is a real setTimeout and
+    // faking it here would leave a pending write for the next test.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date(at(9)));
+    try {
+      session.endSession();
+      session.startSession({ targetTemp: 200, units: 'F', initialOvenTemp: 200 });
+      // The opening event exists; a later mutation must not rewrite its origin.
+      session.addOvenEvent(225, at(10));
 
-    expect(session.ovenEvents.value[0].previousTemp).toBeNull();
-    expect(session.ovenEvents.value[0].setTemp).toBe(200);
+      expect(session.ovenEvents.value.map(e => e.setTemp)).toEqual([200, 225]);
+      expect(session.ovenEvents.value[0].previousTemp).toBeNull();
+      expect(session.ovenEvents.value[0].setTemp).toBe(200);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

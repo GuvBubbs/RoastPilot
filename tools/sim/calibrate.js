@@ -10,11 +10,23 @@
  */
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { resolve } from 'node:path';
 import { createMeatModel } from './meatModel.js';
 
-const DEFAULT_EXPORT = fileURLToPath(
-  new URL('../../Docs/Reference/roast-session-2026-08-22.json', import.meta.url)
-);
+/**
+ * Vitest rewrites import.meta.url to a non-file scheme, so fileURLToPath throws
+ * there - and this module is imported by calibrate.test.js. Same fallback as
+ * report.js: the accurate route first, then the repo root, which is the working
+ * directory for every command that reaches this file.
+ */
+const DEFAULT_EXPORT = (() => {
+  const relative = '../../Docs/Reference/roast-session-2026-08-22.json';
+  try {
+    return fileURLToPath(new URL(relative, import.meta.url));
+  } catch {
+    return resolve(process.cwd(), 'Docs/Reference/roast-session-2026-08-22.json');
+  }
+})();
 
 const C = (f) => Math.round(((f - 32) * 5 / 9) * 100) / 100;
 

@@ -10,6 +10,12 @@
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { stateBudget, overshoot, blockedMinutes, scoreOutcome } from './score.js';
+
+// Re-exported: these used to live here, and the transcripts are not the only
+// caller any more - the invariants score an outcome too, and the two must not
+// derive the same number twice. See score.js.
+export { stateBudget, overshoot };
 
 /**
  * Vitest rewrites import.meta.url to a non-file scheme, so fileURLToPath throws
@@ -56,42 +62,6 @@ function clock(iso, startISO) {
 
 /** Markdown table escape: a pipe in a message would break the row. */
 const cell = (text) => (text === null || text === undefined ? '' : String(text).replace(/\|/g, '\\|'));
-
-/**
- * How long the cook spent in each recommendation state.
- *
- * The single most useful number in a transcript turned out to be this one: a
- * state that is correct but occupies two hours of a three hour cook is a
- * different thing from the same state occupying five minutes, and reading it off
- * a 40-row table by eye does not work.
- *
- * Each row holds until the next one, so a row's weight is the gap after it.
- */
-export function stateBudget(rows) {
-  const spans = new Map();
-  for (let i = 0; i < rows.length; i++) {
-    const r = rows[i];
-    const until = rows[i + 1]?.atMin ?? r.atMin;
-    const minutes = until - r.atMin;
-    if (minutes <= 0) continue;
-    const label = r.canRecommend ? r.action : `blocked: ${r.blockerType ?? 'unknown'}`;
-    spans.set(label, (spans.get(label) ?? 0) + minutes);
-  }
-  return [...spans.entries()].sort((a, b) => b[1] - a[1]);
-}
-
-/** How far past target the meat went before the app noticed. */
-export function overshoot(outcome) {
-  const atTarget = outcome.rows.find((r) => r.action === 'at-target');
-  const trueHit = outcome.rows.find((r) => r.trueCoreF >= outcome.targetF);
-  return {
-    calledAtMin: atTarget?.atMin ?? null,
-    trueHitAtMin: trueHit?.atMin ?? null,
-    coreWhenCalledF: atTarget?.trueCoreF ?? outcome.finalCoreF,
-    overshootF: (atTarget?.trueCoreF ?? outcome.finalCoreF) - outcome.targetF,
-    blindMinutes: atTarget && trueHit ? atTarget.atMin - trueHit.atMin : null
-  };
-}
 
 export function transcript(outcome, evaluation) {
   const units = outcome.units;
@@ -238,9 +208,7 @@ export function writeSummary(results) {
   for (const { outcome, evaluation } of results) {
     const over = overshoot(outcome);
     const budget = new Map(stateBudget(outcome.rows));
-    const blocked = [...budget.entries()]
-      .filter(([label]) => label.startsWith('blocked:'))
-      .reduce((n, [, m]) => n + m, 0);
+    const blocked = blockedMinutes(outcome.rows);
     lines.push(`| [${outcome.scenario}](./${outcome.scenario}.md) | ` +
       `${outcome.endedAtMin} min | ` +
       `${over.overshootF > 0 ? `+${num(over.overshootF, 1)} F` : '--'} | ` +
@@ -284,36 +252,15 @@ export function writeSummary(results) {
 
   // Machine-readable twin, so a candidate change can be scored against the deck
   // rather than eyeballed. See tools/sim/README.md - "Testing a change".
+  // This file is also what `npm run sim:baseline` reads to re-record the
+  // baseline, so the numbers here and the numbers asserted are the same numbers.
   writeFileSync(join(ARTIFACT_DIR, 'summary.json'),
-    JSON.stringify({ scenarios: results.map(scoreOne) }, null, 2), 'utf8');
+    JSON.stringify({
+      scenarios: results.map(({ outcome, evaluation }) => ({
+        ...scoreOutcome(outcome),
+        errors: evaluation.errors.length
+      }))
+    }, null, 2), 'utf8');
 
   return path;
-}
-
-/** The numbers that decide whether a candidate change helped. */
-function scoreOne({ outcome, evaluation }) {
-  const over = overshoot(outcome);
-  const budget = new Map(stateBudget(outcome.rows));
-  const moves = outcome.applied.filter((a) => a.action === 'raise' || a.action === 'lower');
-  let reversals = 0;
-  for (let i = 1; i < moves.length; i++) {
-    if (moves[i].action !== moves[i - 1].action) reversals++;
-  }
-  const convergence = evaluation.findings.find((f) => f.check === 'convergence');
-  return {
-    scenario: outcome.scenario,
-    finished: outcome.finished,
-    reachedTarget: over.trueHitAtMin !== null,
-    endedAtMin: outcome.endedAtMin,
-    overshootF: over.overshootF,
-    blindMinutes: over.blindMinutes,
-    convergenceMinutes: convergence?.detail?.varianceMinutes ?? null,
-    blockedMinutes: [...budget.entries()]
-      .filter(([label]) => label.startsWith('blocked:'))
-      .reduce((n, [, m]) => n + m, 0),
-    settlingMinutes: budget.get('settling') ?? 0,
-    dialMoves: moves.length,
-    reversals,
-    errors: evaluation.errors.length
-  };
 }

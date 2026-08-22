@@ -1,15 +1,27 @@
 /**
  * Runs the whole deck, writes the artifacts, then asserts the invariants.
  *
- * Two entry points share this file:
- *   npm run sim       SIM_REPORT_ONLY=1 - write everything, assert nothing
- *   npm run sim:test  assert
+ *   npm run sim             run the deck and assert
+ *   npm run sim:baseline    run the deck, then re-record baseline.json from it
  *
- * One code path rather than two deliberately: a reporting run and an asserting
- * run that could drift apart would eventually disagree about what happened.
+ * There is one entry point and it asserts. There used to be a SIM_REPORT_ONLY
+ * mode that wrote every transcript and asserted nothing, and `npm run sim` -
+ * the obvious command, the one in the README, the one anybody actually types -
+ * was wired to it. A harness that cannot fail is not a harness.
  *
- * NOT part of the deploy gate. vitest.config.js excludes tools/**, so
- * `npm run test:run` - which .github/workflows/deploy.yml runs - never sees this.
+ * The transcripts and summary.json are still written on a failing run: the
+ * artifacts are written per scenario before anything is asserted, and the
+ * summary in afterAll runs either way. So a red run still leaves everything
+ * needed to see why, and `npm run sim:baseline` can still re-record from it.
+ *
+ * Known misses are absorbed by tools/sim/baseline.json rather than by silence -
+ * see baseline.js. A cook that is over tolerance but no worse than its recorded
+ * baseline is an advisory; one that regressed, or one that IMPROVED past its
+ * baseline, is an error.
+ *
+ * Runs on every pull request via .github/workflows/test.yml. Deliberately not
+ * in the same vitest project as the unit suite: vitest.config.js excludes
+ * tools/**, so `npm run test:run` never sees this file.
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { SCENARIOS } from './scenarios.js';
@@ -17,7 +29,6 @@ import { runScenario, loadAppModules } from './driver.js';
 import { evaluate } from './invariants.js';
 import { resetArtifacts, writeScenarioArtifacts, writeSummary, ARTIFACT_DIR } from './report.js';
 
-const REPORT_ONLY = process.env.SIM_REPORT_ONLY === '1';
 const ONLY = process.env.SIM_ONLY;
 
 /**
@@ -69,16 +80,9 @@ describe('simulated long cooks', () => {
       }
 
       const evaluation = evaluate(outcome);
+      // Before the assertion, so a failing cook still leaves its transcript.
       writeScenarioArtifacts(outcome, evaluation);
       results.push({ outcome, evaluation });
-
-      if (REPORT_ONLY) {
-        for (const f of evaluation.errors) {
-          // eslint-disable-next-line no-console
-          console.log(`  [${scenario.name}] ${f.check}: ${f.message}`);
-        }
-        return;
-      }
 
       const report = evaluation.errors
         .map((f) => `  ${f.check}: ${f.message}`)

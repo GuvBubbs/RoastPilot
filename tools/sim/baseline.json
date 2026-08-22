@@ -1,0 +1,83 @@
+{
+  "note": "Recorded misses the simulation harness asserts against. See tools/sim/baseline.js. Regenerate with `npm run sim:baseline` - and only in the same commit as the change that moved the numbers.",
+  "metrics": {
+    "convergenceAbs": {
+      "tolerance": 20,
+      "unit": "min"
+    },
+    "overshootF": {
+      "tolerance": 8,
+      "unit": "F"
+    },
+    "blindMinutes": {
+      "tolerance": 10,
+      "unit": "min"
+    },
+    "blockedMinutes": {
+      "tolerance": null,
+      "unit": "min"
+    },
+    "reversals": {
+      "tolerance": 2,
+      "unit": null
+    }
+  },
+  "scenarios": {
+    "01-real-replay": {
+      "convergenceAbs": 41,
+      "overshootF": 31.5,
+      "blindMinutes": 40,
+      "blockedMinutes": 70,
+      "reversals": 0
+    },
+    "02-baseline-on-track": {
+      "convergenceAbs": 20,
+      "overshootF": 17.9,
+      "blindMinutes": 35,
+      "blockedMinutes": 60,
+      "reversals": 1
+    },
+    "03-running-late": {
+      "convergenceAbs": 15,
+      "overshootF": 3.2,
+      "blindMinutes": 5,
+      "blockedMinutes": 125,
+      "reversals": 0
+    },
+    "04-running-very-early": {
+      "convergenceAbs": 110,
+      "overshootF": 17.7,
+      "blindMinutes": 25,
+      "blockedMinutes": 90,
+      "reversals": 0
+    },
+    "05-overnight-shoulder": {
+      "convergenceAbs": 295,
+      "overshootF": 11.7,
+      "blindMinutes": 40,
+      "blockedMinutes": 400,
+      "reversals": 0
+    },
+    "06-reading-gap": {
+      "convergenceAbs": 25,
+      "overshootF": 18.7,
+      "blindMinutes": 35,
+      "blockedMinutes": 80,
+      "reversals": 1
+    },
+    "07-pause-and-restart": {
+      "convergenceAbs": 60,
+      "overshootF": 1.8,
+      "blindMinutes": 0,
+      "blockedMinutes": 40,
+      "reversals": 1
+    },
+    "08-celsius-eager-dial": {
+      "convergenceAbs": 30,
+      "overshootF": 4.3,
+      "blindMinutes": 15,
+      "blockedMinutes": 45,
+      "reversals": 1
+    }
+  }
+}

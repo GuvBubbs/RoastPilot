@@ -8,6 +8,8 @@
  */
 import { celsiusToFahrenheit } from '../../src/utils/temperatureUtils.js';
 import { assessOvenChangeEffect } from '../../src/services/recommendationService.js';
+import { METRICS, METRIC_POLICY, judgeMetric, metricsOf } from './baseline.js';
+import { scoreOutcome } from './score.js';
 
 /** Convergence tolerance: |target reached - serve time|, in minutes. */
 export const CONVERGENCE_TOLERANCE_MIN = 20;
@@ -57,13 +59,22 @@ export function checkConvergence(outcome) {
 
   const variance = Math.round(minutesBetween(outcome.serveISO, hit.atISO));
   const label = variance >= 0 ? `${variance} min late` : `${-variance} min early`;
-  const severity = Math.abs(variance) <= CONVERGENCE_TOLERANCE_MIN
-    ? 'ok'
-    : outcome.advisoryConvergence ? 'advisory' : 'error';
 
-  out.push(finding('convergence', severity,
+  // Severity comes from the baseline policy, not from the tolerance alone.
+  // Five cooks on this deck miss by more than the tolerance today; asserting
+  // the tolerance raw would leave the harness permanently red, which is
+  // indistinguishable from not asserting. See tools/sim/baseline.js.
+  //
+  // `advisoryConvergence` still short-circuits ahead of it: that flag says the
+  // scenario is ABOUT something else (06 exists to have a reading gap), which
+  // is a different statement from "this number is a known miss".
+  const verdict = outcome.advisoryConvergence
+    ? { severity: 'advisory', message: 'convergence is advisory for this scenario' }
+    : judgeMetric(outcome.scenario, 'convergenceAbs', Math.abs(variance));
+
+  out.push(finding('convergence', verdict.severity,
     `target reached at ${hit.atMin} min, ${label} against the serve time ` +
-    `(tolerance ${CONVERGENCE_TOLERANCE_MIN} min)`,
+    `(tolerance ${CONVERGENCE_TOLERANCE_MIN} min) - ${verdict.message}`,
     { varianceMinutes: variance, atMin: hit.atMin }));
   return out;
 }
@@ -432,8 +443,44 @@ export function checkTerminalState(outcome) {
     { finished: outcome.finished, action: last.action, blockerType: last.blockerType })];
 }
 
+
+/**
+ * The acceptance metrics, each against its tolerance and its recorded baseline.
+ *
+ * Convergence has its own check above, which says more about *what* happened;
+ * this one covers the rest of the deck's numbers - overshoot, blind minutes,
+ * blocked minutes, reversals - so that every acceptance threshold in the plan
+ * is enforced by the harness rather than by someone reading SUMMARY.md.
+ *
+ * blockedMinutes is watched in both directions on purpose. A new eligibility
+ * gate is a new way to fall silent, and silence alone was measured inert:
+ * deferring advice took the deck from 485 to 1100 minutes of no advice at all
+ * and bought one minute of accuracy.
+ */
+export function checkAcceptanceMetrics(outcome) {
+  // Through metricsOf, not off the raw score: that is the function
+  // baseline.json is written with, so the number asserted here is bit-for-bit
+  // the number recorded there. Comparing a raw 17.900000000000006 against a
+  // stored 17.9 would put float dust into every message.
+  const metrics = metricsOf(scoreOutcome(outcome));
+  const out = [];
+
+  for (const metric of METRICS) {
+    // Convergence is reported by checkConvergence, which has the context to say
+    // whether the cook even reached target.
+    if (metric === 'convergenceAbs') continue;
+    const value = metrics[metric];
+    const verdict = judgeMetric(outcome.scenario, metric, value);
+    out.push(finding('acceptance', verdict.severity, verdict.message,
+      { metric, value, tolerance: METRIC_POLICY[metric].tolerance }));
+  }
+
+  return out;
+}
+
 export const CHECKS = [
   checkConvergence,
+  checkAcceptanceMetrics,
   checkNoFlapping,
   checkBounds,
   checkNoDoubleCharging,
