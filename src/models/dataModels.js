@@ -82,8 +82,11 @@ import { estimateCarryoverF, pullTempFor, servingTempFor } from '../services/car
  * @property {string|null} blockerReason - If canRecommend is false, why (display string)
  * @property {string|null} blockerType - Machine-readable blocker discriminant, e.g.
  *   'insufficient_readings' | 'insufficient_time' | 'no_oven_data' |
- *   'stale_reading' | 'stale_oven_data' | 'no_serve_time' | 'no_projection' |
- *   'insufficient_confidence' | 'bad_rate' | 'unstable_rate' | 'no_session'
+ *   'stale_reading' | 'no_serve_time' | 'no_projection' | 'no_session'
+ * @property {string|null} blockerCode - When blockerType is 'no_projection', the
+ *   specific cause: a dead-time gate code, 'poor-fit', 'unreachable',
+ *   'beyond-horizon'. The UI needs it because "raise the oven" is the right
+ *   suggestion for one of those and nonsense for the rest.
  * @property {{current: number, required: number, message: string}|null} progress -
  *   Progress toward clearing a countable blocker
  * @property {boolean} awaitingEffect - True while the last oven set-point change has
@@ -96,9 +99,6 @@ import { estimateCarryoverF, pullTempFor, servingTempFor } from '../services/car
 
 /**
  * @typedef {Object} AppSettings
- * @property {number} smoothingWindowReadings - Number of readings for rate smoothing (default 3)
- * @property {number} smoothingWindowMinutes - Alternative: time window for smoothing (default 30)
- * @property {'readings'|'time'} smoothingMode - Which smoothing approach to use
  * @property {number} onTrackThresholdMinutes - Minutes variance considered "on track" (default 10)
  * @property {number} recommendationStepF - Default temp change step in F (default 10)
  * @property {number} recommendationMaxStepF - Maximum single change in F (default 25)
@@ -288,9 +288,11 @@ export function migrateSessionToV2(session) {
  */
 export function createDefaultSettings() {
   return {
-    smoothingWindowReadings: 3,
-    smoothingWindowMinutes: 30,
-    smoothingMode: 'readings',
+    // smoothingWindowReadings, smoothingWindowMinutes and smoothingMode lived
+    // here. The first sized the rate fit's window; the other two were an
+    // alternative approach that was never implemented - `smoothingMode` had one
+    // reachable value. The thermal model fits every reading, so none of the three
+    // has anything to do.
     onTrackThresholdMinutes: 10,
     recommendationStepF: 10,
     recommendationMaxStepF: 25,

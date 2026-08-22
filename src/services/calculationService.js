@@ -1,52 +1,34 @@
 import { hoursBetween, minutesBetween, addMinutes } from '../utils/timeUtils.js';
 import { CALCULATION_THRESHOLDS } from '../constants/defaults.js';
+import {
+  fitThermalModel,
+  kPrior,
+  projectToTarget,
+  instantaneousRate,
+  assessDeadTimeGate,
+  confidenceFromFit,
+  MIN_READINGS_FOR_FIT,
+  WARM_START_THRESHOLD_F
+} from './thermalModel.js';
 
-/**
- * The readings a rate fit may legitimately use.
+/*
+ * `readingsForRateFit` lived here. It confined the rate fit to the current
+ * oven-state segment, because a line fitted across a pause reported the pause's
+ * flatness as the roast's heating rate - measured at 4.5 °F/hr against a true 10.
  *
- * A pause is not a slow patch of the same cook - it is a different experiment.
- * Fitting a line across one averages the flat (or falling) pause into the
- * heating rate: measured against the harness, a roast genuinely climbing at
- * 10 °F/hr reported 4.5 °F/hr because the fit window straddled a 40 minute
- * oven-off period. Everything downstream then inherits it - the ETA doubles,
- * the schedule says "late", and the app advises raising an oven that is fine.
- *
- * So the fit is confined to the current oven-state segment:
- *
- *  - oven currently OFF: readings from the off event onward. That measures
- *    cooling, which is the truth about what is happening now.
- *  - oven currently ON after a pause: readings from the restart onward.
- *  - no pause in this cook: everything.
- *
- * This can leave fewer than two readings, in which case there is no rate. That
- * is the correct answer and not a regression: immediately after a restart the
- * app genuinely has not measured the new state yet, and saying so is better than
- * reporting a rate that belongs to the wrong segment.
- *
- * @param {InternalReading[]} readings - Chronological
- * @param {OvenTempEvent[]} [ovenEvents] - Chronological
- * @returns {InternalReading[]} A suffix of `readings`
+ * The thermal model needs no such thing. It integrates the actual dial timeline,
+ * oven-off events included, so a pause is not an anomaly to be excluded from the
+ * data but a segment with the set point at ambient and a 45-minute cooling
+ * constant. The readings taken across it are evidence like any others.
  */
-export function readingsForRateFit(readings, ovenEvents = []) {
-  if (!ovenEvents || ovenEvents.length === 0) return readings;
-  
-  let lastOffIndex = -1;
-  for (let i = ovenEvents.length - 1; i >= 0; i--) {
-    if (ovenEvents[i].isOff === true) { lastOffIndex = i; break; }
-  }
-  if (lastOffIndex === -1) return readings;
-  
-  // The restart is the first non-off event after that pause. If there is none
-  // the oven is still off, and the pause itself is the current segment.
-  const restart = ovenEvents.slice(lastOffIndex + 1).find(e => e.isOff !== true);
-  const segmentStart = restart ? restart.timestamp : ovenEvents[lastOffIndex].timestamp;
-  
-  return readings.filter(r => r.timestamp >= segmentStart);
-}
 
 /**
- * Calculate the heating rate from a set of readings using linear regression
- * Returns rate in degrees Fahrenheit per hour
+ * Calculate the heating rate from a set of readings using LINEAR regression.
+ * Returns rate in degrees Fahrenheit per hour.
+ *
+ * Together with predictTimeToTarget below, this is the linear baseline the
+ * thermal model is scored against, not the app's projection. See the note on
+ * predictTimeToTarget.
  *
  * The slope and R² come back UNROUNDED. They used to be rounded to 2 and 3
  * decimal places here, which is a display concern applied to a value the whole
@@ -161,8 +143,18 @@ export function calculateReadingSpanMinutes(readings) {
 }
 
 /**
- * Predict time to reach target temperature
- * 
+ * Predict time to reach target temperature by LINEAR extrapolation.
+ *
+ * NOT the app's projection any more. computeSessionCalculations uses the two-lag
+ * thermal model in thermalModel.js, and there is deliberately no fallback from
+ * that to this one: measured against the deck, the line gave 17.5 minutes of mean
+ * absolute error against the curve's 3.0, and the fallback for "cannot fit" is
+ * silence rather than a worse answer wearing the same confidence.
+ *
+ * Retained because it is the BASELINE the harness scores the curve against - a
+ * comparison worth being able to re-run - and because the horizon and rate-floor
+ * guards it documents still apply to both.
+ *
  * The projection is anchored to the moment `currentTemp` was observed - the last
  * reading - not to "now". Anchoring to "now" would re-charge the projection for
  * the minutes the meat has already been climbing since that reading was taken.
@@ -181,6 +173,48 @@ export function calculateReadingSpanMinutes(readings) {
  * @returns {{minutes: number|null, minutesFromNow: number|null,
  *   targetTime: string|null, reason: string|null}}
  */
+/**
+ * Turn "minutes of heating still needed" into the three timings a display wants,
+ * refusing anything absurd.
+ *
+ * Shared by the thermal projection and by the linear one the harness scores it
+ * against, so the two cannot disagree about what counts as absurd.
+ *
+ * @param {number|null} minutesFromAnchor
+ * @param {string} anchorTime - When the reading it is measured from was taken
+ * @param {string} now
+ * @param {string|null} [refusal] - A reason already established upstream
+ * @returns {{minutes: number|null, minutesFromNow: number|null,
+ *   targetTime: string|null, reason: string|null}}
+ */
+export function guardProjection(minutesFromAnchor, anchorTime, now, refusal = null) {
+  const refuse = (reason) => ({
+    minutes: null, minutesFromNow: null, targetTime: null, reason
+  });
+
+  if (refusal) return refuse(refusal);
+  if (minutesFromAnchor === null || !Number.isFinite(minutesFromAnchor)) {
+    return refuse('no-projection');
+  }
+  if (minutesFromAnchor < 0) return refuse('no-projection');
+
+  const minutes = Math.round(minutesFromAnchor);
+
+  // The horizon. Even an exact model of the wrong roast produces a number, and a
+  // number on a clock face is indistinguishable from one the app stands behind.
+  if (minutes > CALCULATION_THRESHOLDS.MAX_PREDICTION_MINUTES) {
+    return refuse('beyond-horizon');
+  }
+
+  const targetTime = addMinutes(anchorTime, minutes);
+  return {
+    minutes,
+    minutesFromNow: Math.round(minutesBetween(now, targetTime)),
+    targetTime,
+    reason: null
+  };
+}
+
 export function predictTimeToTarget(
   currentTemp,
   targetTemp,
@@ -270,88 +304,22 @@ export function calculateScheduleVarianceWithThreshold(predictedTargetTime, desi
   };
 }
 
-/**
- * Assess confidence level of predictions based on data quality
- * 
- * @param {Object} params
- * @param {number} params.readingCount - Number of readings
- * @param {number} params.timeSpanMinutes - Time span of readings
- * @param {number} params.r2 - R² value from rate calculation
- * @param {number} params.rate - Calculated heating rate
- * @param {number} [params.fitReadings] - Readings the rate fit actually used; the
- *   smoothing window can be narrower than the full reading list
- * @returns {{level: 'high'|'medium'|'low'|'insufficient', reason: string}}
+/*
+ * `assessConfidence` lived here. It graded a projection on R², reading count and
+ * time span, and every one of those was the wrong question.
+ *
+ * R² says how much of the variance a fit explains, not whether the MODEL is
+ * right: a straight line through three points on an S-curve scores beautifully
+ * while being wrong by half an hour. Worse, over a three-point window R² cannot
+ * fall below about 0.75, so its "readings are fluctuating" branch - and the
+ * `unstable_rate` blocker that branch fed - had never once been reached.
+ *
+ * Replaced by confidenceFromFit in thermalModel.js, which grades the RMS residual
+ * of the curved fit in DEGREES against the probe's own noise floor. That is the
+ * only scale that means anything: a fit agreeing with the readings to within
+ * their noise cannot be improved on with this data, and one missing them by 12 °F
+ * is describing a different roast.
  */
-export function assessConfidence({ readingCount, timeSpanMinutes, r2, rate, fitReadings = readingCount }) {
-  // Insufficient data
-  if (readingCount < 2) {
-    return {
-      level: 'insufficient',
-      reason: 'Need at least 2 readings to calculate rate'
-    };
-  }
-  
-  if (readingCount < 3) {
-    return {
-      level: 'low',
-      reason: 'Only 2 readings available; predictions may be inaccurate'
-    };
-  }
-  
-  // Check for unreliable rate
-  if (rate !== null && rate <= CALCULATION_THRESHOLDS.MIN_RATE_FOR_PREDICTION) {
-    return {
-      level: 'low',
-      reason: 'Heating rate is very slow or negative; check thermometer placement'
-    };
-  }
-  
-  // Check time span
-  if (timeSpanMinutes < 15) {
-    return {
-      level: 'low',
-      reason: 'Readings span less than 15 minutes; wait for more data'
-    };
-  }
-  
-  // Check data fit quality
-  if (r2 < 0.7) {
-    return {
-      level: 'low',
-      reason: 'Temperature readings are fluctuating; predictions may be unstable'
-    };
-  }
-  
-  if (r2 < 0.9) {
-    return {
-      level: 'medium',
-      reason: 'Good data quality with moderate variation'
-    };
-  }
-  
-  // A fit over fewer than 3 points can't be told apart from noise - two points
-  // always fit a line perfectly, so a perfect R² there means nothing - and so it
-  // never earns high confidence however good the rest of the data looks.
-  if (fitReadings < 3) {
-    return {
-      level: 'medium',
-      reason: `Rate is fitted from only ${fitReadings} readings; treat the projection as approximate`
-    };
-  }
-  
-  // High confidence conditions
-  if (readingCount >= 4 && timeSpanMinutes >= 30 && r2 >= 0.9) {
-    return {
-      level: 'high',
-      reason: 'Strong data quality with consistent heating pattern'
-    };
-  }
-  
-  return {
-    level: 'medium',
-    reason: 'Adequate data for reasonable predictions'
-  };
-}
 
 /**
  * How close the roast is to coming out, as one graded verdict.
@@ -453,6 +421,10 @@ export function computeLatestPullTime(desiredServeTime, restMinutes = 0) {
  * @param {number} [params.restMinutes] - Rest the meat needs before it is
  *   served. The schedule is judged against the latest PULL time, which is the
  *   serve time less the rest.
+ * @param {number|null} [params.weightLb] - Feeds the prior on k. Worth about
+ *   0.1% of the fit once three readings exist; what it buys is that the fit
+ *   always returns, so the show/don't-show decision lives entirely in the gate.
+ * @param {string|null} [params.meatType] - Feeds the shape factor of that prior
  * @param {string} [params.now] - ISO timestamp to measure countdowns from
  * @returns {CalculationResult}
  */
@@ -463,6 +435,8 @@ export function computeSessionCalculations({
   desiredServeTime,
   settings,
   restMinutes = 0,
+  weightLb = null,
+  meatType = null,
   now = new Date().toISOString()
 }) {
   // Handle empty or insufficient readings
@@ -474,47 +448,165 @@ export function computeSessionCalculations({
       predictedMinutesFromNow: null,
       predictedTargetTime: null,
       projectionRefusedReason: 'no-readings',
+      projectionIfRestarted: null,
       latestPullTime: null,
       scheduleVarianceMinutes: null,
       scheduleStatus: 'unknown',
-      confidence: { level: 'insufficient', reason: 'No readings recorded yet' }
+      confidence: {
+        level: 'insufficient',
+        code: 'no-readings',
+        reason: 'No readings recorded yet'
+      }
     };
   }
   
   const lastReading = readings[readings.length - 1];
   const currentTemp = lastReading.temp;
   const timeSpan = calculateReadingSpanMinutes(readings);
-  
-  // Calculate rates. The fit is confined to the current oven-state segment: a
-  // window straddling a pause reports the pause's flatness as the roast's rate.
-  const fitReadings = readingsForRateFit(readings, ovenEvents);
-  const rateResult = calculateHeatingRate(fitReadings, settings.smoothingWindowReadings);
   const averageRate = calculateAverageRate(readings);
   
-  // Assess confidence
-  const confidence = assessConfidence({
-    readingCount: readings.length,
-    timeSpanMinutes: timeSpan,
-    r2: rateResult.r2,
-    rate: rateResult.rate,
-    fitReadings: rateResult.readings
+  /**
+   * The projection aims at the PULL, so it is judged against the latest moment
+   * the meat can come out and still be rested by the serve time - not against the
+   * serve time itself. Applied here rather than inside
+   * calculateScheduleVarianceWithThreshold, which is a clean comparison of two
+   * timestamps and has its own tests saying exactly that.
+   */
+  const latestPullTime = computeLatestPullTime(desiredServeTime, restMinutes);
+  
+  const refuse = (reason, confidence) => ({
+    currentRate: null,
+    averageRate,
+    predictedMinutesToTarget: null,
+    predictedMinutesFromNow: null,
+    predictedTargetTime: null,
+    projectionRefusedReason: reason,
+    projectionIfRestarted: null,
+    latestPullTime,
+    scheduleVarianceMinutes: null,
+    scheduleStatus: 'unknown',
+    confidence
   });
   
-  // Predict time to target, anchored to when the last reading was taken
-  const prediction = predictTimeToTarget(
-    currentTemp,
-    pullTempF,
-    rateResult.rate,
+  /**
+   * NO WINDOWING. Every reading goes into the fit.
+   *
+   * The old code fitted a line to the last `smoothingWindowReadings` and threw
+   * the rest away, which is right for a straight line and wrong for a curve: the
+   * early readings are the ones carrying the curvature that identifies k, and
+   * discarding them leaves the fit unable to tell an accelerating roast from a
+   * decelerating one. `smoothingWindowReadings` is now unused, and its settings
+   * control has been removed rather than left there to be changed with no effect.
+   */
+  /**
+   * With no oven history at all there is nothing to project THROUGH. The model
+   * drives the surface node from the dial, and an absent dial is not the same
+   * thing as an oven that is off - saying `unreachable` about a cook whose oven
+   * setting was simply never logged would be blaming the oven for the app's
+   * missing data.
+   */
+  if (!ovenEvents || ovenEvents.length === 0) {
+    return refuse('no-oven-history', {
+      level: 'insufficient',
+      code: 'no-oven-history',
+      reason: 'No oven setting has been recorded, so there is nothing to project from.'
+    });
+  }
+  
+  const fit = fitThermalModel({
+    readings,
+    ovenEvents,
+    prior: kPrior({ weightLb, meatType }),
+    nowISO: now
+  });
+  
+  if (!fit) {
+    return refuse('insufficient-readings', {
+      level: 'insufficient',
+      code: 'insufficient-readings',
+      reason: `Need at least ${MIN_READINGS_FOR_FIT} readings to project a finish time.`
+    });
+  }
+  
+  /**
+   * The dead-time gate. The single most important thing in this function.
+   *
+   * Before it, the first advice of every cook came from a curve fitted to the
+   * flat early limb of an S-curve, which is not a weak projection but one that is
+   * wrong in DIRECTION - so the app said "running late, raise the oven" and the
+   * roast then finished early. There is no fit clever enough to fix that, because
+   * the information is not in the readings yet. Silence is the correct answer.
+   */
+  const gate = assessDeadTimeGate({ readings, k: fit.k, pullTempF });
+  if (!gate.passed) {
+    return refuse(gate.code, {
+      level: 'insufficient',
+      code: gate.code,
+      reason: GATE_REASONS[gate.code] ?? 'Not enough of the cook has happened to project a finish time.',
+      detail: gate.detail
+    });
+  }
+  
+  const warmStart = readings[0].temp > WARM_START_THRESHOLD_F;
+  const confidence = confidenceFromFit({
+    rmsResidual: fit.rmsResidual,
+    dof: fit.dof,
+    warmStart
+  });
+  
+  // A fit the model itself does not believe is not a projection with a caveat.
+  if (confidence.level === 'insufficient') {
+    return refuse(confidence.code, confidence);
+  }
+  
+  /**
+   * The rate is the INSTANTANEOUS one at the anchor: k·(Ts - Tc)·60.
+   *
+   * Late in a cook this reads visibly lower than the least-squares slope over the
+   * same readings, because the core decelerates as it closes on the surface and a
+   * line through three points cannot know that. The difference is the
+   * improvement.
+   */
+  const currentRate = instantaneousRate(fit.anchorState, fit.k);
+  
+  const projected = projectToTarget({
+    state: fit.anchorState,
+    k: fit.k,
+    setPointF: fit.currentSetPointF,
+    targetF: pullTempF
+  });
+  
+  const prediction = guardProjection(
+    projected.minutes,
     lastReading.timestamp,
-    now
+    now,
+    projected.reason
   );
   
-  // The projection aims at the PULL, so it is judged against the latest moment
-  // the meat can come out and still be rested by the serve time - not against
-  // the serve time itself. Applied here rather than inside
-  // calculateScheduleVarianceWithThreshold, which is a clean comparison of two
-  // timestamps and has its own tests saying exactly that.
-  const latestPullTime = computeLatestPullTime(desiredServeTime, restMinutes);
+  /**
+   * While the oven is off there is no finish time, which is correct and also a
+   * visible regression: the ETA simply disappears. So the app also works out what
+   * WOULD happen once the oven is back on, at the last setting the cook used, and
+   * the pause UI can say "about 2 h 10 m once the oven is back on" instead of a
+   * dash.
+   */
+  let projectionIfRestarted = null;
+  if (fit.currentSetPointF === null || fit.currentSetPointF === undefined) {
+    const restartAt = lastActiveSetPoint(ovenEvents);
+    if (restartAt !== null) {
+      const restarted = projectToTarget({
+        state: fit.anchorState,
+        k: fit.k,
+        setPointF: restartAt,
+        targetF: pullTempF
+      });
+      projectionIfRestarted = {
+        minutes: restarted.minutes === null ? null : Math.round(restarted.minutes),
+        reason: restarted.reason,
+        atOvenTempF: restartAt
+      };
+    }
+  }
   
   // Calculate schedule variance if serve time is set
   let scheduleVariance = { varianceMinutes: null, status: 'unknown' };
@@ -527,20 +619,125 @@ export function computeSessionCalculations({
   }
   
   return {
-    currentRate: rateResult.rate,
+    currentRate,
     averageRate,
     predictedMinutesToTarget: prediction.minutes,
     predictedMinutesFromNow: prediction.minutesFromNow,
     predictedTargetTime: prediction.targetTime,
     // Why there is no projection, when there is none. Distinguishes "not enough
-    // data yet" from "the number came out absurd and was refused", which the UI
-    // and the eligibility gate need to say different things about.
+    // data yet" from "the oven cannot get there", which the UI and the
+    // eligibility gate need to say very different things about.
     projectionRefusedReason: prediction.reason ?? null,
+    projectionIfRestarted,
     latestPullTime,
     scheduleVarianceMinutes: scheduleVariance.varianceMinutes,
     scheduleStatus: scheduleVariance.status,
-    confidence
+    confidence,
+    // The fit itself, for the chart and for the harness. Not for the UI to
+    // interpret - `confidence` is the interpretation.
+    fit: {
+      k: fit.k,
+      prior: fit.prior,
+      rmsResidual: fit.rmsResidual,
+      dof: fit.dof,
+      residuals: fit.residuals,
+      anchorState: fit.anchorState,
+      steadyStateF: projected.steadyStateF
+    },
+    timeSpanMinutes: timeSpan,
+    currentTempF: currentTemp
   };
+}
+
+/**
+ * Re-project the schedule as if the oven were on a different set point.
+ *
+ * Used for exactly one thing: while a dial change is still unmeasured, the
+ * recommendation is computed from the set point the READINGS describe, and the
+ * variance it is judged against has to describe the same oven or the two
+ * disagree and the advice reverses. See scheduleUnderEvidence in
+ * useRecommendations for the sequence that produces.
+ *
+ * The fit is unchanged - it is the same readings and the same oven history, so
+ * the same k. Only the forward projection is re-run, under a different dial.
+ *
+ * @param {Object} params
+ * @param {Array} params.readings
+ * @param {Array} params.ovenEvents
+ * @param {number} params.setPointF - The oven temperature to project under
+ * @param {Object} params.config - Session config
+ * @param {Object} params.settings
+ * @param {string} params.now
+ * @returns {{scheduleVarianceMinutes: number|null, scheduleStatus: string,
+ *   predictedTargetTime: string|null}|null}
+ */
+export function projectScheduleUnderOven({
+  readings, ovenEvents, setPointF, config, settings, now
+}) {
+  if (!readings?.length || !Number.isFinite(setPointF)) return null;
+
+  const fit = fitThermalModel({
+    readings,
+    ovenEvents,
+    prior: kPrior({ weightLb: config.weight, meatType: config.meatType }),
+    nowISO: now
+  });
+  if (!fit) return null;
+  if (!assessDeadTimeGate({ readings, k: fit.k, pullTempF: config.pullTempF }).passed) {
+    return null;
+  }
+
+  const projected = projectToTarget({
+    state: fit.anchorState,
+    k: fit.k,
+    setPointF,
+    targetF: config.pullTempF
+  });
+  const anchor = readings[readings.length - 1].timestamp;
+  const prediction = guardProjection(projected.minutes, anchor, now, projected.reason);
+
+  const latestPullTime = computeLatestPullTime(
+    config.desiredServeTime,
+    config.restMinutes ?? 0
+  );
+  if (!latestPullTime || !prediction.targetTime) {
+    return {
+      scheduleVarianceMinutes: null,
+      scheduleStatus: 'unknown',
+      predictedTargetTime: prediction.targetTime
+    };
+  }
+
+  const variance = calculateScheduleVarianceWithThreshold(
+    prediction.targetTime,
+    latestPullTime,
+    settings.onTrackThresholdMinutes
+  );
+  return {
+    scheduleVarianceMinutes: variance.varianceMinutes,
+    scheduleStatus: variance.status,
+    predictedTargetTime: prediction.targetTime
+  };
+}
+
+/** What the app says when the dead-time gate holds it back. */
+const GATE_REASONS = {
+  'insufficient-readings': `Need at least ${MIN_READINGS_FOR_FIT} readings before a finish time means anything.`,
+  'insufficient-span': 'The readings are too close together to tell how fast this roast is heating.',
+  'insufficient-rise': 'The core has barely moved yet. Check the probe is seated in the thickest part.',
+  'insufficient-progress': 'Too early in the cook to project a finish time - the first stretch of a roast tells you almost nothing about the rest of it.'
+};
+
+/**
+ * The last temperature the oven was actually set to, ignoring off events.
+ *
+ * An off event stores 0, and restarting "at 0 °F" is the bug this avoids.
+ */
+function lastActiveSetPoint(ovenEvents) {
+  for (let i = ovenEvents.length - 1; i >= 0; i--) {
+    if (ovenEvents[i].isOff !== true) return ovenEvents[i].setTemp;
+  }
+  return null;
 }
 
 

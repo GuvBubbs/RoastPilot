@@ -416,12 +416,27 @@ export function checkSaneNumbers(outcome) {
     }
   }
 
-  // Between readings the projected finish time is a fixed point; only the
-  // distance to it may move. Anything else means the clock is feeding back into
-  // the projection.
+  /**
+   * Between readings the projected finish time is a fixed point; only the
+   * distance to it may move. Anything else means the clock is feeding back into
+   * the projection.
+   *
+   * The anchor resets on a change in the OVEN EVENT COUNT, not on `kind ===
+   * 'reading'`. The old rule was right for an oven-blind projection: only a new
+   * reading could move it, so a row of kind 'apply' was a row whose projection
+   * had better not have changed. The projection now integrates the actual dial
+   * timeline, so a dial change legitimately moves the finish time with no reading
+   * in between - which is the whole point of modelling the oven.
+   *
+   * Both resets are needed. A reading is new evidence; an oven change is a new
+   * future. Anything else that moves the number is the bug this check is for.
+   */
   let anchor = null;
+  let ovenEventCount = null;
   for (const r of outcome.rows) {
-    if (r.kind === 'reading') { anchor = null; }
+    const events = r.ovenHistory ? r.ovenHistory.length : ovenEventCount;
+    if (r.kind === 'reading' || events !== ovenEventCount) anchor = null;
+    ovenEventCount = events;
     if (!r.predictedTargetTime) { anchor = null; continue; }
     if (anchor === null) { anchor = r; continue; }
     if (r.predictedTargetTime !== anchor.predictedTargetTime) {

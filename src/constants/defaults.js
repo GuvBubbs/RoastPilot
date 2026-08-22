@@ -40,40 +40,28 @@ export const CALCULATION_THRESHOLDS = {
   /**
    * Minutes of remaining heating beyond which the projection is refused.
    *
-   * A linear extrapolation has no idea it has left the range of anything it has
-   * seen. Combined with the rate floor above this is belt and braces: the floor
-   * catches "the meat is not moving", this catches "the arithmetic came out
-   * absurd" - a target the oven cannot reach, a probe reading that dropped, a
-   * fit over a flat early limb.
+   * TWENTY-FOUR HOURS, and the reason it is that loose is that the model changed
+   * underneath it.
    *
-   * It turns the 55.7-DAY projection the harness found into a refusal.
+   * This bound was written for a straight-line projection, which had no notion of
+   * a temperature the roast asymptotes to and would therefore happily report 55.7
+   * DAYS for a stalled cook. Against that, a tight cap was the only defence, and
+   * measured against the deck the tightest workable value was 300 minutes.
    *
-   * Note this is heating time still NEEDED, not the length of the cook: a 12
-   * hour shoulder spends most of its life under this bound and only crosses it at
-   * the start, where a straight-line projection was worthless anyway.
+   * The curve does not need defending that way. It has a principled bound of its
+   * own: if the oven's steady state is at or below the target, there is no finish
+   * time and the app says `unreachable` - which is both correct and far more use
+   * than a number. And a fit that does not describe the readings is rejected on
+   * its residual before any projection is attempted.
    *
-   * FIVE hours, measured, not four. The plan specified 240 minutes; swept against
-   * the deck, 240 sits exactly on a cliff:
-   *
-   *     horizon   blocked minutes (7 short cooks)   invariant errors
-   *       240                770.5                        11
-   *       300                545.5                         5
-   *       360                545.5                         5
-   *       480                545.5                         5
-   *
-   * At 240 two cooks lose their first advice window by a few minutes, never
-   * suggest a dial move, and so never log an oven event - which lets the sole
-   * opening event age past ovenTempStaleMinutes, at which point stale_oven_data
-   * latches for the rest of the cook and the app says nothing at all. The gate
-   * that asks the cook to confirm their oven setting can only be cleared by an
-   * oven event, and the app's own advice was what generated them.
-   *
-   * Above 300 the number stops mattering: nothing in seven realistic cooks ever
-   * legitimately projects further than five hours ahead. So 300 is the smallest
-   * value clear of the cliff - and the cliff itself is the stale-oven latch,
-   * which Phase 4 deals with directly.
+   * So a tight cap stopped being a safety net and became a defect. A 9 lb pork
+   * shoulder to 195 °F genuinely takes eleven hours, and at 300 minutes the app
+   * refused to speak for 90 % of that cook - useless for exactly the low-and-slow
+   * cooking it exists for. What is left here is a backstop against arithmetic
+   * absurdity: no domestic roast takes more than a day, so a projection past that
+   * is a bug rather than a long cook.
    */
-  MAX_PREDICTION_MINUTES: 300
+  MAX_PREDICTION_MINUTES: 24 * 60
 };
 
 /**
@@ -100,6 +88,9 @@ export const RECOMMENDATION_MESSAGES = {
   // the core is still under 140 F - so pausing is not offered. There is nothing
   // to do but let it run.
   EARLY_NO_PAUSE_YET: 'Running early with the oven already at {minTemp}. Let it run - pausing the oven is not safe until the core is above 140°F.',
+  // Lowering further would put the oven so close to the target that the roast
+  // approaches it and never arrives.
+  EARLY_AT_TARGET_FLOOR: 'Running early, but {minTemp} is as low as the oven can go and still finish this roast. Hold there.',
   AT_TARGET: 'Target reached. Latest reading is {latestTemp}. Turn the oven off and rest the meat.',
   NEEDS_READING: 'Cooking is paused. Log a fresh reading to resume recommendations.',
   // The oven is off and a reading since the pause exists, so the app knows where
@@ -109,11 +100,19 @@ export const RECOMMENDATION_MESSAGES = {
   NEED_MORE_READINGS: 'Need at least {count} readings to make recommendations.',
   NEED_MORE_TIME: 'Need readings spanning at least {minutes} minutes.',
   NO_SERVE_TIME: 'Set a serve time in the cook plan to get timing recommendations.',
-  RATE_TOO_LOW: 'Heating rate is very slow or negative. Check thermometer placement.',
-  RATE_UNSTABLE: 'Temperature readings are fluctuating. Wait for more stable data.',
-  OVEN_TEMP_STALE: 'Oven temperature hasn\'t been updated recently. Please confirm current oven setting.',
-  // Outranks OVEN_TEMP_STALE: a dial setting is something the cook told the app,
-  // but a reading is the only thing the app knows about the meat.
+  /*
+   * RATE_TOO_LOW, RATE_UNSTABLE and OVEN_TEMP_STALE lived here.
+   *
+   * The first two were the blocker text for two branches keyed on substrings of a
+   * confidence reason, one of which (R² < 0.7 over a three-point window) could
+   * never fire. Both conditions are now detected from the RMS residual of the
+   * curved fit and refused upstream with a specific reason - see
+   * PROJECTION_REFUSAL_REASONS in recommendationService.js.
+   *
+   * OVEN_TEMP_STALE was the stale-oven BLOCKER, which latched: it could only be
+   * cleared by logging an oven event, and the app's own advice was what generated
+   * them. The age of the setting is still shown, as a chip in the status band.
+   */
   STALE_READING: 'The last reading is too old to advise from. Log a fresh one.',
   // Emitted while the last dial change has not yet shown up in the readings.
   // {ovenTemp} is the setting the user actually chose, which may differ from the

@@ -8,7 +8,10 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { defineComponent, h, nextTick } from 'vue';
 import { mount } from '@vue/test-utils';
 import { useSession } from './useSession.js';
-import { useReadingSchedule, spacingForRate, DEGREES_BETWEEN_READINGS, MIN_SPACING_MINUTES, FALLBACK_SPACING_MINUTES } from './useReadingSchedule.js';
+import {
+  useReadingSchedule, spacingForRate, DEGREES_BETWEEN_READINGS,
+  MIN_SPACING_MINUTES, FALLBACK_SPACING_MINUTES, SOON_MINUTES, OVERDUE_MINUTES
+} from './useReadingSchedule.js';
 import { __resetRefreshTimer } from './useRefreshTimer.js';
 
 const NOW = '2026-08-22T12:00:00.000Z';
@@ -147,18 +150,27 @@ describe('useReadingSchedule', () => {
     await startCook({ ages: [62, 32, 2], temps: [80, 95, 110] });
     expect(probe.schedule.status.value).toBe('scheduled');
 
-    // Due at last reading + 16 min spacing, i.e. NOW + 14.
-    await vi.advanceTimersByTimeAsync(12 * 60_000);
+    /**
+     * Advanced RELATIVE to the reported due time rather than to a hardcoded
+     * spacing. The spacing is derived from the heating rate, and the rate is now
+     * the instantaneous k·(Ts - Tc) of the fitted curve rather than a
+     * least-squares slope - so pinning a minute count here would be asserting the
+     * physics from inside a test about the urgency ramp.
+     */
+    const untilDue = probe.schedule.minutesUntilDue.value;
+    expect(untilDue).toBeGreaterThan(SOON_MINUTES);
+
+    await vi.advanceTimersByTimeAsync((untilDue - 2) * 60_000);
     await nextTick();
     expect(probe.schedule.status.value).toBe('soon');
     expect(probe.schedule.promptTone.value).toBe('text-ink-dim');
 
-    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    await vi.advanceTimersByTimeAsync(4 * 60_000);
     await nextTick();
     expect(probe.schedule.status.value).toBe('now');
     expect(probe.schedule.promptTone.value).toBe('text-ink');
 
-    await vi.advanceTimersByTimeAsync(13 * 60_000);
+    await vi.advanceTimersByTimeAsync((OVERDUE_MINUTES + 2) * 60_000);
     await nextTick();
     expect(probe.schedule.status.value).toBe('overdue');
     expect(probe.schedule.promptTone.value).toBe('text-late');

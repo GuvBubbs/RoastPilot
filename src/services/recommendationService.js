@@ -39,14 +39,52 @@ export function snapToDial(tempF, units, mode = 'nearest') {
  * waiting, so they do not share a string.
  */
 const PROJECTION_REFUSAL_REASONS = {
+  // --- the dead-time gate: not enough of the cook has happened yet ---------
+  'insufficient-readings': 'Need at least three readings before a finish time means anything.',
+  'insufficient-span': 'The readings are too close together to tell how fast this roast is heating.',
+  'insufficient-rise': 'The core has barely moved. Check the probe is seated in the thickest part.',
+  'insufficient-progress':
+    'Too early to project a finish time. The first stretch of a roast says almost ' +
+    'nothing about the rest of it - a reading or two more will settle it.',
+
+  // --- the fit itself ------------------------------------------------------
+  /**
+   * Two very different causes, and the app cannot tell them apart - so it names
+   * both rather than the one it happens to have thought of first.
+   *
+   * A probe that has shifted is the common one on a small cut. On a big one it is
+   * usually the stall: a pork shoulder giving up moisture through 150-165 °F
+   * genuinely does not follow a single heating curve, because evaporation is
+   * taking heat the model has no term for. The refusal is right either way; the
+   * old wording sent a cook to check a probe that was fine.
+   */
+  'poor-fit':
+    'These readings do not follow one heating curve - either the probe has ' +
+    'shifted, or the roast has hit a stall. Log another reading; timing advice ' +
+    'resumes once they line up again.',
+
+  /**
+   * The genuinely new one. A straight line always got to the target eventually,
+   * however low the oven was set - it had no notion of a temperature the roast
+   * asymptotes to. This is the answer a cook most needs, because no amount of
+   * waiting fixes it.
+   */
+  unreachable:
+    'The oven is not hot enough to reach your target. Raise it - waiting will ' +
+    'not get there.',
+
+  'beyond-horizon':
+    'The target is more than five hours away, which is too far out for this ' +
+    'projection to be worth acting on. Log another reading as it speeds up.',
+
+  // --- and the older arithmetic guards ------------------------------------
   'no-rate': 'Not enough usable readings to measure a heating rate yet.',
   'no-temp': 'A temperature is missing or unreadable. Check the latest reading.',
   'rate-too-low':
     'The core is barely moving, so there is nothing to project from. Check the ' +
     'probe is still seated and the oven is on.',
-  'beyond-horizon':
-    'At the current rate the target is more than five hours away - too far for ' +
-    'this projection to be worth acting on. Log another reading as it speeds up.',
+  'no-oven-history': 'No oven setting has been recorded. Log the temperature your oven is set to.',
+  'no-projection': 'There is no projection to advise from yet.',
   'no-readings': 'No readings recorded yet.',
   default: 'There is no projection to advise from yet.'
 };
@@ -198,23 +236,32 @@ export function checkRecommendationEligibility({
   }
   
   const lastOvenEvent = ovenEvents[ovenEvents.length - 1];
-  const ovenDataAge = minutesBetween(lastOvenEvent.timestamp, now);
-  
-  // Skip stale check if oven is currently off (we'll handle restart recommendations separately)
   const isOvenOff = lastOvenEvent.isOff === true;
   
-  if (!isOvenOff && ovenDataAge > settings.ovenTempStaleMinutes) {
-    return {
-      canRecommend: false,
-      blockerReason: RECOMMENDATION_MESSAGES.OVEN_TEMP_STALE,
-      blockerType: 'stale_oven_data',
-      progress: {
-        current: Math.round(ovenDataAge),
-        required: settings.ovenTempStaleMinutes,
-        message: 'Please confirm your current oven setting'
-      }
-    };
-  }
+  /**
+   * THE STALE-OVEN BLOCKER IS GONE, and this is the note explaining why it was
+   * safe to remove now and not earlier.
+   *
+   * It was wrong in principle: an oven event that has not been touched for an
+   * hour means the cook has not changed the dial, which is normal and good. It
+   * also latched. The gate could only be cleared by logging an oven event, and
+   * the app's own advice was what generated them - so a cook where the app
+   * happened not to advise anything in the first hour went permanently silent,
+   * with a valid projection saying "50 min late" that it refused to mention.
+   *
+   * Measured on its own, removing it made things WORSE: eight dial moves, four
+   * reversals and a cook that never finished. It was suppressing an oscillation
+   * by accident. So it stayed until the things that actually stop the oscillation
+   * were in place - the dead-time gate, so the app is quiet until it has
+   * something to say; the hold-is-not-a-request fix in reconcileWithOvenChange;
+   * and the stale-READING gate, which withholds advice on the honest grounds
+   * that the app has not looked at the meat lately rather than that it has not
+   * been told about the oven lately.
+   *
+   * The age of the setting is still worth a glance, so it keeps its chip in the
+   * status band (StatusCards, `isOvenStale`). What it no longer does is withhold
+   * advice the app is otherwise ready to give.
+   */
   
   // Check for desired serve time (required for timing recommendations)
   if (!desiredServeTime) {
@@ -243,18 +290,22 @@ export function checkRecommendationEligibility({
       blockerReason: PROJECTION_REFUSAL_REASONS[projectionRefusedReason]
         ?? PROJECTION_REFUSAL_REASONS.default,
       blockerType: 'no_projection',
+      // The specific cause, so the UI can offer the right control - "raise the
+      // oven" for `unreachable` is a very different suggestion from "wait".
+      blockerCode: projectionRefusedReason,
       progress: null
     };
   }
   
-  // If the oven is off we have already established (in generateRecommendation) that a
-  // reading exists since the pause began, so let the recommendation through even though
-  // the heating rate measured across the pause will look slow or unstable.
-  //
-  // Note this short-circuits ahead of every confidence gate, which is why
-  // generateRecommendation narrows the ACTION set while paused - see the
-  // restart-only branch there. Left unconstrained, this branch happily returned
-  // "raise the oven to 225" about an oven that was switched off.
+  /**
+   * An off oven is not a data problem, so it is not blocked here.
+   *
+   * generateRecommendation now returns its restart-only advice BEFORE calling
+   * this function, so this branch is only reached by a direct caller. It is kept
+   * because the statement is still true - the rate measured across a pause is
+   * meaningless and there is no point blocking on it - and because a direct
+   * caller getting `canRecommend: false` for a paused oven would be wrong.
+   */
   if (isOvenOff) {
     return {
       canRecommend: true,
@@ -265,31 +316,32 @@ export function checkRecommendationEligibility({
     };
   }
   
-  // For normal recommendations (oven is on), check confidence level
+  /**
+   * The confidence gate, on a CODE rather than on a substring of the reason.
+   *
+   * This block used to read `confidence.reason.includes('slow or negative')` and
+   * `confidence.reason.includes('fluctuating')`, which made two prose fragments a
+   * de-facto API: no test covered the coupling, and any copy edit to a
+   * human-readable sentence would silently disable a blocker.
+   *
+   * One of those two branches was also permanently dead. It fired on R² < 0.7,
+   * and R² over a three-point window cannot fall below about 0.75 - so the
+   * `unstable_rate` blocker and the "readings are fluctuating" message had never
+   * once been reached. The equivalent condition IS detectable now, from the RMS
+   * residual of the curved fit in degrees, and the projection refuses on it
+   * upstream with code 'poor-fit' - which is why there is no branch for it here.
+   *
+   * `insufficient` now means the projection refused, and that has already been
+   * caught by the no_projection gate above with a reason specific to the cause.
+   * This is the belt to those braces, for a caller that supplies a confidence
+   * without a matching refusal.
+   */
   if (confidence.level === 'insufficient') {
     return {
       canRecommend: false,
       blockerReason: confidence.reason,
-      blockerType: 'insufficient_confidence',
-      progress: null
-    };
-  }
-  
-  // Check for problematic rate (only when oven is on)
-  if (confidence.level === 'low' && confidence.reason.includes('slow or negative')) {
-    return {
-      canRecommend: false,
-      blockerReason: RECOMMENDATION_MESSAGES.RATE_TOO_LOW,
-      blockerType: 'bad_rate',
-      progress: null
-    };
-  }
-  
-  if (confidence.level === 'low' && confidence.reason.includes('fluctuating')) {
-    return {
-      canRecommend: false,
-      blockerReason: RECOMMENDATION_MESSAGES.RATE_UNSTABLE,
-      blockerType: 'unstable_rate',
+      blockerType: 'no_projection',
+      blockerCode: confidence.code ?? null,
       progress: null
     };
   }
@@ -350,6 +402,15 @@ export function mayPauseCooking(latestCoreTempF, targetTempF) {
 
 /** Longest pause the app will ever suggest, in minutes. */
 export const MAX_OVEN_OFF_MINUTES = 20;
+
+/**
+ * How far above the pull temperature the oven must stay, in °F.
+ *
+ * The core asymptotes to the oven, so an oven at the pull temperature means the
+ * roast approaches it and never arrives. This is the headroom that keeps the last
+ * few degrees a matter of minutes rather than hours.
+ */
+export const MIN_OVEN_HEADROOM_F = 25;
 
 /**
  * How long to pause the cook for.
@@ -537,6 +598,44 @@ export function calculateRecommendation({
     
     // Snap to something the dial can actually be set to (see the raise branch)
     let suggestedTemp = snapToDial(ovenBaseTemp - changeAmount, displayUnits);
+    
+    /**
+     * Never suggest an oven the roast cannot finish in.
+     *
+     * The core asymptotes to the surface and the surface to the oven, so an oven
+     * set at or near the pull temperature means the roast approaches it and never
+     * arrives. Lowering into that region does not slow a roast down, it stops it.
+     *
+     * Found by the harness, and it cost a whole cook: a 9 lb shoulder heading for
+     * 195 °F, four hours in and running 254 minutes early, was told to lower the
+     * oven to 200 °F. It then spent seven more hours creeping toward 195 and
+     * finished 38 °F short.
+     *
+     * The margin matters as much as the bound. At exactly pull + 0 the finish time
+     * is infinite; the roast needs real headroom for the last few degrees to take
+     * minutes rather than hours.
+     */
+    if (Number.isFinite(targetTempF)) {
+      const floorForTarget = snapToDial(targetTempF + MIN_OVEN_HEADROOM_F, displayUnits, 'up');
+      if (suggestedTemp < floorForTarget) {
+        // Only if the dial is above that floor is there anything to lower TO.
+        if (ovenBaseTemp <= floorForTarget) {
+          return {
+            action: 'hold',
+            suggestedTemp: ovenBaseTemp,
+            changeAmount: 0,
+            message: RECOMMENDATION_MESSAGES.EARLY_AT_TARGET_FLOOR,
+            reasoning: `Running ${Math.round(absVariance)} minutes early, but the oven cannot go lower without stalling the roast: it needs to stay at least ${MIN_OVEN_HEADROOM_F}°F above your ${Math.round(targetTempF)}°F pull temperature to finish at all.`,
+            alternativeMessage: null,
+            ovenOffMinutes: null,
+            practicalMinF: null,
+            minTempF: floorForTarget,
+            severity: 'info'
+          };
+        }
+        suggestedTemp = floorForTarget;
+      }
+    }
     if (ovenBaseTemp - suggestedTemp > recommendationMaxStepF) {
       suggestedTemp = snapToDial(ovenBaseTemp - recommendationMaxStepF, displayUnits, 'up');
     }
@@ -980,6 +1079,33 @@ export function generateRecommendation({
     });
   }
   
+  /**
+   * The oven is off, and a reading since the pause exists (the branch above
+   * guarantees it). Restarting it is the only advice that means anything.
+   *
+   * AHEAD OF THE ELIGIBILITY GATE, and that ordering was a bug when it was the
+   * other way round. The projection under an off oven is legitimately
+   * `unreachable` - a cooling roast never reaches its target - so the gate fired
+   * first and the panel told the cook "the oven is not hot enough to reach your
+   * target, raise it" about an oven that was switched off. True, useless, and
+   * confusing.
+   *
+   * It also sits ahead of the data-quality gates on purpose. Whether the readings
+   * span thirty minutes or three has no bearing on it: the oven is off, and it
+   * needs to be on.
+   */
+  if (isOvenOff) {
+    return buildRecommendationResult({
+      action: 'restart-oven',
+      suggestedTemp: ovenBaseTemp,
+      changeAmount: 0,
+      message: RECOMMENDATION_MESSAGES.RESTART_OVEN,
+      reasoning: 'The oven is off. Nothing else can be advised until it is back on: every projection-based suggestion assumes the oven is heating, and the measured rate across a pause describes cooling.',
+      latestReadingTemp: latestReading ? latestReading.temp : null,
+      severity: 'moderate'
+    });
+  }
+  
   // Then check eligibility
   const eligibility = checkRecommendationEligibility({
     readings,
@@ -997,25 +1123,6 @@ export function generateRecommendation({
       blockerReason: eligibility.blockerReason,
       blockerType: eligibility.blockerType,
       progress: eligibility.progress
-    });
-  }
-  
-  // The oven is off, and a reading since the pause exists (the branch above
-  // guarantees it). The eligibility gate lets this through ahead of every
-  // confidence check, which is right - the rate measured across a pause is
-  // meaningless and there is no point blocking on it - but it left the ACTION
-  // unconstrained, so the projection-based branches ran as normal and the app
-  // said "raise the oven to 225" about an oven that was switched off. The cook's
-  // only real option here is to restart it.
-  if (isOvenOff) {
-    return buildRecommendationResult({
-      action: 'restart-oven',
-      suggestedTemp: ovenBaseTemp,
-      changeAmount: 0,
-      message: RECOMMENDATION_MESSAGES.RESTART_OVEN,
-      reasoning: 'The oven is off. Nothing else can be advised until it is back on: every projection-based suggestion assumes the oven is heating, and the measured rate across a pause describes cooling.',
-      latestReadingTemp: latestReading ? latestReading.temp : null,
-      severity: 'moderate'
     });
   }
   

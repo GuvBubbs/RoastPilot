@@ -1,0 +1,102 @@
+{
+  "name": "02-cylinder-3lb-250F",
+  "what": "A small, fast roast. The fitted k is four times the 6 lb case, so it tests that the weight prior does not anchor the answer.",
+  "family": "1-D conduction, cylinder",
+  "adversarial": false,
+  "weightLb": 3,
+  "pullTempF": 130,
+  "trueHitMin": 36,
+  "readings": [
+    {
+      "temp": 45,
+      "timestamp": "2026-08-22T18:00:00.000Z"
+    },
+    {
+      "temp": 46,
+      "timestamp": "2026-08-22T18:08:00.000Z"
+    },
+    {
+      "temp": 62.2,
+      "timestamp": "2026-08-22T18:16:00.000Z"
+    },
+    {
+      "temp": 90.7,
+      "timestamp": "2026-08-22T18:24:00.000Z"
+    },
+    {
+      "temp": 119.4,
+      "timestamp": "2026-08-22T18:32:00.000Z"
+    },
+    {
+      "temp": 144.4,
+      "timestamp": "2026-08-22T18:40:00.000Z"
+    },
+    {
+      "temp": 164.9,
+      "timestamp": "2026-08-22T18:48:00.000Z"
+    },
+    {
+      "temp": 181.6,
+      "timestamp": "2026-08-22T18:56:00.000Z"
+    },
+    {
+      "temp": 195.1,
+      "timestamp": "2026-08-22T19:04:00.000Z"
+    },
+    {
+      "temp": 205.9,
+      "timestamp": "2026-08-22T19:12:00.000Z"
+    },
+    {
+      "temp": 214.6,
+      "timestamp": "2026-08-22T19:20:00.000Z"
+    },
+    {
+      "temp": 221.6,
+      "timestamp": "2026-08-22T19:28:00.000Z"
+    },
+    {
+      "temp": 227.2,
+      "timestamp": "2026-08-22T19:36:00.000Z"
+    },
+    {
+      "temp": 231.7,
+      "timestamp": "2026-08-22T19:44:00.000Z"
+    },
+    {
+      "temp": 235.3,
+      "timestamp": "2026-08-22T19:52:00.000Z"
+    },
+    {
+      "temp": 238.2,
+      "timestamp": "2026-08-22T20:00:00.000Z"
+    },
+    {
+      "temp": 240.5,
+      "timestamp": "2026-08-22T20:08:00.000Z"
+    },
+    {
+      "temp": 242.4,
+      "timestamp": "2026-08-22T20:16:00.000Z"
+    },
+    {
+      "temp": 243.9,
+      "timestamp": "2026-08-22T20:24:00.000Z"
+    },
+    {
+      "temp": 245.1,
+      "timestamp": "2026-08-22T20:32:00.000Z"
+    },
+    {
+      "temp": 246.1,
+      "timestamp": "2026-08-22T20:40:00.000Z"
+    }
+  ],
+  "ovenEvents": [
+    {
+      "setTemp": 250,
+      "timestamp": "2026-08-22T18:00:00.000Z",
+      "isOff": false
+    }
+  ]
+}

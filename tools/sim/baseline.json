@@ -29,83 +29,83 @@
   "scenarios": {
     "01-real-replay": {
       "convergenceAbs": 41,
-      "overshootF": 7.2,
+      "overshootF": 7,
       "blindMinutes": 5,
       "blockedMinutes": 45,
       "noAdviceMinutes": 45,
       "reversals": 0
     },
     "02-baseline-on-track": {
-      "convergenceAbs": 20,
-      "overshootF": 6.6,
-      "blindMinutes": 10,
+      "convergenceAbs": 10,
+      "overshootF": 2.8,
+      "blindMinutes": 5,
       "blockedMinutes": 40,
       "noAdviceMinutes": 40,
-      "reversals": 1
+      "reversals": 0
     },
     "03-running-late": {
-      "convergenceAbs": 10,
-      "overshootF": 0.6,
+      "convergenceAbs": 15,
+      "overshootF": 0.4,
       "blindMinutes": 0,
-      "blockedMinutes": 65,
-      "noAdviceMinutes": 65,
+      "blockedMinutes": 55,
+      "noAdviceMinutes": 55,
       "reversals": 0
     },
     "04-running-very-early": {
       "convergenceAbs": 110,
-      "overshootF": 2,
+      "overshootF": 0.5,
       "blindMinutes": 0,
-      "blockedMinutes": 30,
-      "noAdviceMinutes": 30,
-      "reversals": 1
+      "blockedMinutes": 40,
+      "noAdviceMinutes": 40,
+      "reversals": 0
     },
     "05-overnight-shoulder": {
-      "convergenceAbs": 55,
-      "overshootF": 3.6,
-      "blindMinutes": 15,
-      "blockedMinutes": 680,
-      "noAdviceMinutes": 680,
+      "convergenceAbs": 120,
+      "overshootF": 5.9,
+      "blindMinutes": 35,
+      "blockedMinutes": 515,
+      "noAdviceMinutes": 515,
       "reversals": 0
     },
     "06-reading-gap": {
+      "convergenceAbs": null,
+      "overshootF": -2.1,
+      "blindMinutes": null,
+      "blockedMinutes": 45,
+      "noAdviceMinutes": 45,
+      "reversals": 0
+    },
+    "07-pause-and-restart": {
       "convergenceAbs": 20,
-      "overshootF": 0.1,
+      "overshootF": 2.5,
+      "blindMinutes": 10,
+      "blockedMinutes": 40,
+      "noAdviceMinutes": 40,
+      "reversals": 0
+    },
+    "09-rest-and-carryover": {
+      "convergenceAbs": 5,
+      "overshootF": 1.6,
       "blindMinutes": 0,
       "blockedMinutes": 45,
       "noAdviceMinutes": 45,
-      "reversals": 1
-    },
-    "07-pause-and-restart": {
-      "convergenceAbs": 50,
-      "overshootF": 3.1,
-      "blindMinutes": 10,
-      "blockedMinutes": 55,
-      "noAdviceMinutes": 55,
-      "reversals": 1
-    },
-    "09-rest-and-carryover": {
-      "convergenceAbs": 10,
-      "overshootF": 3.7,
-      "blindMinutes": 5,
-      "blockedMinutes": 75,
-      "noAdviceMinutes": 75,
       "reversals": 0
     },
     "10-forgetful-cook": {
-      "convergenceAbs": 20,
-      "overshootF": 32,
-      "blindMinutes": 55,
-      "blockedMinutes": 145,
-      "noAdviceMinutes": 145,
+      "convergenceAbs": 10,
+      "overshootF": 21.1,
+      "blindMinutes": 45,
+      "blockedMinutes": 100,
+      "noAdviceMinutes": 100,
       "reversals": 0
     },
     "08-celsius-eager-dial": {
-      "convergenceAbs": 25,
-      "overshootF": 4.4,
-      "blindMinutes": 10,
-      "blockedMinutes": 85,
-      "noAdviceMinutes": 85,
-      "reversals": 1
+      "convergenceAbs": null,
+      "overshootF": -0.8,
+      "blindMinutes": null,
+      "blockedMinutes": 45,
+      "noAdviceMinutes": 45,
+      "reversals": 0
     }
   }
 }

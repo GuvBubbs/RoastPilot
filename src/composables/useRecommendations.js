@@ -2,7 +2,11 @@ import { computed } from 'vue';
 import { useSession } from './useSession.js';
 import { useCalculations } from './useCalculations.js';
 import { useRefreshTimer } from './useRefreshTimer.js';
-import { generateRecommendation, analyzeOvenResponsiveness, buildRecommendationResult } from '../services/recommendationService.js';
+import {
+  generateRecommendation, analyzeOvenResponsiveness, buildRecommendationResult,
+  assessOvenChangeEffect
+} from '../services/recommendationService.js';
+import { projectScheduleUnderOven } from '../services/calculationService.js';
 import { toDisplayUnit, formatTemperature } from '../utils/temperatureUtils.js';
 
 export function useRecommendations() {
@@ -11,6 +15,55 @@ export function useRecommendations() {
     scheduleVariance, scheduleStatus, confidence, predictedMinutesToTarget,
     currentRateRaw, projectionRefusedReason
   } = useCalculations();
+  
+  /**
+   * THE COLLISION, AND WHY THIS FUNCTION EXISTS.
+   *
+   * `generateRecommendation` feeds `calculateRecommendation` from
+   * `changeEffect.evidenceTemp` - the set point the READINGS describe - while a
+   * dial change is still unmeasured. That is right, and it is what stops the same
+   * step being charged for twice.
+   *
+   * It only worked because the projection was oven-blind. Now the projection
+   * integrates the actual dial timeline, so the variance handed in describes the
+   * oven as it IS while the recommendation is being computed for the oven as it
+   * was MEASURED. That mismatch is a reversal generator:
+   *
+   *   project under 250 -> on-track -> `hold` at evidenceTemp 200 ->
+   *   reconcileWithOvenChange sees a -50 gap -> "lower to 200",
+   *
+   * one reading after telling the cook to raise it. Both checkNoFlapping and
+   * checkNoDoubleCharging go red on it.
+   *
+   * So while a change is unmeasured, the variance is recomputed under the set
+   * point the readings describe. The recommendation is then internally
+   * consistent: a projection of the measured oven, judged against the deadline,
+   * advising from the measured oven.
+   */
+  const scheduleUnderEvidence = computed(() => {
+    tick.value;
+    if (!config.value || readings.value.length === 0) return null;
+
+    const effect = assessOvenChangeEffect({
+      readings: readings.value,
+      ovenEvents: ovenEvents.value,
+      settings: settings.value,
+      now: new Date().toISOString()
+    });
+
+    // Settled, or nothing to reconcile: the ordinary projection already
+    // describes the oven the readings describe.
+    if (effect.settled || effect.evidenceTemp === null) return null;
+
+    return projectScheduleUnderOven({
+      readings: readings.value,
+      ovenEvents: ovenEvents.value,
+      setPointF: effect.evidenceTemp,
+      config: config.value,
+      settings: settings.value,
+      now: new Date().toISOString()
+    });
+  });
   
   // The eligibility gate ages the last oven event against the clock. Without a
   // tick this computed never re-ran, so "your oven setting is stale" only fired
@@ -45,8 +98,14 @@ export function useRecommendations() {
       ovenBaseTemp: lastActiveOvenTemp.value,
       pullTempF: config.value.pullTempF,
       desiredServeTime: config.value.desiredServeTime,
-      scheduleVarianceMinutes: scheduleVariance.value,
-      scheduleStatus: scheduleStatus.value,
+      // Under the MEASURED set point while a change is unmeasured; see
+      // scheduleUnderEvidence.
+      scheduleVarianceMinutes: scheduleUnderEvidence.value
+        ? scheduleUnderEvidence.value.scheduleVarianceMinutes
+        : scheduleVariance.value,
+      scheduleStatus: scheduleUnderEvidence.value
+        ? scheduleUnderEvidence.value.scheduleStatus
+        : scheduleStatus.value,
       confidence: confidence.value,
       settings: settings.value,
       predictedMinutesToTarget: predictedMinutesToTarget.value,

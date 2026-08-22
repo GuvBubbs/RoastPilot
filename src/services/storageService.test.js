@@ -43,7 +43,7 @@ describe('storageService', () => {
 
   describe('settings persistence', () => {
     it('round-trips saved settings', () => {
-      const settings = { ...createDefaultSettings(), smoothingWindowReadings: 7, ovenTempMaxF: 275 };
+      const settings = { ...createDefaultSettings(), readingIntervalMinutes: 35, ovenTempMaxF: 275 };
 
       expect(storageService.saveSettings(settings)).toBe(true);
       expect(storageService.loadSettings()).toEqual(settings);
@@ -54,12 +54,12 @@ describe('storageService', () => {
     });
 
     it('merges partial stored settings over defaults, so keys added later are filled in', () => {
-      localStorage.setItem(SETTINGS_KEY, JSON.stringify({ smoothingWindowReadings: 9 }));
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify({ readingIntervalMinutes: 25 }));
 
       const loaded = storageService.loadSettings();
-      expect(loaded.smoothingWindowReadings).toBe(9);
+      expect(loaded.readingIntervalMinutes).toBe(25);
       expect(loaded.ovenTempMaxF).toBe(createDefaultSettings().ovenTempMaxF);
-      expect(loaded.smoothingMode).toBe(createDefaultSettings().smoothingMode);
+      expect(loaded.staleReadingMinutes).toBe(createDefaultSettings().staleReadingMinutes);
     });
 
     it('returns null for corrupt or non-object stored settings', () => {
@@ -75,12 +75,12 @@ describe('storageService', () => {
 
     it('keeps settings when the session is cleared', () => {
       storageService.saveSession(createSession());
-      storageService.saveSettings({ ...createDefaultSettings(), smoothingWindowMinutes: 45 });
+      storageService.saveSettings({ ...createDefaultSettings(), staleReadingMinutes: 75 });
 
       storageService.clearSession();
 
       expect(storageService.hasSession()).toBe(false);
-      expect(storageService.loadSettings().smoothingWindowMinutes).toBe(45);
+      expect(storageService.loadSettings().staleReadingMinutes).toBe(75);
     });
   });
 

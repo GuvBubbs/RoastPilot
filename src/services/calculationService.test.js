@@ -5,14 +5,14 @@ import {
   calculateReadingSpanMinutes,
   predictTimeToTarget,
   calculateScheduleVarianceWithThreshold,
-  assessConfidence,
   computeSessionCalculations,
-  readingsForRateFit,
   computeLatestPullTime,
   assessPullProgress,
   APPROACHING_BAND_F,
   OVERSHOOT_BAND_F
 } from './calculationService.js';
+import { advance, assessDeadTimeGate } from './thermalModel.js';
+import { minutesBetween } from '../utils/timeUtils.js';
 
 // Several suites pin the clock so that "now"-relative results are exact rather
 // than a moving target; this keeps a pinned clock from leaking between tests.
@@ -161,20 +161,20 @@ describe('predictTimeToTarget', () => {
   it('refuses a projection past the horizon rather than naming an hour', () => {
     // 155 F to climb at 0.11 F/hr - a shoulder deep in the stall with a probe
     // barely moving - used to return 55.7 DAYS, which formatTime rendered as an
-    // ordinary time of day. The rate floor catches this one; the horizon catches
-    // the same absurdity arrived at with a plausible rate.
+    // ordinary time of day. The rate floor catches this one.
     expect(predictTimeToTarget(48, 195, 0.11).minutes).toBeNull();
 
-    // 30 F at 5 F/hr is six hours of heating still needed. A straight line
-    // fitted to three readings has no business projecting that far.
-    const long = predictTimeToTarget(100, 130, 5);
-    expect(long.minutes).toBeNull();
-    expect(long.targetTime).toBeNull();
-    expect(long.reason).toBe('beyond-horizon');
+    // The horizon is now a backstop against arithmetic absurdity rather than a
+    // tight cap: the CURVE has `unreachable` for the case a tight cap was
+    // defending against, and at 300 minutes the app refused to speak for 90 % of
+    // an eleven-hour shoulder. A day is the bound; no domestic roast exceeds it.
+    const day = 24 * 60;
+    expect(predictTimeToTarget(0, day, 60).minutes).toBe(day);
+    expect(predictTimeToTarget(0, day + 1, 60).reason).toBe('beyond-horizon');
 
-    // 300 minutes exactly is inside the horizon; 301 is not.
-    expect(predictTimeToTarget(0, 300, 60).minutes).toBe(300);
-    expect(predictTimeToTarget(0, 301, 60).reason).toBe('beyond-horizon');
+    // Eleven hours of heating still needed is a real overnight shoulder, and it
+    // must NOT be refused.
+    expect(predictTimeToTarget(40, 195, 14).minutes).toBeGreaterThan(600);
   });
 
   it('refuses a non-finite rate instead of throwing out of the panel', () => {
@@ -244,106 +244,7 @@ describe('predictTimeToTarget', () => {
   });
 });
 
-describe('readingsForRateFit', () => {
-  /**
-   * A pause is not a slow patch of the same cook, it is a different experiment.
-   * This service had no oven-off coverage at all, which is how a rate fit that
-   * averaged a 40 minute pause into the heating rate went unnoticed - it
-   * reported 4.5 F/hr against a true 10.
-   */
-  const readings = [
-    { temp: 100, timestamp: '2024-01-01T12:00:00.000Z' }, // before the pause
-    { temp: 106, timestamp: '2024-01-01T12:30:00.000Z' }, // before the pause
-    { temp: 107, timestamp: '2024-01-01T13:30:00.000Z' }, // during the pause
-    { temp: 113, timestamp: '2024-01-01T14:00:00.000Z' }, // after the restart
-    { temp: 119, timestamp: '2024-01-01T14:30:00.000Z' }  // after the restart
-  ];
 
-  const on = (iso, setTemp = 200) => ({ setTemp, isOff: false, timestamp: iso });
-  const off = (iso) => ({ setTemp: 0, isOff: true, timestamp: iso });
-
-  it('returns everything when the oven never went off', () => {
-    expect(readingsForRateFit(readings, [on('2024-01-01T11:00:00.000Z')]))
-      .toEqual(readings);
-    expect(readingsForRateFit(readings, [])).toEqual(readings);
-    expect(readingsForRateFit(readings)).toEqual(readings);
-  });
-
-  it('keeps only the readings since the restart', () => {
-    const events = [
-      on('2024-01-01T11:00:00.000Z'),
-      off('2024-01-01T13:00:00.000Z'),
-      on('2024-01-01T13:45:00.000Z')
-    ];
-    expect(readingsForRateFit(readings, events).map(r => r.temp)).toEqual([113, 119]);
-  });
-
-  it('keeps only the readings since the pause began while the oven is still off', () => {
-    // Measuring cooling is the truth about what is happening now, and it is a
-    // different truth from the heating that preceded it.
-    const events = [on('2024-01-01T11:00:00.000Z'), off('2024-01-01T13:00:00.000Z')];
-    expect(readingsForRateFit(readings, events).map(r => r.temp)).toEqual([107, 113, 119]);
-  });
-
-  it('uses the most recent pause when there have been several', () => {
-    const events = [
-      on('2024-01-01T11:00:00.000Z'),
-      off('2024-01-01T12:10:00.000Z'),
-      on('2024-01-01T12:20:00.000Z'),
-      off('2024-01-01T13:00:00.000Z'),
-      on('2024-01-01T13:45:00.000Z')
-    ];
-    expect(readingsForRateFit(readings, events).map(r => r.temp)).toEqual([113, 119]);
-  });
-
-  it('may legitimately leave too few readings to fit', () => {
-    // Immediately after a restart the app has not measured the new state, and
-    // saying so beats reporting a rate that belongs to the previous one.
-    const events = [
-      on('2024-01-01T11:00:00.000Z'),
-      off('2024-01-01T13:00:00.000Z'),
-      on('2024-01-01T14:15:00.000Z')
-    ];
-    const kept = readingsForRateFit(readings, events);
-    expect(kept.map(r => r.temp)).toEqual([119]);
-    expect(calculateHeatingRate(kept).rate).toBeNull();
-  });
-});
-
-describe('the rate fit does not span a pause', () => {
-  it('reports the post-restart rate, not one averaged across the pause', () => {
-    // The measured case, reproduced: five readings, window of 5, with a flat
-    // 40 minute pause in the middle of the window.
-    const readings = [
-      { temp: 100, timestamp: '2024-01-01T12:00:00.000Z' },
-      { temp: 105, timestamp: '2024-01-01T12:30:00.000Z' },
-      { temp: 105, timestamp: '2024-01-01T13:10:00.000Z' },
-      { temp: 110, timestamp: '2024-01-01T13:40:00.000Z' },
-      { temp: 115, timestamp: '2024-01-01T14:10:00.000Z' }
-    ];
-    const ovenEvents = [
-      { setTemp: 200, isOff: false, timestamp: '2024-01-01T11:00:00.000Z' },
-      { setTemp: 0, isOff: true, timestamp: '2024-01-01T12:30:00.000Z' },
-      { setTemp: 200, isOff: false, timestamp: '2024-01-01T13:10:00.000Z' }
-    ];
-    const wide = { smoothingWindowReadings: 5, onTrackThresholdMinutes: 10 };
-
-    const straddling = computeSessionCalculations({
-      readings, pullTempF: 125, desiredServeTime: null, settings: wide,
-      now: '2024-01-01T14:10:00.000Z'
-    });
-    const segmented = computeSessionCalculations({
-      readings, ovenEvents, pullTempF: 125, desiredServeTime: null, settings: wide,
-      now: '2024-01-01T14:10:00.000Z'
-    });
-
-    // The pause drags the fitted slope well below the rate the roast is actually
-    // climbing at either side of it.
-    expect(straddling.currentRate).toBeLessThan(8);
-    // Confined to the post-restart segment, 105 -> 110 -> 115 over 60 minutes.
-    expect(segmented.currentRate).toBeCloseTo(10, 1);
-  });
-});
 
 describe('assessPullProgress', () => {
   /**
@@ -443,31 +344,14 @@ describe('computeLatestPullTime', () => {
       .toBe('2024-01-01T19:00:00.000Z');
   });
 
-  it('moves the schedule verdict by exactly the rest', () => {
-    const readings = [
-      { temp: 100, timestamp: '2024-01-01T12:00:00.000Z' },
-      { temp: 110, timestamp: '2024-01-01T12:30:00.000Z' },
-      { temp: 120, timestamp: '2024-01-01T13:00:00.000Z' }
-    ];
-    const settings = { smoothingWindowReadings: 3, onTrackThresholdMinutes: 10 };
-    const common = {
-      readings, pullTempF: 125,
-      // Rate is 20 F/hr, 5 F to go, so the pull lands at 13:15.
-      desiredServeTime: '2024-01-01T13:15:00.000Z',
-      settings, now: '2024-01-01T13:00:00.000Z'
-    };
-
-    const noRest = computeSessionCalculations(common);
-    expect(noRest.predictedTargetTime).toBe('2024-01-01T13:15:00.000Z');
-    expect(noRest.scheduleVarianceMinutes).toBe(0);
-    expect(noRest.scheduleStatus).toBe('on-track');
-
-    // With 30 minutes of rest the meat had to be out at 12:45, so the same
-    // projection is half an hour LATE and the app can say so.
-    const rested = computeSessionCalculations({ ...common, restMinutes: 30 });
-    expect(rested.latestPullTime).toBe('2024-01-01T12:45:00.000Z');
-    expect(rested.scheduleVarianceMinutes).toBe(30);
-    expect(rested.scheduleStatus).toBe('late');
+  it('shifts the deadline by exactly the rest, whatever the projection says', () => {
+    // The pure arithmetic. The end-to-end version - that the schedule VERDICT
+    // moves with it - is in computeSessionCalculations, against a curved cook.
+    const serve = '2024-01-01T19:00:00.000Z';
+    for (const rest of [0, 15, 20, 30, 45]) {
+      const pull = computeLatestPullTime(serve, rest);
+      expect(minutesBetween(pull, serve), `${rest} min rest`).toBe(rest);
+    }
   });
 });
 
@@ -522,133 +406,52 @@ describe('calculateScheduleVarianceWithThreshold', () => {
   });
 });
 
-describe('assessConfidence', () => {
-  it('returns insufficient when fewer than 2 readings', () => {
-    const result = assessConfidence({ 
-      readingCount: 1, 
-      timeSpanMinutes: 0, 
-      r2: 0, 
-      rate: null 
-    });
-    expect(result.level).toBe('insufficient');
-    expect(result.reason).toContain('at least 2 readings');
-  });
-  
-  it('returns low confidence with only 2 readings', () => {
-    const result = assessConfidence({ 
-      readingCount: 2, 
-      timeSpanMinutes: 30, 
-      r2: 0.95, 
-      rate: 5 
-    });
-    expect(result.level).toBe('low');
-    expect(result.reason).toContain('2 readings');
-  });
-  
-  it('returns low confidence for very slow or negative rate', () => {
-    const result = assessConfidence({ 
-      readingCount: 5, 
-      timeSpanMinutes: 60, 
-      r2: 0.95, 
-      rate: 0.05 // Below MIN_RATE_FOR_PREDICTION
-    });
-    expect(result.level).toBe('low');
-    expect(result.reason).toContain('slow or negative');
-  });
-  
-  it('returns low confidence for short time span', () => {
-    const result = assessConfidence({ 
-      readingCount: 5, 
-      timeSpanMinutes: 10, // Less than 15 minutes
-      r2: 0.95, 
-      rate: 5 
-    });
-    expect(result.level).toBe('low');
-    expect(result.reason).toContain('less than 15 minutes');
-  });
-  
-  it('returns low confidence for poor R² fit', () => {
-    const result = assessConfidence({ 
-      readingCount: 5, 
-      timeSpanMinutes: 60, 
-      r2: 0.5, // Below 0.7 threshold
-      rate: 5 
-    });
-    expect(result.level).toBe('low');
-    expect(result.reason).toContain('fluctuating');
-  });
-  
-  it('returns medium confidence for moderate R²', () => {
-    const result = assessConfidence({ 
-      readingCount: 5, 
-      timeSpanMinutes: 60, 
-      r2: 0.85, // Between 0.7 and 0.9
-      rate: 5 
-    });
-    expect(result.level).toBe('medium');
-  });
-  
-  it('returns high confidence for ideal conditions', () => {
-    const result = assessConfidence({ 
-      readingCount: 5, 
-      timeSpanMinutes: 60, 
-      r2: 0.95, 
-      rate: 5 
-    });
-    expect(result.level).toBe('high');
-    expect(result.reason).toContain('Strong data quality');
-  });
-  
-  it('caps confidence at medium when the fit spans fewer than 3 readings', () => {
-    const result = assessConfidence({
-      readingCount: 6,
-      timeSpanMinutes: 120,
-      r2: 1, // A 2-point fit is perfect by construction, so R² proves nothing
-      rate: 5,
-      fitReadings: 2
-    });
-    expect(result.level).toBe('medium');
-    expect(result.reason).toContain('only 2 readings');
-  });
-  
-  it('still reports low confidence for a thin fit over poor data', () => {
-    const result = assessConfidence({
-      readingCount: 6,
-      timeSpanMinutes: 5,
-      r2: 1,
-      rate: 5,
-      fitReadings: 2
-    });
-    expect(result.level).toBe('low');
-  });
-  
-  it('requires both count and time for high confidence', () => {
-    // Good R² but not enough readings
-    const result1 = assessConfidence({ 
-      readingCount: 3, 
-      timeSpanMinutes: 60, 
-      r2: 0.95, 
-      rate: 5 
-    });
-    expect(result1.level).not.toBe('high');
-    
-    // Good R² but not enough time
-    const result2 = assessConfidence({ 
-      readingCount: 5, 
-      timeSpanMinutes: 20, 
-      r2: 0.95, 
-      rate: 5 
-    });
-    expect(result2.level).not.toBe('high');
-  });
-});
 
 describe('computeSessionCalculations', () => {
-  const defaultSettings = {
-    smoothingWindowReadings: 3,
-    onTrackThresholdMinutes: 10
-  };
-  
+  /**
+   * WHAT THESE TESTS ARE AND ARE NOT.
+   *
+   * The fixtures below are generated by the app's own thermal model, so nothing
+   * here can tell you the PHYSICS is right - that would be fitting a model to its
+   * own output and calling the agreement evidence, which is exactly the
+   * circularity the old suite had (every projection fixture fitted a straight
+   * line to straight-line data, so no test would have failed if the model were
+   * replaced with any other internally consistent wrong one).
+   *
+   * What these tests cover is the PLUMBING and the POLICY: which timestamp the
+   * projection is anchored to, that a refusal refuses rather than degrading to a
+   * worse answer, that the gate holds, that the oven-off case says something
+   * useful. The physics is checked against an independent engine in
+   * tools/oracle - a 1-D radial conduction solve, a different model family
+   * entirely - and against the one real exported cook in
+   * tools/sim/calibrate.test.js.
+   */
+  const defaultSettings = { onTrackThresholdMinutes: 10 };
+
+  const BASE = Date.parse('2026-08-22T18:00:00.000Z');
+  const at = (minutes) => new Date(BASE + minutes * 60_000).toISOString();
+
+  /**
+   * A plausible cook, generated by walking the model forward. Reading times and
+   * an oven history in, core temperatures out.
+   */
+  function cook({ minutes, ovenF = 200, startF = 48, k = 0.011, noise = 0 }) {
+    let state = { ovenF, surfaceF: startF, coreF: startF };
+    let cursor = 0;
+    const readings = [{ temp: startF, timestamp: at(0) }];
+    for (const m of minutes.slice(1)) {
+      state = advance(state, { minutes: m - cursor, setPointF: ovenF }, k);
+      cursor = m;
+      readings.push({
+        temp: Math.round((state.coreF + noise * Math.sin(m)) * 10) / 10,
+        timestamp: at(m)
+      });
+    }
+    return readings;
+  }
+
+  const OVEN_200 = [{ setTemp: 200, timestamp: at(0), isOff: false }];
+
   it('handles empty readings gracefully', () => {
     const result = computeSessionCalculations({
       readings: [],
@@ -656,150 +459,336 @@ describe('computeSessionCalculations', () => {
       desiredServeTime: null,
       settings: defaultSettings
     });
-    
+
     expect(result.currentRate).toBeNull();
     expect(result.averageRate).toBeNull();
     expect(result.predictedMinutesToTarget).toBeNull();
     expect(result.predictedTargetTime).toBeNull();
     expect(result.scheduleStatus).toBe('unknown');
     expect(result.confidence.level).toBe('insufficient');
+    expect(result.confidence.code).toBe('no-readings');
   });
-  
-  it('computes all values with sufficient data', () => {
-    const readings = [
-      { temp: 100, timestamp: '2024-01-01T12:00:00Z' },
-      { temp: 105, timestamp: '2024-01-01T13:00:00Z' },
-      { temp: 110, timestamp: '2024-01-01T14:00:00Z' },
-      { temp: 115, timestamp: '2024-01-01T15:00:00Z' }
-    ];
-    
+
+  it('projects a curved cook and reports its fit', () => {
+    const readings = cook({ minutes: [0, 45, 90, 125] });
     const result = computeSessionCalculations({
       readings,
-      pullTempF: 125,
-      desiredServeTime: null,
-      settings: defaultSettings
-    });
-    
-    expect(result.currentRate).toBe(5); // 5°F/hr
-    expect(result.averageRate).toBe(5); // Also 5°F/hr for linear data
-    expect(result.predictedMinutesToTarget).toBe(120); // 10°F at 5°F/hr = 2 hours
-    expect(result.predictedTargetTime).toBeTruthy();
-    expect(result.confidence.level).toBe('high'); // 4 readings, 180 min span, perfect fit
-  });
-  
-  it('calculates schedule variance when serve time is set', () => {
-    const readings = [
-      { temp: 100, timestamp: '2024-01-01T12:00:00Z' },
-      { temp: 105, timestamp: '2024-01-01T13:00:00Z' },
-      { temp: 110, timestamp: '2024-01-01T14:00:00Z' },
-      { temp: 115, timestamp: '2024-01-01T15:00:00Z' }
-    ];
-    
-    const result = computeSessionCalculations({
-      readings,
-      pullTempF: 125,
-      desiredServeTime: '2024-01-01T16:00:00Z', // 1 hour after last reading
-      settings: defaultSettings
-    });
-    
-    // Current temp is 115, target is 125, rate is 5°F/hr
-    // Time to target: (125-115)/5 = 2 hours from 15:00 = 17:00
-    // Desired: 16:00, Predicted: 17:00 -> Running late by 1 hour
-    expect(result.scheduleStatus).toBe('late');
-    expect(result.scheduleVarianceMinutes).toBeGreaterThan(0); // Positive variance = running late
-  });
-  
-  it('anchors the ETA to the last reading rather than to now', () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date('2024-06-01T12:00:00.000Z'));
-    
-    // 100/105/110°F at 90/60/30 minutes ago fits 10°F/hr. The remaining 15°F is
-    // 90 more minutes of heating measured from the last reading, which was 30
-    // minutes ago - so the target lands 60 minutes from now, not 90.
-    const readings = [
-      { temp: 100, timestamp: '2024-06-01T10:30:00.000Z' },
-      { temp: 105, timestamp: '2024-06-01T11:00:00.000Z' },
-      { temp: 110, timestamp: '2024-06-01T11:30:00.000Z' }
-    ];
-    
-    const result = computeSessionCalculations({
-      readings,
-      pullTempF: 125,
-      desiredServeTime: '2024-06-01T14:30:00.000Z', // now + 150 minutes
-      settings: defaultSettings
-    });
-    
-    expect(result.currentRate).toBe(10);
-    expect(result.predictedMinutesToTarget).toBe(90);
-    expect(result.predictedMinutesFromNow).toBe(60);
-    expect(result.predictedTargetTime).toBe('2024-06-01T13:00:00.000Z');
-    expect(result.scheduleStatus).toBe('early');
-    expect(result.scheduleVarianceMinutes).toBe(-90);
-  });
-  
-  it('accepts an explicit now so the countdown is not read from the clock', () => {
-    const readings = [
-      { temp: 100, timestamp: '2024-06-01T10:30:00.000Z' },
-      { temp: 105, timestamp: '2024-06-01T11:00:00.000Z' },
-      { temp: 110, timestamp: '2024-06-01T11:30:00.000Z' }
-    ];
-    
-    const result = computeSessionCalculations({
-      readings,
+      ovenEvents: OVEN_200,
       pullTempF: 125,
       desiredServeTime: null,
       settings: defaultSettings,
-      now: '2024-06-01T12:45:00.000Z'
+      weightLb: 6,
+      now: at(125)
     });
-    
-    expect(result.predictedTargetTime).toBe('2024-06-01T13:00:00.000Z');
-    expect(result.predictedMinutesFromNow).toBe(15);
+
+    expect(result.confidence.level).toBe('high');
+    expect(result.confidence.code).toBe('good-fit');
+    // Recovers the constant it was generated with.
+    expect(result.fit.k).toBeCloseTo(0.011, 3);
+    expect(result.fit.rmsResidual).toBeLessThan(0.2);
+    expect(result.predictedMinutesToTarget).toBeGreaterThan(0);
+    expect(result.predictedTargetTime).toBeTruthy();
   });
-  
-  it('does not report high confidence when the window fits only 2 readings', () => {
-    const readings = [
-      { temp: 100, timestamp: '2024-01-01T12:00:00Z' },
-      { temp: 105, timestamp: '2024-01-01T13:00:00Z' },
-      { temp: 110, timestamp: '2024-01-01T14:00:00Z' },
-      { temp: 115, timestamp: '2024-01-01T15:00:00Z' },
-      { temp: 120, timestamp: '2024-01-01T16:00:00Z' }
-    ];
-    
+
+  it('reports the INSTANTANEOUS rate, which is not the least-squares slope', () => {
+    /**
+     * Late in a cook the core decelerates as it closes on the surface, and a line
+     * through the last readings cannot know that - it reports the average of the
+     * interval it spans, which is faster than the rate right now. That difference
+     * is the improvement, not a discrepancy.
+     */
+    const readings = cook({ minutes: [0, 60, 120, 180, 240] });
     const result = computeSessionCalculations({
       readings,
+      ovenEvents: OVEN_200,
+      pullTempF: 190,
+      desiredServeTime: null,
+      settings: defaultSettings,
+      weightLb: 6,
+      now: at(240)
+    });
+
+    const linearSlope = calculateHeatingRate(readings.slice(-3)).rate;
+    expect(result.currentRate).toBeLessThan(linearSlope);
+    expect(result.currentRate).toBeGreaterThan(0);
+  });
+
+  it('anchors the projection to the last reading, not to now', () => {
+    // The projection's own length is measured from the reading it was computed
+    // from; the countdown a display shows is measured from now. They differ by
+    // exactly the age of that reading.
+    const readings = cook({ minutes: [0, 45, 90] });
+    const result = computeSessionCalculations({
+      readings,
+      ovenEvents: OVEN_200,
       pullTempF: 125,
       desiredServeTime: null,
-      settings: { ...defaultSettings, smoothingWindowReadings: 2 },
-      now: '2024-01-01T16:00:00Z'
+      settings: defaultSettings,
+      weightLb: 6,
+      now: at(120) // 30 minutes after the last reading
     });
-    
-    // Plenty of readings and a flawless fit, but only 2 points went into it
-    expect(result.confidence.level).toBe('medium');
+
+    expect(result.predictedMinutesToTarget - result.predictedMinutesFromNow).toBe(30);
+    expect(result.predictedTargetTime)
+      .toBe(at(90 + result.predictedMinutesToTarget));
   });
-  
-  it('uses configured smoothing window', () => {
-    const readings = [
-      { temp: 100, timestamp: '2024-01-01T12:00:00Z' },
-      { temp: 102, timestamp: '2024-01-01T13:00:00Z' },
-      { temp: 104, timestamp: '2024-01-01T14:00:00Z' },
-      { temp: 110, timestamp: '2024-01-01T15:00:00Z' }, // Sudden jump
-      { temp: 116, timestamp: '2024-01-01T16:00:00Z' }
-    ];
-    
-    const customSettings = {
-      ...defaultSettings,
-      smoothingWindowReadings: 2 // Use only last 2 readings
+
+  it('does not move the predicted TIME as the clock advances', () => {
+    // The projected finish time is a fixed point between readings; only the
+    // distance to it moves. The harness asserts this too, because a clock feeding
+    // back into the projection is how an ETA starts drifting on its own.
+    const readings = cook({ minutes: [0, 45, 90] });
+    const params = {
+      readings, ovenEvents: OVEN_200, pullTempF: 125,
+      desiredServeTime: null, settings: defaultSettings, weightLb: 6
     };
-    
-    const result = computeSessionCalculations({
-      readings,
+
+    const early = computeSessionCalculations({ ...params, now: at(95) });
+    const later = computeSessionCalculations({ ...params, now: at(125) });
+
+    expect(later.predictedTargetTime).toBe(early.predictedTargetTime);
+    expect(later.predictedMinutesToTarget).toBe(early.predictedMinutesToTarget);
+    expect(later.predictedMinutesFromNow).toBe(early.predictedMinutesFromNow - 30);
+  });
+
+  it('judges the schedule against the pull deadline', () => {
+    const readings = cook({ minutes: [0, 45, 90] });
+    const params = {
+      readings, ovenEvents: OVEN_200, pullTempF: 125,
+      settings: defaultSettings, weightLb: 6, now: at(90)
+    };
+
+    const bare = computeSessionCalculations({ ...params, desiredServeTime: null });
+    const finish = Date.parse(bare.predictedTargetTime);
+
+    // A serve time exactly at the projected finish, with no rest, is on track.
+    const onTrack = computeSessionCalculations({
+      ...params, desiredServeTime: new Date(finish).toISOString(), restMinutes: 0
+    });
+    expect(onTrack.scheduleStatus).toBe('on-track');
+    expect(onTrack.scheduleVarianceMinutes).toBe(0);
+
+    // The same serve time with 40 minutes of rest means the meat had to be out
+    // 40 minutes earlier, so the same projection is late.
+    const late = computeSessionCalculations({
+      ...params, desiredServeTime: new Date(finish).toISOString(), restMinutes: 40
+    });
+    expect(late.scheduleStatus).toBe('late');
+    expect(late.scheduleVarianceMinutes).toBe(40);
+  });
+
+  describe('the dead-time gate', () => {
+    /**
+     * The single most important behaviour in this file. Before it, the first
+     * advice of every cook came from a fit to the flat early limb of an S-curve,
+     * which is not a weak projection but one wrong in DIRECTION - the app said
+     * "running late, raise the oven" and the roast finished early.
+     */
+    it('refuses with fewer than three readings', () => {
+      const result = computeSessionCalculations({
+        readings: cook({ minutes: [0, 45] }),
+        ovenEvents: OVEN_200, pullTempF: 125, desiredServeTime: null,
+        settings: defaultSettings, weightLb: 6, now: at(45)
+      });
+      expect(result.projectionRefusedReason).toBe('insufficient-readings');
+      expect(result.predictedTargetTime).toBeNull();
+      expect(result.currentRate).toBeNull();
+    });
+
+    it('refuses while the readings barely span any of the cook', () => {
+      const result = computeSessionCalculations({
+        readings: cook({ minutes: [0, 3, 6] }),
+        ovenEvents: OVEN_200, pullTempF: 125, desiredServeTime: null,
+        settings: defaultSettings, weightLb: 6, now: at(6)
+      });
+      expect(['insufficient-span', 'insufficient-rise', 'insufficient-progress'])
+        .toContain(result.projectionRefusedReason);
+    });
+
+    it('refuses while the core has barely moved', () => {
+      // A probe in the air, or one that fell out, gives a beautifully consistent
+      // flat line.
+      const flat = [
+        { temp: 48, timestamp: at(0) },
+        { temp: 48.4, timestamp: at(30) },
+        { temp: 48.9, timestamp: at(60) },
+        { temp: 49.2, timestamp: at(90) }
+      ];
+      const result = computeSessionCalculations({
+        readings: flat, ovenEvents: OVEN_200, pullTempF: 125,
+        desiredServeTime: null, settings: defaultSettings, weightLb: 6, now: at(90)
+      });
+      expect(result.projectionRefusedReason).toBe('insufficient-rise');
+    });
+
+    it('refuses while too little of the climb has happened', () => {
+      // 10 % of the way to a 195 °F target: the flattest part of the limb, where
+      // a fit says almost nothing about the rest.
+      const readings = cook({ minutes: [0, 20, 40], ovenF: 225 });
+      const result = computeSessionCalculations({
+        readings,
+        ovenEvents: [{ setTemp: 225, timestamp: at(0), isOff: false }],
+        pullTempF: 195, desiredServeTime: null,
+        settings: defaultSettings, weightLb: 9, meatType: 'Pork Shoulder', now: at(40)
+      });
+      expect(result.projectionRefusedReason).toBeTruthy();
+      expect(result.predictedTargetTime).toBeNull();
+    });
+
+    it('opens once enough of the cook has happened', () => {
+      const readings = cook({ minutes: [0, 45, 90, 130] });
+      const result = computeSessionCalculations({
+        readings, ovenEvents: OVEN_200, pullTempF: 125, desiredServeTime: null,
+        settings: defaultSettings, weightLb: 6, now: at(130)
+      });
+      expect(result.projectionRefusedReason).toBeNull();
+      expect(result.predictedTargetTime).toBeTruthy();
+    });
+
+    it('scales the span requirement to the roast, not to a fixed clock', () => {
+      // A quarter of the meat's own time constant. Fifteen minutes is plenty of a
+      // small roast's curvature and nothing at all of a large one's, so a fixed
+      // minute count is right for exactly one size of roast.
+      const small = assessDeadTimeGate({
+        readings: [
+          { temp: 48, timestamp: at(0) },
+          { temp: 70, timestamp: at(10) },
+          { temp: 95, timestamp: at(20) }
+        ],
+        k: 0.05, pullTempF: 125
+      });
+      const large = assessDeadTimeGate({
+        readings: [
+          { temp: 48, timestamp: at(0) },
+          { temp: 70, timestamp: at(10) },
+          { temp: 95, timestamp: at(20) }
+        ],
+        k: 0.004, pullTempF: 125
+      });
+      expect(small.passed).toBe(true);
+      expect(large.code).toBe('insufficient-span');
+    });
+  });
+
+  describe('refusals that are not about the data', () => {
+    it('says unreachable when the oven cannot get there', () => {
+      /**
+       * The genuinely new signal. A straight line always reached the target
+       * eventually - it had no notion of a temperature the roast asymptotes to -
+       * so `predictTimeToTarget(48, 195, 0.11)` used to return 55.7 DAYS, which
+       * the status panel rendered as an ordinary clock time.
+       */
+      const readings = cook({ minutes: [0, 45, 90, 130], ovenF: 175 });
+      const result = computeSessionCalculations({
+        readings,
+        ovenEvents: [{ setTemp: 175, timestamp: at(0), isOff: false }],
+        pullTempF: 195, desiredServeTime: null,
+        settings: defaultSettings, weightLb: 6, now: at(130)
+      });
+
+      expect(result.projectionRefusedReason).toBe('unreachable');
+      expect(result.predictedTargetTime).toBeNull();
+      expect(result.scheduleStatus).toBe('unknown');
+
+      /**
+       * The rate and the fit ARE reported here, and that distinction is the
+       * point. The app knows exactly how this roast heats - 20-odd °F/hr, k
+       * recovered to three places - and it is still climbing. What does not exist
+       * is a finish time, because the roast asymptotes below the target.
+       *
+       * A gate failure is the other kind of refusal: there, the fit is not
+       * trustworthy and the rate is withheld with it. Keeping the two apart is
+       * what lets the UI say "raise the oven" for one and "wait" for the other.
+       */
+      expect(result.currentRate).toBeGreaterThan(0);
+      expect(result.fit.k).toBeCloseTo(0.011, 3);
+    });
+
+    it('NEVER falls back to the straight line', () => {
+      // Measured against the deck, the line gave 17.5 minutes of mean absolute
+      // error against the curve's 3.0. The fallback for "cannot fit" is silence,
+      // not a worse answer wearing the same confidence.
+      const refusals = [
+        cook({ minutes: [0, 30] }),
+        [
+          { temp: 48, timestamp: at(0) },
+          { temp: 48.2, timestamp: at(40) },
+          { temp: 48.5, timestamp: at(80) }
+        ]
+      ];
+      for (const readings of refusals) {
+        const result = computeSessionCalculations({
+          readings, ovenEvents: OVEN_200, pullTempF: 125, desiredServeTime: null,
+          settings: defaultSettings, weightLb: 6, now: at(90)
+        });
+        expect(result.predictedMinutesToTarget).toBeNull();
+        expect(result.predictedTargetTime).toBeNull();
+        expect(result.currentRate).toBeNull();
+        expect(result.scheduleStatus).toBe('unknown');
+      }
+    });
+
+    it('flags a warm start rather than trusting it', () => {
+      /**
+       * `Ts(0) = Tc(0)` assumes the roast went in cold. A session begun mid-cook
+       * breaks it: the fit inflates k, projects too fast, and reports "early" -
+       * the OPPOSITE of the old failure direction, so nobody eyeballing the screen
+       * will recognise it as wrong. Not fixable by fitting the initial surface
+       * temperature too; that is not identifiable from three readings.
+       */
+      const readings = cook({ minutes: [0, 45, 90, 130], startF: 110 });
+      const result = computeSessionCalculations({
+        readings, ovenEvents: OVEN_200, pullTempF: 160, desiredServeTime: null,
+        settings: defaultSettings, weightLb: 6, now: at(130)
+      });
+
+      expect(result.confidence.code).toBe('warm-start');
+      expect(result.confidence.level).toBe('low');
+      // Still projects: a downgraded projection is more use than none, and the
+      // cook is told why.
+      expect(result.predictedTargetTime).toBeTruthy();
+    });
+  });
+
+  describe('while the oven is off', () => {
+    const paused = () => ({
+      readings: [
+        { temp: 48, timestamp: at(0) },
+        { temp: 74, timestamp: at(45) },
+        { temp: 100, timestamp: at(90) },
+        { temp: 108, timestamp: at(120) }
+      ],
+      ovenEvents: [
+        { setTemp: 225, timestamp: at(0), isOff: false },
+        { setTemp: 0, timestamp: at(100), isOff: true }
+      ],
       pullTempF: 125,
       desiredServeTime: null,
-      settings: customSettings
+      settings: defaultSettings,
+      weightLb: 6,
+      now: at(120)
     });
-    
-    // Last 2 readings: 110->116 in 1 hour = 6°F/hr
-    expect(result.currentRate).toBe(6);
+
+    it('refuses a finish time, because there is not one', () => {
+      const result = computeSessionCalculations(paused());
+      expect(result.predictedTargetTime).toBeNull();
+      expect(result.projectionRefusedReason).toBe('unreachable');
+    });
+
+    it('says what would happen once the oven is back on', () => {
+      // Correct behaviour, but a visible regression: the ETA simply disappears.
+      // So the pause UI can say "about 2 h once the oven is back on" instead of
+      // a dash.
+      const result = computeSessionCalculations(paused());
+      expect(result.projectionIfRestarted).not.toBeNull();
+      expect(result.projectionIfRestarted.atOvenTempF).toBe(225);
+      expect(result.projectionIfRestarted.minutes).toBeGreaterThan(0);
+    });
+
+    it('restarts at the last real setting, not at the 0 an off event stores', () => {
+      const result = computeSessionCalculations(paused());
+      expect(result.projectionIfRestarted.atOvenTempF).not.toBe(0);
+    });
   });
 });
 

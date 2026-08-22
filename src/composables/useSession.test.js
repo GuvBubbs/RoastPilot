@@ -196,10 +196,10 @@ describe('useSession settings persistence', () => {
     s.initialize();
     s.startSession({ targetTemp: 200, units: 'F' });
 
-    s.updateSettings({ smoothingWindowReadings: 7, ovenTempMaxF: 275 });
+    s.updateSettings({ readingIntervalMinutes: 35, ovenTempMaxF: 275 });
 
     const stored = JSON.parse(localStorage.getItem(SETTINGS_KEY));
-    expect(stored.smoothingWindowReadings).toBe(7);
+    expect(stored.readingIntervalMinutes).toBe(35);
     expect(stored.ovenTempMaxF).toBe(275);
   });
 
@@ -207,13 +207,13 @@ describe('useSession settings persistence', () => {
     const first = await freshSession();
     first.initialize();
     first.startSession({ targetTemp: 200, units: 'F' });
-    first.updateSettings({ smoothingWindowReadings: 7, ovenTempMaxF: 275 });
+    first.updateSettings({ readingIntervalMinutes: 35, ovenTempMaxF: 275 });
 
     const second = await freshSession();
     second.initialize();
 
     expect(second.hasActiveSession.value).toBe(true);
-    expect(second.settings.value.smoothingWindowReadings).toBe(7);
+    expect(second.settings.value.readingIntervalMinutes).toBe(35);
     expect(second.settings.value.ovenTempMaxF).toBe(275);
   });
 
@@ -221,7 +221,7 @@ describe('useSession settings persistence', () => {
     const first = await freshSession();
     first.initialize();
     first.startSession({ targetTemp: 200, units: 'F' });
-    first.updateSettings({ smoothingWindowMinutes: 45 });
+    first.updateSettings({ staleReadingMinutes: 75 });
     first.endSession();
 
     const second = await freshSession();
@@ -229,17 +229,17 @@ describe('useSession settings persistence', () => {
     expect(second.hasActiveSession.value).toBe(false);
 
     second.startSession({ targetTemp: 190, units: 'F' });
-    expect(second.settings.value.smoothingWindowMinutes).toBe(45);
+    expect(second.settings.value.staleReadingMinutes).toBe(75);
   });
 
   it('tolerates partial stored settings by filling in defaults', async () => {
-    localStorage.setItem(SETTINGS_KEY, JSON.stringify({ smoothingWindowReadings: 9 }));
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify({ readingIntervalMinutes: 25 }));
 
     const s = await freshSession();
     s.initialize();
     s.startSession({ targetTemp: 200, units: 'F' });
 
-    expect(s.settings.value.smoothingWindowReadings).toBe(9);
+    expect(s.settings.value.readingIntervalMinutes).toBe(25);
     expect(s.settings.value.ovenTempMaxF).toBe(300);
     expect(s.settings.value.minReadingsForRecommendation).toBe(3);
   });

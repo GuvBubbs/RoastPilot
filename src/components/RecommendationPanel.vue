@@ -57,13 +57,16 @@
 import { computed } from 'vue';
 import { useSession } from '../composables/useSession.js';
 import { useRecommendations } from '../composables/useRecommendations.js';
+import { useCalculations } from '../composables/useCalculations.js';
 import { useRefreshTimer } from '../composables/useRefreshTimer.js';
 import { useToast } from '../composables/useToast.js';
 import { formatDuration, formatTime, minutesBetween, now } from '../utils/timeUtils.js';
+import { formatTemperature } from '../utils/temperatureUtils.js';
 
 const emit = defineEmits(['openOvenModal', 'openReadingModal', 'openSettings', 'openPauseModal', 'openRestartModal', 'openEndSession']);
 
-const { addOvenEvent, ovenEvents } = useSession();
+const { addOvenEvent, ovenEvents, displayUnits } = useSession();
+const { projectionIfRestarted } = useCalculations();
 const {
   canRecommend,
   action,
@@ -99,6 +102,25 @@ const pausedLine = computed(() => {
   return `Oven off since ${formatTime(pausedSince.value)} · ${formatDuration(Math.max(0, elapsed))}`;
 });
 
+/**
+ * What the projection would say once the oven is back on.
+ *
+ * The ETA correctly disappears while the oven is off - a cooling roast has no
+ * finish time - but that is a visible regression, and a dash where a time used
+ * to be tells the cook nothing about how much of their evening is left. So the
+ * pause band carries the counterfactual: the same fit, projected forward at the
+ * setting they last used.
+ *
+ * Explicitly conditional: it is a statement about a decision the cook has not
+ * made yet, and it must not read as a prediction about the state they are in.
+ */
+const restartProjectionLine = computed(() => {
+  const projection = projectionIfRestarted.value;
+  if (!projection || projection.minutes === null) return null;
+  const oven = formatTemperature(projection.atOvenTempF, displayUnits.value);
+  return `About ${formatDuration(projection.minutes)} to target once the oven is back on at ${oven}.`;
+});
+
 const headline = computed(() => {
   if (!canRecommend.value) return blockerReason.value || 'Not enough data yet.';
   return message.value || 'No recommendation yet.';
@@ -106,6 +128,9 @@ const headline = computed(() => {
 
 const detail = computed(() => {
   if (!canRecommend.value) return blockerProgress.value?.message ?? null;
+  // While paused, the most useful thing the app can say is how long the rest of
+  // the cook will take once the oven is on again.
+  if (isPaused.value && restartProjectionLine.value) return restartProjectionLine.value;
   // Only oven-off carries an alternative, and it is the whole point of it — but
   // it describes turning the oven off, so it is noise once the oven is already
   // off (and its {ovenTemp} resolves to 0° in that state).

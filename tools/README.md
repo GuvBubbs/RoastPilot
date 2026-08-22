@@ -1,5 +1,41 @@
 # tools/
 
+## oracle/
+
+A **second physics engine**, and the fixtures and property tests built on it.
+`npm run sim` runs it.
+
+It exists to break a circularity. The app's projection is a two-lag cascade; the
+simulation harness's roast is a two-node lumped model, which with its fitted
+`backReaction: 0` *is* a two-lag cascade. Same family, fitted to the same three
+readings below 92 °F, every scenario extrapolating from there. Scored on that
+deck alone the projection looks near-perfect and proves nothing — it would look
+near-perfect if the physics were wrong in any way both models shared.
+
+So `conductionModel.js` solves 1-D conduction in a solid body on a 120-node grid
+(Crank–Nicolson), validated against the closed-form series solution for each of
+its three geometries. An infinite spectrum of decay modes against the cascade's
+single repeated pole: not the same family, and not reconcilable.
+
+**Geometry turned out to matter more than the plan expected.** Scored against a
+*sphere*, the evidence argues clearly for a three-lag model — and making that
+change would have been worse at the only real cook there is and worse against
+both of the shapes a roast actually has. A roast is a cylinder or a slab, not a
+ball. So `cylinder` is the primary case and `sphere` is kept as a deliberately
+adversarial one, asserted on graceful degradation rather than accuracy. The table
+is in `fixtures/README.md`.
+
+| file | what |
+|---|---|
+| `conductionModel.js` | the engine; `sphere` / `cylinder` / `slab` |
+| `conductionModel.test.js` | the engine against its own analytic series |
+| `projection.oracle.test.js` | the app's projection scored across geometries |
+| `projection.properties.test.js` | properties any correct model must have |
+| `fixtures/` | eight committed reading histories, two adversarial |
+| `fixtures.test.js` | the fixtures |
+| `makeFixtures.mjs` | regenerates them — deliberately, and rarely |
+
+
 ## viewport-audit.html
 
 The mobile regression gate. Loads the built app in iframes at 320 / 375 / 390 /

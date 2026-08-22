@@ -1,0 +1,114 @@
+{
+  "name": "03-cylinder-24lb-175F",
+  "what": "A 24 lb bird at a low oven: eleven hours, and only 25 F of headroom over the target.",
+  "family": "1-D conduction, cylinder",
+  "adversarial": false,
+  "weightLb": 24,
+  "pullTempF": 150,
+  "trueHitMin": 308,
+  "readings": [
+    {
+      "temp": 42,
+      "timestamp": "2026-08-22T18:00:00.000Z"
+    },
+    {
+      "temp": 42.4,
+      "timestamp": "2026-08-22T18:30:00.000Z"
+    },
+    {
+      "temp": 51.2,
+      "timestamp": "2026-08-22T19:00:00.000Z"
+    },
+    {
+      "temp": 68,
+      "timestamp": "2026-08-22T19:30:00.000Z"
+    },
+    {
+      "temp": 85.8,
+      "timestamp": "2026-08-22T20:00:00.000Z"
+    },
+    {
+      "temp": 101.7,
+      "timestamp": "2026-08-22T20:30:00.000Z"
+    },
+    {
+      "temp": 115.1,
+      "timestamp": "2026-08-22T21:00:00.000Z"
+    },
+    {
+      "temp": 126.2,
+      "timestamp": "2026-08-22T21:30:00.000Z"
+    },
+    {
+      "temp": 135.2,
+      "timestamp": "2026-08-22T22:00:00.000Z"
+    },
+    {
+      "temp": 142.6,
+      "timestamp": "2026-08-22T22:30:00.000Z"
+    },
+    {
+      "temp": 148.6,
+      "timestamp": "2026-08-22T23:00:00.000Z"
+    },
+    {
+      "temp": 153.6,
+      "timestamp": "2026-08-22T23:30:00.000Z"
+    },
+    {
+      "temp": 157.5,
+      "timestamp": "2026-08-23T00:00:00.000Z"
+    },
+    {
+      "temp": 160.8,
+      "timestamp": "2026-08-23T00:30:00.000Z"
+    },
+    {
+      "temp": 163.4,
+      "timestamp": "2026-08-23T01:00:00.000Z"
+    },
+    {
+      "temp": 165.6,
+      "timestamp": "2026-08-23T01:30:00.000Z"
+    },
+    {
+      "temp": 167.3,
+      "timestamp": "2026-08-23T02:00:00.000Z"
+    },
+    {
+      "temp": 168.8,
+      "timestamp": "2026-08-23T02:30:00.000Z"
+    },
+    {
+      "temp": 169.9,
+      "timestamp": "2026-08-23T03:00:00.000Z"
+    },
+    {
+      "temp": 170.9,
+      "timestamp": "2026-08-23T03:30:00.000Z"
+    },
+    {
+      "temp": 171.6,
+      "timestamp": "2026-08-23T04:00:00.000Z"
+    },
+    {
+      "temp": 172.3,
+      "timestamp": "2026-08-23T04:30:00.000Z"
+    },
+    {
+      "temp": 172.8,
+      "timestamp": "2026-08-23T05:00:00.000Z"
+    },
+    {
+      "temp": 173.2,
+      "timestamp": "2026-08-23T05:30:00.000Z"
+    }
+  ],
+  "ovenEvents": [
+    {
+      "setTemp": 175,
+      "timestamp": "2026-08-22T18:00:00.000Z",
+      "isOff": false
+    }
+  ]
+}

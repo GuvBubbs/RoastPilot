@@ -24,10 +24,16 @@ export function useCalculations() {
     
     return computeSessionCalculations({
       readings: readings.value,
-      // The rate fit must not span a pause; see readingsForRateFit.
+      // The oven history is part of the physics now, not just a pause marker:
+      // the model integrates the actual dial timeline.
       ovenEvents: ovenEvents.value,
       pullTempF: config.value.pullTempF,
       desiredServeTime: config.value.desiredServeTime,
+      // Feed the prior on k. Worth about 0.1% of the fit once three readings
+      // exist; what it buys is that the fit always returns, so the whole
+      // show/don't-show decision lives in the gate.
+      weightLb: config.value.weight,
+      meatType: config.value.meatType,
       // The projection is judged against the latest PULL time, not the serve
       // time: the meat has to be out of the oven early enough to rest.
       restMinutes: config.value.restMinutes ?? 0,
@@ -186,11 +192,28 @@ export function useCalculations() {
   });
   
   /**
-   * Confidence assessment
+   * Confidence assessment. Carries a machine-readable `code` alongside the prose;
+   * nothing downstream may match on the prose.
    */
   const confidence = computed(() => {
-    return rawCalculations.value?.confidence ?? { level: 'insufficient', reason: 'No data' };
+    return rawCalculations.value?.confidence
+      ?? { level: 'insufficient', code: 'no-session', reason: 'No data' };
   });
+  
+  /**
+   * What the projection would say once the oven is back on, at the setting the
+   * cook last used. Null unless the oven is off.
+   *
+   * The ETA correctly disappears while the oven is off - there is no finish time
+   * for a cooling roast - but that is a visible regression, so the pause UI can
+   * say "about 2 h 10 m once the oven is back on" rather than a dash.
+   */
+  const projectionIfRestarted = computed(() => {
+    return rawCalculations.value?.projectionIfRestarted ?? null;
+  });
+  
+  /** The fit itself, for the chart and the harness. Not for the UI to interpret. */
+  const fit = computed(() => rawCalculations.value?.fit ?? null);
   
   /**
    * Whether we have enough data to show predictions
@@ -322,8 +345,10 @@ export function useCalculations() {
     scheduleVariance,
     scheduleStatus,
     projectionRefusedReason,
+    projectionIfRestarted,
     latestPullTime,
     confidence,
+    fit,
     currentTemp,
     progressPercent,
     progressOverflows,

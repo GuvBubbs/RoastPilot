@@ -130,21 +130,16 @@
         </SettingsRow>
       </SettingsSection>
 
-      <SettingsSection title="Calculation">
-        <SettingsRow
-          label="Smoothing window"
-          description="Recent readings used to calculate heating rate"
-        >
-          <NumberStepper
-            v-model="localSettings.smoothingWindowReadings"
-            :min="2"
-            :max="10"
-            :step="1"
-            label="Readings"
-            hide-label
-          />
-        </SettingsRow>
+      <!-- The "Smoothing window" control lived here, setting how many recent
+           readings went into the rate fit. There is no window any more: the
+           thermal model fits every reading, because the EARLY ones carry the
+           curvature that identifies how fast this particular roast heats, and
+           discarding them leaves the fit unable to tell an accelerating roast
+           from a decelerating one.
 
+           Removed rather than left in place. A control a user can change and see
+           nothing happen is worse than no control. -->
+      <SettingsSection title="Calculation">
         <SettingsRow
           label="On-track threshold"
           description="Minutes of variance still counted as on track"

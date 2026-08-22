@@ -141,17 +141,38 @@ describe('checkRecommendationEligibility', () => {
     expect(result.blockerType).toBe('no_oven_data');
   });
 
-  it('blocks when the oven temperature is stale', () => {
+  it('no longer blocks merely because the oven setting is old', () => {
+    /**
+     * The stale-oven blocker is gone, and this is the test that says so.
+     *
+     * It was wrong in principle - a dial nobody has touched for an hour means the
+     * cook has not changed it, which is normal - and it LATCHED: the only way to
+     * clear it was to log an oven event, and the app's own advice was what
+     * generated them. A cook where the app happened to stay quiet for the first
+     * hour went permanently silent, sitting on a valid projection saying "50 min
+     * late" that it refused to mention.
+     *
+     * Removing it in isolation was measured WORSE (eight dial moves, four
+     * reversals, a cook that never finished): it was suppressing an oscillation by
+     * accident. It could only go once the things that genuinely stop that
+     * oscillation were in place - the dead-time gate, the hold-is-not-a-request
+     * fix, and the stale-READING gate, which withholds advice on the honest
+     * grounds that the app has not looked at the meat lately.
+     *
+     * The age of the setting is still shown, as a chip in the status band.
+     */
     const result = checkRecommendationEligibility({
       readings: makeReadings([100, 105, 110]),
+      // Four hours old, against a 60 minute ovenTempStaleMinutes.
       ovenEvents: [makeOvenEvent({ timestamp: '2024-01-01T14:00:00.000Z' })],
       desiredServeTime: '2024-01-01T20:00:00.000Z',
       settings: createDefaultSettings(),
-      confidence: highConfidence
+      confidence: highConfidence,
+      now: NOW
     });
 
-    expect(result.canRecommend).toBe(false);
-    expect(result.blockerType).toBe('stale_oven_data');
+    expect(result.canRecommend).toBe(true);
+    expect(result.blockerType).toBeNull();
   });
 
   it('does not apply the stale check while the oven is off', () => {
@@ -179,28 +200,57 @@ describe('checkRecommendationEligibility', () => {
     expect(result.blockerType).toBe('no_serve_time');
   });
 
-  it('blocks on insufficient, slow and unstable confidence', () => {
+  it('blocks on a refused projection, and names the cause', () => {
+    /**
+     * This replaces three branches that keyed on SUBSTRINGS of a human-readable
+     * confidence reason - `reason.includes('slow or negative')` and
+     * `reason.includes('fluctuating')` - which made two prose fragments a de-facto
+     * API that no test covered and any copy edit could disable.
+     *
+     * One of the two was also permanently dead: it fired on R² < 0.7, and R² over
+     * a three-point window cannot fall below about 0.75, so the `unstable_rate`
+     * blocker had never once been reached in the app's life.
+     */
     const base = {
       readings: makeReadings([100, 105, 110]),
       ovenEvents: [makeOvenEvent()],
       desiredServeTime: '2024-01-01T20:00:00.000Z',
-      settings: createDefaultSettings()
+      settings: createDefaultSettings(),
+      confidence: highConfidence,
+      now: NOW
     };
 
-    expect(checkRecommendationEligibility({
-      ...base,
-      confidence: { level: 'insufficient', reason: 'Not enough readings' }
-    }).blockerType).toBe('insufficient_confidence');
+    for (const code of [
+      'insufficient-readings', 'insufficient-span', 'insufficient-rise',
+      'insufficient-progress', 'poor-fit', 'unreachable', 'beyond-horizon'
+    ]) {
+      const result = checkRecommendationEligibility({
+        ...base, projectionRefusedReason: code
+      });
+      expect(result.canRecommend, code).toBe(false);
+      expect(result.blockerType, code).toBe('no_projection');
+      // The cause travels with it: "raise the oven" is the right suggestion for
+      // `unreachable` and nonsense for the rest.
+      expect(result.blockerCode, code).toBe(code);
+      // And every one of them has its own sentence, not a shared fallback.
+      expect(result.blockerReason, code).toBeTruthy();
+      expect(result.blockerReason, code).not.toBe('There is no projection to advise from yet.');
+    }
+  });
 
-    expect(checkRecommendationEligibility({
-      ...base,
-      confidence: { level: 'low', reason: 'Heating rate is slow or negative' }
-    }).blockerType).toBe('bad_rate');
+  it('still blocks on a confidence the caller has already given up on', () => {
+    const result = checkRecommendationEligibility({
+      readings: makeReadings([100, 105, 110]),
+      ovenEvents: [makeOvenEvent()],
+      desiredServeTime: '2024-01-01T20:00:00.000Z',
+      settings: createDefaultSettings(),
+      confidence: { level: 'insufficient', code: 'poor-fit', reason: 'Readings scatter' },
+      now: NOW
+    });
 
-    expect(checkRecommendationEligibility({
-      ...base,
-      confidence: { level: 'low', reason: 'Readings are fluctuating' }
-    }).blockerType).toBe('unstable_rate');
+    expect(result.canRecommend).toBe(false);
+    expect(result.blockerType).toBe('no_projection');
+    expect(result.blockerCode).toBe('poor-fit');
   });
 
   it('allows a recommendation when every condition is met', () => {
@@ -360,6 +410,45 @@ describe('calculateRecommendation', () => {
     expect(result.message).toContain('{minTemp}');
   });
 
+  it('will not lower the oven so far the roast cannot finish', () => {
+    /**
+     * The core asymptotes to the oven, so an oven at the target means the roast
+     * approaches it and never arrives - lowering into that region does not slow a
+     * roast, it stops one.
+     *
+     * Found by the harness, and it cost a whole cook: a 9 lb shoulder heading for
+     * 195 °F, running 254 minutes early, was told to lower the oven to 200 °F. It
+     * spent seven more hours creeping upward and finished 38 °F short.
+     */
+    const stalled = calculateRecommendation({
+      ovenBaseTemp: 225,
+      scheduleVarianceMinutes: -250,
+      scheduleStatus: 'early',
+      settings,
+      predictedMinutesToTarget: 300,
+      currentRate: 25,
+      latestCoreTempF: 150,
+      targetTempF: 195
+    });
+
+    // 195 + 25 headroom = 220, snapped up to the dial: never below that.
+    expect(stalled.suggestedTemp).toBeGreaterThanOrEqual(220);
+
+    // And with the oven already on that floor there is nothing to lower to.
+    const onFloor = calculateRecommendation({
+      ovenBaseTemp: 220,
+      scheduleVarianceMinutes: -250,
+      scheduleStatus: 'early',
+      settings,
+      predictedMinutesToTarget: 300,
+      currentRate: 25,
+      latestCoreTempF: 150,
+      targetTempF: 195
+    });
+    expect(onFloor.action).toBe('hold');
+    expect(onFloor.message).toContain('{minTemp}');
+  });
+
   it('refuses to pause a cold roast that still has hours to run', () => {
     // 90 F core against a 195 F target: switching the oven off here extends the
     // time the meat spends in the 40-140 F danger zone, and the app cannot
@@ -409,7 +498,9 @@ describe('calculateRecommendation', () => {
       predictedMinutesToTarget: 60,
       currentRate: 10,
       latestCoreTempF: 145,
-      targetTempF: 195
+      // A 145 °F target leaves the 175 °F oven 30 °F of headroom, so lowering is
+      // not blocked by the stall guard and the pause branch is reachable.
+      targetTempF: 145
     });
 
     expect(result.action).toBe('oven-off');
@@ -425,7 +516,7 @@ describe('calculateRecommendation', () => {
       predictedMinutesToTarget: 60,
       currentRate: 10,
       latestCoreTempF: 145,
-      targetTempF: 195
+      targetTempF: 145
     }).ovenOffMinutes;
 
     // Half the variance, inside the [5, 20] bounds. Asserted across a range
@@ -451,7 +542,7 @@ describe('calculateRecommendation', () => {
       predictedMinutesToTarget: null,
       currentRate: null,
       latestCoreTempF: 145,
-      targetTempF: 195
+      targetTempF: 145
     });
 
     // Same answer as the branch that has a projection: 50 * 0.5, capped at 20.
@@ -826,7 +917,7 @@ describe('oven-off regressions', () => {
   });
 });
 
-describe('stale oven data is measured against an injected clock', () => {
+describe('staleness is measured against an injected clock', () => {
   const settings = createDefaultSettings();
 
   const readings = [
@@ -849,19 +940,26 @@ describe('stale oven data is measured against an injected clock', () => {
     });
   }
 
-  it('passes while the oven reading is fresh', () => {
-    // 65 min after the oven event but the default threshold is 60... so use a
-    // deliberately close-in clock to prove the boundary is the clock, not luck.
-    expect(eligibilityAt('2024-01-01T16:30:00.000Z').canRecommend).toBe(true);
+  it('passes while the newest reading is fresh', () => {
+    // 20 minutes after the last reading, against a 45 minute limit.
+    expect(eligibilityAt('2024-01-01T17:50:00.000Z').canRecommend).toBe(true);
   });
 
   it('blocks once the same data has aged past the threshold', () => {
-    // Nothing about the session changed - only `now`. Before the fix this was
-    // read from the real clock inside a tick-free computed, so the block never
-    // appeared while the app sat idle.
-    const later = eligibilityAt('2024-01-01T18:00:00.000Z');
+    /**
+     * Nothing about the session changed - only `now`. This is the property the
+     * describe block exists for: the gate has to read the clock it is GIVEN, not
+     * the wall clock, because it is called from a computed that is deliberately
+     * tick-free and the block would otherwise never appear while the app sat
+     * idle.
+     *
+     * Repointed from stale_oven_data to stale_reading when the former was
+     * removed. The property is the same and it is worth keeping; only the gate
+     * that demonstrates it changed.
+     */
+    const later = eligibilityAt('2024-01-01T19:00:00.000Z');
     expect(later.canRecommend).toBe(false);
-    expect(later.blockerType).toBe('stale_oven_data');
+    expect(later.blockerType).toBe('stale_reading');
   });
 });
 

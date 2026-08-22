@@ -99,6 +99,22 @@ is not a metric with a good value: deferring advice was measured inert once
 already, taking the deck from 485 to 1100 minutes of no advice at all in exchange
 for one minute of accuracy.
 
+### The oracle
+
+`npm run sim` also runs `tools/oracle`, which is the answer to the obvious
+objection about everything above: the app's model and this harness's roast are
+the *same family*, so agreement between them is not evidence. The oracle is a
+1-D conduction solve — an infinite spectrum of decay modes against the cascade's
+one repeated pole — validated against closed-form series solutions and used to
+score the projection on data neither model can fit exactly. See
+`tools/README.md`.
+
+Measured there: mean absolute error in predicted finish time of 7–16 minutes
+against 27–208 minutes for the straight line the curve replaced, across a cook a
+cook actually lives through. The line is a few minutes *better* late on, when a
+solid body's core is nearly straight; what it cannot do is decline to answer, and
+early on it is hours out in the wrong direction.
+
 ### It IS a CI gate
 
 `.github/workflows/test.yml` runs `npm run test:run` and `npm run sim` on every

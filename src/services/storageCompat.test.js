@@ -119,31 +119,51 @@ describe('forward compatibility with a pre-redesign stored session', () => {
   });
 
   it('does not move the schedule verdict across the migration', () => {
-    // The whole point, stated as the number a cook would see. Same readings,
-    // same serve time, same projection - so the same verdict.
-    const before = computeSessionCalculations({
-      readings: legacySession().readings,
-      pullTempF: 125,
-      desiredServeTime: '2026-08-22T23:00:00.000Z',
-      settings: legacySession().settings,
+    /**
+     * The whole point, stated as the number a cook would see.
+     *
+     * The migration must be a pure renaming as far as the projection is
+     * concerned: same readings, same oven history, same pull temperature, same
+     * serve time, and - because a migrated session gets restMinutes 0 - the same
+     * deadline. So the same verdict, to the minute.
+     *
+     * Both sides are computed through the CURRENT engine, with only the config
+     * shape differing. Comparing a v1 config through the old engine against a v2
+     * config through the new one would be testing two changes at once and could
+     * not fail for the reason this test exists.
+     */
+    const legacy = legacySession();
+    const common = {
+      readings: legacy.readings,
+      ovenEvents: legacy.ovenEvents,
+      settings: legacy.settings,
       now: '2026-08-22T21:30:00.000Z'
+    };
+
+    const before = computeSessionCalculations({
+      ...common,
+      // What the old build stopped at, read as the pull temperature.
+      pullTempF: legacy.config.targetTemp,
+      desiredServeTime: legacy.config.desiredServeTime,
+      restMinutes: 0
     });
 
     storageService.initialize();
     const stored = storageService.loadSession();
     const after = computeSessionCalculations({
+      ...common,
       readings: stored.readings,
       ovenEvents: stored.ovenEvents,
       pullTempF: stored.config.pullTempF,
       desiredServeTime: stored.config.desiredServeTime,
       restMinutes: stored.config.restMinutes,
-      settings: stored.settings,
-      now: '2026-08-22T21:30:00.000Z'
+      settings: stored.settings
     });
 
     expect(after.predictedTargetTime).toBe(before.predictedTargetTime);
     expect(after.scheduleVarianceMinutes).toBe(before.scheduleVarianceMinutes);
     expect(after.scheduleStatus).toBe(before.scheduleStatus);
+    expect(after.projectionRefusedReason).toBe(before.projectionRefusedReason);
   });
 
   it('is idempotent: migrating twice changes nothing', () => {
@@ -196,8 +216,10 @@ describe('forward compatibility with a pre-redesign stored session', () => {
     const { initialize, settings } = freshSession();
     initialize();
     // Read from the session's own settings; the standalone settings key was
-    // never written by the old build, so there is nothing to override with.
-    expect(settings.value.smoothingWindowReadings).toBe(3);
+    // never written by the old build, so there is nothing to override with. The
+    // keys asserted here are ones that still exist - a key the current build has
+    // dropped survives the merge trivially and proves nothing.
+    expect(settings.value.onTrackThresholdMinutes).toBe(10);
     expect(settings.value.ovenTempMaxF).toBe(300);
     expect(settings.value.minReadingsForRecommendation).toBe(3);
   });
@@ -225,23 +247,45 @@ describe('forward compatibility with a pre-redesign stored session', () => {
   });
 
   it('still predicts an ETA from the restored readings', () => {
-    const { initialize, readings, config, settings } = freshSession();
+    const { initialize, readings, ovenEvents, config, settings } = freshSession();
     initialize();
 
     // Driven through the service rather than useCalculations so the test needs
-    // no component instance for the refresh timer.
+    // no component instance for the refresh timer. The oven history is not
+    // optional: the model integrates the actual dial timeline, so leaving it out
+    // is not "no oven changes" but "no oven".
     const result = computeSessionCalculations({
       readings: readings.value,
+      ovenEvents: ovenEvents.value,
       pullTempF: config.value.pullTempF,
       restMinutes: config.value.restMinutes,
       desiredServeTime: config.value.desiredServeTime,
       settings: settings.value,
+      weightLb: config.value.weight,
+      meatType: config.value.meatType,
       now: '2026-08-22T21:30:00.000Z'
     });
 
     expect(result.currentRate).toBeGreaterThan(0);
     expect(result.predictedTargetTime).not.toBeNull();
     expect(result.scheduleStatus).not.toBe('unknown');
+  });
+
+  it('refuses to project with no oven history rather than blaming the oven', () => {
+    // An absent dial is not an oven that is off. Saying "the oven is not hot
+    // enough" about a cook whose setting was never logged would be blaming the
+    // oven for the app's missing data.
+    const result = computeSessionCalculations({
+      readings: legacySession().readings,
+      ovenEvents: [],
+      pullTempF: 125,
+      desiredServeTime: '2026-08-22T23:00:00.000Z',
+      settings: legacySession().settings,
+      now: '2026-08-22T21:30:00.000Z'
+    });
+
+    expect(result.projectionRefusedReason).toBe('no-oven-history');
+    expect(result.confidence.code).toBe('no-oven-history');
   });
 
   it('persists the resumed session back without corrupting it', () => {
