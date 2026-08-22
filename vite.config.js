@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
 import vue from '@vitejs/plugin-vue';
 import { VitePWA } from 'vite-plugin-pwa';
@@ -7,6 +8,13 @@ export default defineConfig({
   // Served from https://guvbubbs.github.io/RoastPilot/ — set unconditionally so
   // dev, preview and production all resolve assets at the same path.
   base: '/RoastPilot/',
+  resolve: {
+    // vitest.config.js already defines this alias, so without it here a
+    // `@/`-importing component passes tests and fails the build.
+    alias: {
+      '@': fileURLToPath(new URL('./src', import.meta.url))
+    }
+  },
   plugins: [
     vue(),
     VitePWA({
@@ -18,8 +26,8 @@ export default defineConfig({
         name: 'Reverse Sear Temperature Tracker',
         short_name: 'RoastTracker',
         description: 'Track and predict cooking temperatures for perfect reverse sear results',
-        theme_color: '#dc2626',
-        background_color: '#ffffff',
+        theme_color: '#14110F',
+        background_color: '#14110F',
         display: 'standalone',
         orientation: 'portrait',
         // vite-plugin-pwa does not derive these from `base` — set them by hand.
@@ -50,7 +58,11 @@ export default defineConfig({
         ]
       },
       workbox: {
-        navigateFallback: '/RoastPilot/index.html'
+        navigateFallback: '/RoastPilot/index.html',
+        // woff2 is not in workbox's default glob. Without it the self-hosted
+        // type falls back to system fonts offline, which is the whole reason
+        // the fonts are self-hosted.
+        globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}']
       },
       devOptions: {
         enabled: true

@@ -1,30 +1,38 @@
-/* Page transitions */
-.page-enter-active,
-.page-leave-active {
-  transition: opacity 0.2s ease, transform 0.2s ease;
+/* Shared named transitions. Anything defined here must have a live
+   <Transition name="…"> using it — unused definitions were pruned. */
+
+/* Sheet.vue: backdrop fades, panel rises from the bottom edge. */
+.sheet-enter-active,
+.sheet-leave-active {
+  transition: opacity 0.2s ease;
 }
 
-.page-enter-from {
+.sheet-enter-active .sheet-panel {
+  transition: transform 0.24s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.sheet-leave-active .sheet-panel {
+  transition: transform 0.18s ease-in;
+}
+
+.sheet-enter-from,
+.sheet-leave-to {
   opacity: 0;
-  transform: translateY(10px);
 }
 
-.page-leave-to {
-  opacity: 0;
-  transform: translateY(-10px);
+.sheet-enter-from .sheet-panel,
+.sheet-leave-to .sheet-panel {
+  transform: translateY(16px);
 }
 
-/* Modal transitions */
-.modal-enter-active {
-  transition: opacity 0.3s ease;
+/* Centred dialogs (ConfirmDialog) scale rather than rise. */
+.modal-enter-active,
+.modal-leave-active {
+  transition: opacity 0.2s ease;
 }
 
 .modal-enter-active .modal-content {
-  transition: transform 0.3s ease, opacity 0.3s ease;
-}
-
-.modal-leave-active {
-  transition: opacity 0.2s ease;
+  transition: transform 0.2s ease;
 }
 
 .modal-enter-from,
@@ -33,92 +41,5 @@
 }
 
 .modal-enter-from .modal-content {
-  transform: scale(0.95) translateY(20px);
-  opacity: 0;
+  transform: scale(0.96);
 }
-
-/* List transitions */
-.list-enter-active,
-.list-leave-active {
-  transition: all 0.3s ease;
-}
-
-.list-enter-from {
-  opacity: 0;
-  transform: translateX(-20px);
-}
-
-.list-leave-to {
-  opacity: 0;
-  transform: translateX(20px);
-}
-
-.list-move {
-  transition: transform 0.3s ease;
-}
-
-/* Slide transitions for panels */
-.slide-right-enter-active,
-.slide-right-leave-active {
-  transition: transform 0.3s ease;
-}
-
-.slide-right-enter-from {
-  transform: translateX(100%);
-}
-
-.slide-right-leave-to {
-  transform: translateX(100%);
-}
-
-/* Button press effect */
-.btn-press:active {
-  transform: scale(0.98);
-}
-
-/* Pulse animation for attention */
-@keyframes pulse-attention {
-  0%, 100% {
-    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4);
-  }
-  50% {
-    box-shadow: 0 0 0 8px rgba(239, 68, 68, 0);
-  }
-}
-
-.pulse-attention {
-  animation: pulse-attention 2s infinite;
-}
-
-/* Skeleton loading animation */
-@keyframes shimmer {
-  0% {
-    background-position: -200% 0;
-  }
-  100% {
-    background-position: 200% 0;
-  }
-}
-
-.skeleton {
-  background: linear-gradient(
-    90deg,
-    #f0f0f0 25%,
-    #e0e0e0 50%,
-    #f0f0f0 75%
-  );
-  background-size: 200% 100%;
-  animation: shimmer 1.5s infinite;
-}
-
-/* Fade transition */
-.fade-enter-active,
-.fade-leave-active {
-  transition: opacity 0.2s ease;
-}
-
-.fade-enter-from,
-.fade-leave-to {
-  opacity: 0;
-}
-
