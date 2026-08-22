@@ -1,14 +1,11 @@
 <template>
-  <div class="border-b last:border-b-0 border-gray-200 dark:border-gray-700">
-    <div class="px-4 py-3 bg-gray-50 dark:bg-gray-800">
-      <h3 class="text-sm font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wide">
-        {{ title }}
-      </h3>
-    </div>
-    <div class="p-4">
+  <!-- No horizontal padding: the Sheet body already owns the gutter. -->
+  <section class="py-4 border-b border-rule last:border-b-0">
+    <h3 class="section-label">{{ title }}</h3>
+    <div class="mt-1.5">
       <slot />
     </div>
-  </div>
+  </section>
 </template>
 
 <script setup>
@@ -16,4 +13,3 @@ defineProps({
   title: { type: String, required: true }
 });
 </script>
-

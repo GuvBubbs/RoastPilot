@@ -5,7 +5,7 @@ import { generateRecommendation, analyzeOvenResponsiveness } from '../services/r
 import { toDisplayUnit, formatTemperature } from '../utils/temperatureUtils.js';
 
 export function useRecommendations() {
-  const { readings, ovenEvents, currentOvenTemp, config, settings, displayUnits } = useSession();
+  const { readings, ovenEvents, currentOvenTemp, lastActiveOvenTemp, config, settings, displayUnits } = useSession();
   const { scheduleVariance, scheduleStatus, confidence, predictedMinutesToTarget, currentRateRaw } = useCalculations();
   
   /**
@@ -97,8 +97,10 @@ export function useRecommendations() {
     if (!msg) return null;
     
     // Handle {ovenTemp} placeholder - used in HOLD, OVEN_OFF_ALTERNATIVE, etc.
-    if (msg.includes('{ovenTemp}') && currentOvenTemp.value !== null) {
-      const tempFormatted = formatTemperature(currentOvenTemp.value, displayUnits.value);
+    // lastActiveOvenTemp, not currentOvenTemp: the latter is 0 while the oven is
+    // off, which rendered "then restart at 0°F".
+    if (msg.includes('{ovenTemp}') && lastActiveOvenTemp.value !== null) {
+      const tempFormatted = formatTemperature(lastActiveOvenTemp.value, displayUnits.value);
       msg = msg.replace(/{ovenTemp}/g, tempFormatted);
     }
     
@@ -169,9 +171,10 @@ export function useRecommendations() {
       altMsg = altMsg.replace(/{minutes}/g, rawRecommendation.value.ovenOffMinutes);
     }
     
-    // Handle {ovenTemp} placeholder - use currentOvenTemp for alternative messages
-    if (altMsg.includes('{ovenTemp}') && currentOvenTemp.value !== null) {
-      const ovenTempFormatted = formatTemperature(currentOvenTemp.value, displayUnits.value);
+    // Same as above: OVEN_OFF_ALTERNATIVE reads "...then restart at {ovenTemp}",
+    // so it needs the temperature to restart at, not the 0 of an off event.
+    if (altMsg.includes('{ovenTemp}') && lastActiveOvenTemp.value !== null) {
+      const ovenTempFormatted = formatTemperature(lastActiveOvenTemp.value, displayUnits.value);
       altMsg = altMsg.replace(/{ovenTemp}/g, ovenTempFormatted);
     }
 

@@ -1,72 +1,128 @@
 <template>
-  <div 
-    v-if="modelValue"
-    class="fixed inset-0 z-50 flex items-center justify-center p-4 overflow-y-auto"
-    @click.self="handleCancel"
+  <Sheet
+    :model-value="modelValue"
+    title="Start a cook"
+    size="tall"
+    @update:model-value="onSheetToggle"
   >
-    <!-- Backdrop -->
-    <div class="absolute inset-0 bg-black bg-opacity-50"></div>
-    
-    <!-- Modal -->
-    <div class="relative bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-lg w-full my-8">
-      <div class="p-6 max-h-[90vh] overflow-y-auto">
-        <h2 class="text-2xl font-bold text-gray-900 dark:text-white mb-6">
-          Start New Session
-        </h2>
-        
-        <form @submit.prevent="handleSubmit" class="space-y-6">
-          <!-- Section 1: Temperature Settings -->
-          <div class="space-y-4">
-            <h3 class="text-lg font-semibold text-gray-900 dark:text-white">
-              Temperature Settings
-            </h3>
-            
-            <div class="flex items-start gap-3">
-              <div class="flex-1">
-                <NumberStepper
-                  v-model="form.targetTemp.value"
-                  label="Target Temperature"
-                  :suffix="'°' + form.units.value"
-                  :step="1"
-                  :min="tempRanges.min"
-                  :max="tempRanges.max"
-                  :error="form.targetTemp.touched ? form.targetTemp.error : ''"
-                  @blur="form.targetTemp.touched = true"
-                />
-              </div>
-              
-              <div class="pt-8">
-                <UnitToggle
-                  :model-value="form.units.value"
-                  @update:model-value="handleUnitChange"
-                />
-              </div>
+    <template #body>
+      <!-- Two decisions carry the whole cook: what temperature, and by when.
+           They are first and need no unfolding. Everything below them is a
+           refinement of a working default. -->
+      <div class="space-y-5">
+        <!-- Target ------------------------------------------------------- -->
+        <section>
+          <div class="flex items-center justify-between gap-3">
+            <span class="section-label">Target</span>
+            <UnitToggle
+              :model-value="form.units.value"
+              @update:model-value="handleUnitChange"
+            />
+          </div>
+
+          <div class="mt-3">
+            <NumberStepper
+              v-model="form.targetTemp.value"
+              label="Internal temperature"
+              :suffix="'°' + form.units.value"
+              :step="1"
+              :min="tempRanges.min"
+              :max="tempRanges.max"
+              :error="form.targetTemp.touched ? form.targetTemp.error : ''"
+              @blur="form.targetTemp.touched = true"
+            />
+          </div>
+
+          <div class="mt-3 flex flex-wrap gap-2">
+            <button
+              v-for="preset in quickSelectTargets"
+              :key="preset.name"
+              type="button"
+              class="chip tap gap-2"
+              :class="isQuickTarget(preset) ? 'text-ink border border-heat-warm' : ''"
+              @click="selectQuickTarget(preset)"
+            >
+              <span class="truncate">{{ preset.name }}</span>
+              <span class="num text-ink-mute">{{ formatTemperature(preset.targetF, form.units.value) }}</span>
+            </button>
+          </div>
+        </section>
+
+        <!-- Serve time --------------------------------------------------- -->
+        <section class="rule-t pt-5">
+          <span class="section-label">Serve time</span>
+          <p class="mt-1 text-[13px] text-ink-mute">
+            Optional. Without it the app can't tell you whether you're early or late.
+          </p>
+
+          <!-- Segmented: same decision, two ways of saying it. -->
+          <div class="mt-3 flex gap-1 p-1 rounded-xl bg-raised border border-rule" role="group" aria-label="How to set the serve time">
+            <button
+              type="button"
+              class="tap flex-1 rounded-lg text-[14px] font-medium transition-colors duration-150"
+              :class="form.timeInputMode.value === 'serveTime' ? 'bg-rule text-ink' : 'text-ink-dim'"
+              :aria-pressed="form.timeInputMode.value === 'serveTime'"
+              @click="form.timeInputMode.value = 'serveTime'"
+            >
+              Clock time
+            </button>
+            <button
+              type="button"
+              class="tap flex-1 rounded-lg text-[14px] font-medium transition-colors duration-150"
+              :class="form.timeInputMode.value === 'remaining' ? 'bg-rule text-ink' : 'text-ink-dim'"
+              :aria-pressed="form.timeInputMode.value === 'remaining'"
+              @click="form.timeInputMode.value = 'remaining'"
+            >
+              From now
+            </button>
+          </div>
+
+          <div v-if="form.timeInputMode.value === 'serveTime'" class="mt-3">
+            <label for="serveTime" class="label">Serving at</label>
+            <input
+              id="serveTime"
+              v-model="form.desiredServeTime.value"
+              type="datetime-local"
+              class="field"
+            />
+          </div>
+
+          <div v-else class="mt-3 grid grid-cols-2 gap-3">
+            <div class="min-w-0">
+              <label for="hours" class="label">Hours</label>
+              <input
+                id="hours"
+                v-model.number="timeRemaining.hours"
+                type="number"
+                inputmode="numeric"
+                min="0"
+                max="24"
+                class="field num"
+              />
             </div>
-            
-            <!-- Quick Select Chips -->
-            <div class="flex flex-wrap gap-2">
-              <span class="text-sm text-gray-600 dark:text-gray-400 mr-2">Quick select:</span>
-              <button
-                v-for="preset in quickSelectTargets"
-                :key="preset.name"
-                type="button"
-                @click="selectQuickTarget(preset)"
-                class="px-3 py-1 text-sm bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 rounded-full transition-colors"
-              >
-                {{ preset.name }} ({{ formatTemperature(preset.targetF, form.units.value) }})
-              </button>
+            <div class="min-w-0">
+              <label for="minutes" class="label">Minutes</label>
+              <input
+                id="minutes"
+                v-model.number="timeRemaining.minutes"
+                type="number"
+                inputmode="numeric"
+                min="0"
+                max="59"
+                class="field num"
+              />
             </div>
           </div>
-          
-          <!-- Section 2: Oven Temperature -->
-          <div class="space-y-4">
-            <h3 class="text-lg font-semibold text-gray-900 dark:text-white">
-              Oven Temperature
-            </h3>
-            
+        </section>
+
+        <!-- Oven --------------------------------------------------------- -->
+        <section class="rule-t pt-5">
+          <span class="section-label">Oven</span>
+
+          <div class="mt-3">
             <NumberStepper
               v-model="form.initialOvenTemp.value"
-              label="Initial Oven Set Temperature"
+              label="Starting oven setting"
               :suffix="'°' + form.units.value"
               :step="1"
               :largeStep="10"
@@ -75,99 +131,21 @@
               :error="form.initialOvenTemp.touched ? form.initialOvenTemp.error : ''"
               @blur="form.initialOvenTemp.touched = true"
             />
-            
-            <p class="text-sm text-gray-500 dark:text-gray-400">
-              Typical range: {{ formatTemperature(150, form.units.value) }} - {{ formatTemperature(300, form.units.value) }} for low-and-slow
-            </p>
           </div>
-          
-          <!-- Section 3: Timing (Optional) -->
-          <div class="space-y-4">
-            <h3 class="text-lg font-semibold text-gray-900 dark:text-white">
-              Timing <span class="text-sm font-normal text-gray-500">(Optional)</span>
-            </h3>
-            
-            <p class="text-sm text-gray-600 dark:text-gray-400">
-              Setting a target time enables the app to tell whether you're running early or late
-            </p>
-            
-            <!-- Time Input Mode Toggle -->
-            <div class="flex gap-2">
-              <button
-                type="button"
-                @click="form.timeInputMode.value = 'serveTime'"
-                class="flex-1 px-4 py-2 text-sm font-medium rounded-lg transition-colors"
-                :class="form.timeInputMode.value === 'serveTime' 
-                  ? 'bg-blue-600 text-white' 
-                  : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'"
-              >
-                Set Serve Time
-              </button>
-              <button
-                type="button"
-                @click="form.timeInputMode.value = 'remaining'"
-                class="flex-1 px-4 py-2 text-sm font-medium rounded-lg transition-colors"
-                :class="form.timeInputMode.value === 'remaining' 
-                  ? 'bg-blue-600 text-white' 
-                  : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'"
-              >
-                Time Remaining
-              </button>
-            </div>
-            
-            <!-- Serve Time Input -->
-            <div v-if="form.timeInputMode.value === 'serveTime'">
-              <label for="serveTime" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                Desired Serve Time
-              </label>
-              <input
-                id="serveTime"
-                type="datetime-local"
-                v-model="form.desiredServeTime.value"
-                class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-              />
-            </div>
-            
-            <!-- Time Remaining Input -->
-            <div v-else class="grid grid-cols-2 gap-3">
-              <div>
-                <label for="hours" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                  Hours
-                </label>
-                <input
-                  id="hours"
-                  type="number"
-                  v-model.number="timeRemaining.hours"
-                  min="0"
-                  max="24"
-                  class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                />
-              </div>
-              <div>
-                <label for="minutes" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                  Minutes
-                </label>
-                <input
-                  id="minutes"
-                  type="number"
-                  v-model.number="timeRemaining.minutes"
-                  min="0"
-                  max="59"
-                  class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                />
-              </div>
-            </div>
-          </div>
-          
-          <!-- Section 4: Starting Internal Temp (Optional) -->
-          <div class="space-y-4">
-            <h3 class="text-lg font-semibold text-gray-900 dark:text-white">
-              Starting Temperature <span class="text-sm font-normal text-gray-500">(Optional)</span>
-            </h3>
-            
+
+          <p class="mt-2 text-[13px] text-ink-mute">
+            Low and slow is {{ formatTemperature(150, form.units.value) }}–{{ formatTemperature(300, form.units.value) }}.
+          </p>
+        </section>
+
+        <!-- Starting reading --------------------------------------------- -->
+        <section class="rule-t pt-5">
+          <span class="section-label">Starting reading</span>
+
+          <div class="mt-3">
             <NumberStepper
               v-model="form.startingTemp.value"
-              label="Current Internal Temperature"
+              label="Internal temperature now"
               :suffix="'°' + form.units.value"
               :step="1"
               :min="tempRanges.min"
@@ -175,134 +153,119 @@
               :error="form.startingTemp.touched ? form.startingTemp.error : ''"
               @blur="form.startingTemp.touched = true"
             />
-            
-            <p class="text-sm text-gray-500 dark:text-gray-400">
-              If you've already taken a reading, enter it here to establish a baseline
+          </div>
+
+          <p class="mt-2 text-[13px] text-ink-mute">
+            Optional. If you've already probed it, this becomes the baseline.
+          </p>
+        </section>
+
+        <!-- Meat details (folded away — nothing here changes the maths) --- -->
+        <section class="rule-t pt-5">
+          <button
+            type="button"
+            class="tap flex items-center justify-between gap-3 w-full text-left"
+            :aria-expanded="showMeatDetails"
+            @click="showMeatDetails = !showMeatDetails"
+          >
+            <span class="section-label">Meat details — optional</span>
+            <svg
+              class="w-4 h-4 shrink-0 text-ink-dim transition-transform duration-150"
+              :class="{ 'rotate-180': showMeatDetails }"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              viewBox="0 0 24 24"
+            >
+              <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
+            </svg>
+          </button>
+
+          <div v-show="showMeatDetails" class="mt-3 space-y-4">
+            <div>
+              <label for="meatType" class="label">Type</label>
+              <select
+                id="meatType"
+                v-model="form.meatType.value"
+                class="field-select"
+                @change="handleMeatTypeChange"
+              >
+                <option value="">Not specified</option>
+                <option v-for="preset in MEAT_PRESETS" :key="preset.type" :value="preset.type">
+                  {{ preset.type }}
+                </option>
+              </select>
+            </div>
+
+            <div v-if="selectedMeatPreset">
+              <label for="meatCut" class="label">Cut</label>
+              <select id="meatCut" v-model="form.meatCut.value" class="field-select">
+                <option value="">Not specified</option>
+                <option v-for="cut in selectedMeatPreset.cuts" :key="cut" :value="cut">
+                  {{ cut }}
+                </option>
+              </select>
+            </div>
+
+            <NumberStepper
+              v-model="form.weight.value"
+              label="Weight"
+              suffix="lbs"
+              :step="0.5"
+              :min="0"
+              :max="100"
+              :error="form.weight.touched ? form.weight.error : ''"
+              @blur="form.weight.touched = true"
+            />
+
+            <div>
+              <label for="notes" class="label">Notes</label>
+              <textarea
+                id="notes"
+                v-model="form.notes.value"
+                rows="3"
+                class="field py-2 resize-none"
+                placeholder="Anything worth remembering about this cook"
+              ></textarea>
+            </div>
+
+            <p
+              v-if="selectedMeatPreset && selectedMeatPreset.notes"
+              class="rounded-xl bg-raised border border-rule p-3 text-[13px] text-ink-dim"
+            >
+              {{ selectedMeatPreset.notes }}
             </p>
           </div>
-          
-          <!-- Section 5: Meat Details (Collapsible, Optional) -->
-          <div class="space-y-4">
-            <button
-              type="button"
-              @click="showMeatDetails = !showMeatDetails"
-              class="flex items-center justify-between w-full text-lg font-semibold text-gray-900 dark:text-white"
-            >
-              <span>
-                Meat Details <span class="text-sm font-normal text-gray-500">(Optional)</span>
-              </span>
-              <svg 
-                class="w-5 h-5 transition-transform"
-                :class="{ 'rotate-180': showMeatDetails }"
-                fill="none" 
-                stroke="currentColor" 
-                viewBox="0 0 24 24"
-              >
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
-              </svg>
-            </button>
-            
-            <div v-show="showMeatDetails" class="space-y-4 pl-2">
-              <!-- Meat Type Dropdown -->
-              <div>
-                <label for="meatType" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                  Meat Type
-                </label>
-                <select
-                  id="meatType"
-                  v-model="form.meatType.value"
-                  @change="handleMeatTypeChange"
-                  class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                >
-                  <option value="">Select a meat type...</option>
-                  <option v-for="preset in MEAT_PRESETS" :key="preset.type" :value="preset.type">
-                    {{ preset.type }}
-                  </option>
-                </select>
-              </div>
-              
-              <!-- Cut Dropdown -->
-              <div v-if="selectedMeatPreset">
-                <label for="meatCut" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                  Cut
-                </label>
-                <select
-                  id="meatCut"
-                  v-model="form.meatCut.value"
-                  class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                >
-                  <option value="">Select a cut...</option>
-                  <option v-for="cut in selectedMeatPreset.cuts" :key="cut" :value="cut">
-                    {{ cut }}
-                  </option>
-                </select>
-              </div>
-              
-              <!-- Weight -->
-              <NumberStepper
-                v-model="form.weight.value"
-                label="Weight (pounds)"
-                suffix="lbs"
-                :step="0.5"
-                :min="0"
-                :max="100"
-                :error="form.weight.touched ? form.weight.error : ''"
-                @blur="form.weight.touched = true"
-              />
-              
-              <!-- Notes -->
-              <div>
-                <label for="notes" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                  Notes
-                </label>
-                <textarea
-                  id="notes"
-                  v-model="form.notes.value"
-                  rows="3"
-                  class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 resize-none"
-                  placeholder="Any additional notes about this cook..."
-                ></textarea>
-              </div>
-              
-              <!-- Preset Notes -->
-              <div v-if="selectedMeatPreset && selectedMeatPreset.notes" class="p-3 bg-blue-50 dark:bg-blue-900 dark:bg-opacity-20 rounded-lg">
-                <p class="text-sm text-blue-800 dark:text-blue-300">
-                  💡 {{ selectedMeatPreset.notes }}
-                </p>
-              </div>
-            </div>
-          </div>
-          
-          <!-- Form Actions -->
-          <div class="flex gap-3 pt-4 border-t border-gray-200 dark:border-gray-700">
-            <button
-              type="button"
-              @click="handleCancel"
-              class="flex-1 px-4 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 font-medium rounded-lg transition-colors duration-150 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2"
-            >
-              Cancel
-            </button>
-            
-            <button
-              type="submit"
-              :disabled="!isFormValid"
-              class="flex-1 px-4 py-2 bg-safe hover:bg-green-600 text-white font-medium rounded-lg transition-colors duration-150 focus:outline-none focus:ring-2 focus:ring-safe focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-safe"
-            >
-              Start Session
-            </button>
-          </div>
-        </form>
+        </section>
       </div>
-    </div>
-  </div>
+    </template>
+
+    <template #actions>
+      <div class="flex gap-3">
+        <button type="button" class="btn-ghost flex-1" @click="handleCancel">
+          Cancel
+        </button>
+        <button
+          type="button"
+          class="btn-primary flex-1"
+          :disabled="!isFormValid"
+          @click="handleSubmit"
+        >
+          Start cook
+        </button>
+      </div>
+    </template>
+  </Sheet>
 </template>
 
 <script setup>
-import { ref, reactive, computed, watch, onMounted, onUnmounted } from 'vue';
+import { ref, reactive, computed, watch } from 'vue';
+import Sheet from './Sheet.vue';
 import NumberStepper from './NumberStepper.vue';
 import UnitToggle from './UnitToggle.vue';
-import { validateSessionConfig, sanitizeString } from '../utils/validationUtils.js';
-import { toStorageUnit, toDisplayUnit, formatTemperature, fahrenheitToCelsius, celsiusToFahrenheit } from '../utils/temperatureUtils.js';
+import { useSession } from '../composables/useSession.js';
+import { sanitizeString } from '../utils/validationUtils.js';
+import { toStorageUnit, formatTemperature, fahrenheitToCelsius, celsiusToFahrenheit } from '../utils/temperatureUtils.js';
 import { addMinutes } from '../utils/timeUtils.js';
 import { MEAT_PRESETS, SESSION_DEFAULTS } from '../constants/defaults.js';
 
@@ -319,31 +282,43 @@ const props = defineProps({
 
 const emit = defineEmits(['update:modelValue', 'submit', 'cancel']);
 
-// Initialize form values based on default unit
-const getInitialTargetTemp = () => {
-  if (SESSION_DEFAULTS.UNITS === 'C') {
+// The unit the last cook was run in. A Celsius cook shouldn't have to switch
+// units every time they start a new one.
+const { preferredUnits } = useSession();
+
+// Defaults are stored in Fahrenheit; the form works in display units.
+const getInitialTargetTemp = (units) => {
+  if (units === 'C') {
     // Target temp with 1 decimal place for Celsius
     return Math.round(fahrenheitToCelsius(SESSION_DEFAULTS.TARGET_TEMP_F) * 10) / 10;
   }
   return SESSION_DEFAULTS.TARGET_TEMP_F;
 };
 
-const getInitialOvenTemp = () => {
-  if (SESSION_DEFAULTS.UNITS === 'C') {
+const getInitialOvenTemp = (units) => {
+  if (units === 'C') {
     // Oven temp as whole number
     return Math.round(fahrenheitToCelsius(SESSION_DEFAULTS.INITIAL_OVEN_TEMP_F));
   }
   return SESSION_DEFAULTS.INITIAL_OVEN_TEMP_F;
 };
 
+/** `datetime-local` wants a local-time string, not an ISO instant. */
+function toLocalInputValue(date) {
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+const startingUnits = preferredUnits.value ?? SESSION_DEFAULTS.UNITS;
+
 // Form state
 const form = reactive({
-  targetTemp: { value: getInitialTargetTemp(), error: '', touched: false },
-  units: { value: SESSION_DEFAULTS.UNITS, error: '', touched: false },
+  targetTemp: { value: getInitialTargetTemp(startingUnits), error: '', touched: false },
+  units: { value: startingUnits, error: '', touched: false },
   startingTemp: { value: null, error: '', touched: false },
   desiredServeTime: { value: '', error: '', touched: false },
   timeInputMode: { value: 'serveTime', error: '', touched: false },
-  initialOvenTemp: { value: getInitialOvenTemp(), error: '', touched: false },
+  initialOvenTemp: { value: getInitialOvenTemp(startingUnits), error: '', touched: false },
   meatType: { value: '', error: '', touched: false },
   meatCut: { value: '', error: '', touched: false },
   weight: { value: null, error: '', touched: false },
@@ -362,7 +337,7 @@ const userHasEditedOven = ref(false);
 // Quick select targets
 const quickSelectTargets = [
   { name: 'Rare', targetF: 120 },
-  { name: 'Medium-Rare', targetF: 130 },
+  { name: 'Medium-rare', targetF: 130 },
   { name: 'Medium', targetF: 140 }
 ];
 
@@ -397,6 +372,17 @@ const isFormValid = computed(() => {
          form.initialOvenTemp.value >= ovenTempRanges.value.min &&
          form.initialOvenTemp.value <= ovenTempRanges.value.max;
 });
+
+/** Display value of a quick-select preset in the form's current unit. */
+function quickTargetValue(preset) {
+  return form.units.value === 'F'
+    ? preset.targetF
+    : Math.round(fahrenheitToCelsius(preset.targetF) * 10) / 10;
+}
+
+function isQuickTarget(preset) {
+  return form.targetTemp.value === quickTargetValue(preset);
+}
 
 // Handle unit change - convert displayed values
 // Note: UnitToggle is bound with :model-value rather than v-model on purpose.
@@ -442,12 +428,7 @@ function handleUnitChange(newUnit) {
 
 // Select quick target
 function selectQuickTarget(preset) {
-  if (form.units.value === 'F') {
-    form.targetTemp.value = preset.targetF;
-  } else {
-    // Use precise conversion with 1 decimal place for Celsius
-    form.targetTemp.value = Math.round(fahrenheitToCelsius(preset.targetF) * 10) / 10;
-  }
+  form.targetTemp.value = quickTargetValue(preset);
   userHasEditedTarget.value = true;
 }
 
@@ -491,6 +472,49 @@ watch(() => form.initialOvenTemp.value, () => {
     userHasEditedOven.value = true;
   }
 });
+
+/**
+ * The sheet stays mounted between cooks, so opening it has to rebuild the
+ * defaults -- otherwise a cancelled setup leaves a serve time in the past and
+ * a unit choice from a cook that never started.
+ */
+function resetForm() {
+  const units = preferredUnits.value ?? SESSION_DEFAULTS.UNITS;
+
+  form.units.value = units;
+  form.targetTemp.value = getInitialTargetTemp(units);
+  form.initialOvenTemp.value = getInitialOvenTemp(units);
+  form.startingTemp.value = null;
+  form.timeInputMode.value = 'serveTime';
+  form.meatType.value = '';
+  form.meatCut.value = '';
+  form.weight.value = null;
+  form.notes.value = '';
+
+  Object.values(form).forEach((field) => {
+    field.error = '';
+    field.touched = false;
+  });
+
+  timeRemaining.hours = 4;
+  timeRemaining.minutes = 0;
+
+  showMeatDetails.value = false;
+  userHasEditedTarget.value = false;
+  userHasEditedOven.value = false;
+
+  const fourHoursFromNow = new Date();
+  fourHoursFromNow.setHours(fourHoursFromNow.getHours() + 4);
+  form.desiredServeTime.value = toLocalInputValue(fourHoursFromNow);
+}
+
+watch(
+  () => props.modelValue,
+  (open) => {
+    if (open) resetForm();
+  },
+  { immediate: true }
+);
 
 // Handle form submission
 function handleSubmit() {
@@ -546,29 +570,8 @@ function handleCancel() {
   emit('update:modelValue', false);
 }
 
-// Keyboard handling
-function handleKeydown(event) {
-  if (event.key === 'Escape' && props.modelValue) {
-    handleCancel();
-  }
+// Backdrop, Escape and the close button are all "not now".
+function onSheetToggle(open) {
+  if (!open) handleCancel();
 }
-
-// Initialize default serve time (4 hours from now)
-onMounted(() => {
-  const fourHoursFromNow = new Date();
-  fourHoursFromNow.setHours(fourHoursFromNow.getHours() + 4);
-  const year = fourHoursFromNow.getFullYear();
-  const month = String(fourHoursFromNow.getMonth() + 1).padStart(2, '0');
-  const day = String(fourHoursFromNow.getDate()).padStart(2, '0');
-  const hours = String(fourHoursFromNow.getHours()).padStart(2, '0');
-  const minutes = String(fourHoursFromNow.getMinutes()).padStart(2, '0');
-  form.desiredServeTime.value = `${year}-${month}-${day}T${hours}:${minutes}`;
-  
-  document.addEventListener('keydown', handleKeydown);
-});
-
-onUnmounted(() => {
-  document.removeEventListener('keydown', handleKeydown);
-});
 </script>
-

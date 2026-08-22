@@ -24,22 +24,3 @@
 .sheet-leave-to .sheet-panel {
   transform: translateY(16px);
 }
-
-/* Centred dialogs (ConfirmDialog) scale rather than rise. */
-.modal-enter-active,
-.modal-leave-active {
-  transition: opacity 0.2s ease;
-}
-
-.modal-enter-active .modal-content {
-  transition: transform 0.2s ease;
-}
-
-.modal-enter-from,
-.modal-leave-to {
-  opacity: 0;
-}
-
-.modal-enter-from .modal-content {
-  transform: scale(0.96);
-}

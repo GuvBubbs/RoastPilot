@@ -1,67 +1,56 @@
 <template>
-  <div class="space-y-2">
-    <label v-if="label" class="block text-sm font-medium text-gray-700 dark:text-gray-300">
-      {{ label }}
-    </label>
-    
-    <!-- Collapsed mode - show formatted time -->
-    <div v-if="!isExpanded" class="flex items-center justify-between gap-2">
-      <div class="text-sm text-gray-600 dark:text-gray-400">
+  <div>
+    <label v-if="label" class="label">{{ label }}</label>
+
+    <!-- Collapsed: the timestamp is almost always "now", so the default state
+         is a readout with one way in, not a form. -->
+    <div v-if="!isExpanded" class="flex items-center justify-between gap-3">
+      <div class="min-w-0 flex-1 text-[15px] text-ink truncate">
         {{ displayText }}
       </div>
       <button
         type="button"
         @click="isExpanded = true"
-        class="text-xs text-blue-600 dark:text-blue-400 hover:underline"
+        class="tap shrink-0 -mr-2 px-2 text-[13px] font-medium text-heat-warm"
       >
-        Adjust time
+        Adjust
       </button>
     </div>
-    
-    <!-- Expanded mode - show adjustment controls -->
-    <div v-else class="space-y-3 p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
-      <!-- Quick adjustment buttons -->
-      <div class="flex flex-wrap gap-2">
+
+    <!-- Expanded -->
+    <div v-else class="rounded-xl bg-raised border border-rule p-3 space-y-3">
+      <!-- Nudges. Three per row so six of them still fit at 320px. -->
+      <div class="grid grid-cols-3 gap-2">
         <button
           v-for="offset in quickOffsets"
           :key="offset"
           type="button"
           @click="adjustBy(offset)"
-          class="px-3 py-1 text-xs font-medium rounded bg-white dark:bg-gray-600 text-gray-700 dark:text-gray-200 border border-gray-300 dark:border-gray-500 hover:bg-gray-100 dark:hover:bg-gray-500 transition-colors"
+          class="tap w-full rounded-lg border border-rule bg-ground text-[13px] font-medium text-ink-dim transition-colors duration-150 active:bg-rule"
         >
           {{ formatOffset(offset) }}
         </button>
       </div>
-      
-      <!-- Current time display -->
-      <div class="text-center text-sm font-medium text-gray-900 dark:text-white">
+
+      <div class="text-center text-[15px] font-medium text-ink truncate">
         {{ displayText }}
       </div>
-      
-      <!-- Precise time input (fallback) -->
+
+      <!-- Precise entry. 16px minimum, or iOS zooms the viewport on focus. -->
       <input
         type="datetime-local"
         :value="localValueForInput"
         @input="handleManualInput"
         :min="minTimeForInput"
         :max="maxTimeForInput"
-        class="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+        class="field"
       />
-      
-      <!-- Action buttons -->
+
       <div class="flex gap-2">
-        <button
-          type="button"
-          @click="resetToNow"
-          class="flex-1 px-3 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-600 border border-gray-300 dark:border-gray-500 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-500 transition-colors"
-        >
+        <button type="button" @click="resetToNow" class="btn-ghost flex-1">
           Reset to now
         </button>
-        <button
-          type="button"
-          @click="handleDone"
-          class="flex-1 px-3 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors"
-        >
+        <button type="button" @click="handleDone" class="btn-ghost flex-1 font-semibold">
           Done
         </button>
       </div>
@@ -95,45 +84,27 @@ watch(() => props.modelValue, (newVal) => {
 const displayText = computed(() => {
   const date = new Date(localValue.value);
   const today = new Date();
-  
+
   if (date.toDateString() === today.toDateString()) {
     return formatTime(localValue.value) + ' today';
   }
   return formatDateTime(localValue.value);
 });
 
-const localValueForInput = computed(() => {
-  // Convert ISO to datetime-local format (YYYY-MM-DDTHH:mm)
-  const date = new Date(localValue.value);
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  const hours = String(date.getHours()).padStart(2, '0');
-  const minutes = String(date.getMinutes()).padStart(2, '0');
-  return `${year}-${month}-${day}T${hours}:${minutes}`;
-});
+const localValueForInput = computed(() => toInputValue(localValue.value));
+const minTimeForInput = computed(() => (props.minTime ? toInputValue(props.minTime) : null));
+const maxTimeForInput = computed(() => (props.maxTime ? toInputValue(props.maxTime) : null));
 
-const minTimeForInput = computed(() => {
-  if (!props.minTime) return null;
-  const date = new Date(props.minTime);
+/** ISO -> the local-time `YYYY-MM-DDTHH:mm` datetime-local wants. */
+function toInputValue(iso) {
+  const date = new Date(iso);
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, '0');
   const day = String(date.getDate()).padStart(2, '0');
   const hours = String(date.getHours()).padStart(2, '0');
   const minutes = String(date.getMinutes()).padStart(2, '0');
   return `${year}-${month}-${day}T${hours}:${minutes}`;
-});
-
-const maxTimeForInput = computed(() => {
-  if (!props.maxTime) return null;
-  const date = new Date(props.maxTime);
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  const hours = String(date.getHours()).padStart(2, '0');
-  const minutes = String(date.getMinutes()).padStart(2, '0');
-  return `${year}-${month}-${day}T${hours}:${minutes}`;
-});
+}
 
 function formatOffset(minutes) {
   if (minutes > 0) {
@@ -144,7 +115,7 @@ function formatOffset(minutes) {
 
 function adjustBy(minutes) {
   let newTime = addMinutes(localValue.value, minutes);
-  
+
   // Clamp to bounds
   if (props.minTime && newTime < props.minTime) {
     newTime = props.minTime;
@@ -152,7 +123,7 @@ function adjustBy(minutes) {
   if (props.maxTime && newTime > props.maxTime) {
     newTime = props.maxTime;
   }
-  
+
   localValue.value = newTime;
   emit('update:modelValue', newTime);
 }
@@ -160,7 +131,7 @@ function adjustBy(minutes) {
 function handleManualInput(event) {
   const value = event.target.value;
   if (!value) return;
-  
+
   const newTime = new Date(value).toISOString();
   localValue.value = newTime;
   emit('update:modelValue', newTime);
@@ -176,7 +147,3 @@ function handleDone() {
   isExpanded.value = false;
 }
 </script>
-
-
-
-

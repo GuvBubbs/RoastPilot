@@ -1,20 +1,11 @@
 <template>
-  <div 
-    v-if="modelValue"
-    class="fixed inset-0 z-50 flex items-center justify-center p-4"
-    @click.self="$emit('update:modelValue', false)"
-  >
-    <div class="absolute inset-0 bg-black bg-opacity-50"></div>
-    <div class="relative bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-md w-full p-6">
-      <h2 class="text-2xl font-bold text-gray-900 dark:text-white mb-2">
-        Pause Cooking
-      </h2>
-      <p class="text-sm text-gray-600 dark:text-gray-400 mb-4">
-        Record when you turned off the oven to slow down cooking
+  <Sheet v-model="isOpen" title="Pause cooking" size="auto">
+    <template #body>
+      <p class="text-[13px] leading-snug text-ink-dim">
+        Record when you turned the oven off to slow cooking down.
       </p>
-      
-      <!-- Oven Off Time -->
-      <div class="mb-4">
+
+      <div class="mt-4">
         <TimestampPicker
           v-model="ovenOffTime"
           label="Oven turned off at"
@@ -22,72 +13,60 @@
           :max-time="maxTime"
         />
       </div>
-      
-      <!-- Optional: Oven Restart Time -->
-      <div class="mb-4">
-        <div class="flex items-center gap-2 mb-2">
-          <input
-            type="checkbox"
-            id="has-restart"
-            v-model="hasRestartTime"
-            class="w-4 h-4 text-purple-600 bg-gray-100 border-gray-300 rounded focus:ring-purple-500 dark:focus:ring-purple-600 dark:ring-offset-gray-800 focus:ring-2 dark:bg-gray-700 dark:border-gray-600"
-          />
-          <label for="has-restart" class="text-sm font-medium text-gray-700 dark:text-gray-300">
-            Oven was already restarted
-          </label>
-        </div>
-        
-        <div v-if="hasRestartTime" class="ml-6">
-          <TimestampPicker
-            v-model="ovenOnTime"
-            label="Oven restarted at"
-            :min-time="ovenOffTime"
-            :max-time="maxTime"
-          />
-          
-          <!-- Restart Temperature -->
-          <div class="mt-3">
-            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-              Restart Temperature
-            </label>
-            <NumberStepper
-              v-model="restartTemperature"
-              :suffix="`°${displayUnits}`"
-              :step="displayUnits === 'F' ? 25 : 10"
-              :min="displayUnits === 'F' ? 100 : 38"
-              :max="displayUnits === 'F' ? 550 : 288"
-              :error="tempValidationError"
-            />
-          </div>
-        </div>
+
+      <!-- The whole label is the target, so the 20px box is not the only thing
+           you can hit. -->
+      <label
+        class="mt-4 flex min-h-[44px] cursor-pointer items-center gap-3 text-[15px] text-ink"
+        for="pause-has-restart"
+      >
+        <input
+          id="pause-has-restart"
+          v-model="hasRestartTime"
+          type="checkbox"
+          class="h-5 w-5 shrink-0 rounded border border-rule bg-raised accent-heat-warm"
+        />
+        <span class="min-w-0">Oven was already restarted</span>
+      </label>
+
+      <div v-if="hasRestartTime" class="mt-3 space-y-4 border-l border-rule pl-3">
+        <TimestampPicker
+          v-model="ovenOnTime"
+          label="Oven restarted at"
+          :min-time="ovenOffTime"
+          :max-time="maxTime"
+        />
+
+        <NumberStepper
+          v-model="restartTemperature"
+          label="Restart temperature"
+          :suffix="`°${displayUnits}`"
+          :step="displayUnits === 'F' ? 25 : 10"
+          :min="displayUnits === 'F' ? 100 : 38"
+          :max="displayUnits === 'F' ? 550 : 288"
+          :error="tempValidationError"
+        />
       </div>
-      
-      <!-- Duration Display -->
-      <div v-if="pauseDuration" class="mb-4 p-3 bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800 rounded-lg">
-        <p class="text-sm text-purple-800 dark:text-purple-200">
-          <strong>Pause Duration:</strong> {{ pauseDuration }}
-        </p>
-      </div>
-      
-      <!-- Action buttons -->
+
+      <!-- Pause length comes from the two timestamps the cook entered, not from
+           a clock reading or a cooling model. -->
+      <p v-if="pauseDuration" class="mt-4 text-[13px] text-ink-dim">
+        Pause duration
+        <span class="num ml-1 text-[15px] text-ink">{{ pauseDuration }}</span>
+      </p>
+    </template>
+
+    <template #actions>
       <div class="flex gap-3">
-        <button
-          type="button"
-          @click="$emit('update:modelValue', false)"
-          class="flex-1 px-4 py-2 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 font-medium rounded-lg transition-colors"
-        >
+        <button type="button" class="btn-ghost flex-1" @click="isOpen = false">
           Cancel
         </button>
-        <button
-          type="button"
-          @click="handleSubmit"
-          class="flex-1 px-4 py-2 bg-purple-600 hover:bg-purple-700 dark:bg-purple-700 dark:hover:bg-purple-800 text-white font-medium rounded-lg transition-colors"
-        >
-          Record Pause
+        <button type="button" class="btn-primary flex-1" @click="handleSubmit">
+          Record pause
         </button>
       </div>
-    </div>
-  </div>
+    </template>
+  </Sheet>
 </template>
 
 <script setup>
@@ -95,7 +74,8 @@ import { ref, computed, watch } from 'vue';
 import { useSession } from '../composables/useSession.js';
 import { useToast } from '../composables/useToast.js';
 import { validateOvenTemp } from '../utils/validationUtils.js';
-import { toDisplayUnit, formatTemperature } from '../utils/temperatureUtils.js';
+import { toDisplayUnit } from '../utils/temperatureUtils.js';
+import Sheet from './Sheet.vue';
 import TimestampPicker from './TimestampPicker.vue';
 import NumberStepper from './NumberStepper.vue';
 
@@ -105,8 +85,13 @@ const props = defineProps({
 
 const emit = defineEmits(['update:modelValue', 'paused']);
 
-const { config, currentOvenTemp, ovenEvents, displayUnits, logOvenOff, logOvenOn } = useSession();
+const { config, ovenEvents, displayUnits, logOvenOff, logOvenOn } = useSession();
 const { showToast } = useToast();
+
+const isOpen = computed({
+  get: () => props.modelValue,
+  set: (value) => emit('update:modelValue', value)
+});
 
 // State
 const ovenOffTime = ref(new Date().toISOString());
@@ -124,19 +109,19 @@ const lastOvenTemp = computed(() => {
 });
 
 // Initialize restart temperature with last oven temp (in display units)
-watch(() => props.modelValue, (isOpen) => {
-  if (isOpen) {
+watch(() => props.modelValue, (isOpening) => {
+  if (isOpening) {
     ovenOffTime.value = new Date().toISOString();
     ovenOnTime.value = new Date().toISOString();
     hasRestartTime.value = false;
-    
+
     if (lastOvenTemp.value) {
       restartTemperature.value = Math.round(toDisplayUnit(lastOvenTemp.value, displayUnits.value));
     } else {
       restartTemperature.value = displayUnits.value === 'F' ? 350 : 177;
     }
   }
-});
+}, { immediate: true });
 
 const maxTime = computed(() => new Date().toISOString());
 
@@ -144,24 +129,27 @@ const sessionStartTime = computed(() => {
   return config.value?.createdAt ?? null;
 });
 
+// validateOvenTemp returns {valid, error}. Reading the whole object here left an
+// always-truthy error flag, which made the restart path unsubmittable with any
+// input at all — only the error string belongs in this ref.
 const tempValidationError = computed(() => {
   if (!hasRestartTime.value) return null;
-  return validateOvenTemp(restartTemperature.value, displayUnits.value);
+  return validateOvenTemp(restartTemperature.value, displayUnits.value).error;
 });
 
 // Calculate pause duration
 const pauseDuration = computed(() => {
   if (!hasRestartTime.value) return null;
-  
+
   const offTime = new Date(ovenOffTime.value);
   const onTime = new Date(ovenOnTime.value);
   const durationMs = onTime - offTime;
-  
+
   if (durationMs < 0) return null;
-  
+
   const minutes = Math.floor(durationMs / 60000);
   const seconds = Math.floor((durationMs % 60000) / 1000);
-  
+
   if (minutes === 0) {
     return `${seconds} seconds`;
   } else if (minutes === 1) {
@@ -173,13 +161,20 @@ const pauseDuration = computed(() => {
 
 function handleSubmit() {
   if (hasRestartTime.value && tempValidationError.value) {
-    showToast('Please enter a valid oven temperature', 'error');
+    showToast(tempValidationError.value, 'error');
     return;
   }
-  
+
+  // A null duration here means the restart lands before the shut-off, which
+  // would log a negative pause.
+  if (hasRestartTime.value && !pauseDuration.value) {
+    showToast('Restart time must be after the oven was turned off', 'error');
+    return;
+  }
+
   // Log oven off event
   logOvenOff(ovenOffTime.value);
-  
+
   // If restarted, log oven on event
   if (hasRestartTime.value) {
     logOvenOn(restartTemperature.value, ovenOnTime.value);
@@ -187,10 +182,8 @@ function handleSubmit() {
   } else {
     showToast('Oven pause recorded', 'success');
   }
-  
+
   emit('paused');
-  emit('update:modelValue', false);
+  isOpen.value = false;
 }
 </script>
-
-

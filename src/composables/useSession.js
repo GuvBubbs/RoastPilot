@@ -60,6 +60,27 @@ function recalculateDeltas() {
 }
 
 /**
+ * Restore the oven-event invariants: chronological order, then the derived
+ * `previousTemp` chain. Oven events have the same shape of bug readings had -
+ * a back-dated entry lands out of order, and editing or deleting one leaves the
+ * NEXT event's `previousTemp` describing a change that never happened.
+ */
+function normalizeOvenEvents() {
+  if (!session.value) return;
+  
+  const events = session.value.ovenEvents;
+  events.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+  
+  // Before the first logged event the oven was at whatever the session was set
+  // up with, which is what addOvenEvent used to record by hand.
+  let previous = session.value.config?.initialOvenTemp ?? null;
+  for (const event of events) {
+    event.previousTemp = previous;
+    previous = event.setTemp;
+  }
+}
+
+/**
  * Restore the reading invariants: chronological order first, then the derived
  * deltas. Every mutation path (add, edit, delete) must go through this -
  * downstream code treats readings[readings.length - 1] as the latest reading
@@ -182,6 +203,21 @@ export function useSession() {
   /**
    * Get the display units for the session
    */
+  /**
+   * The last oven temperature the cook actually set, ignoring off events.
+   *
+   * `currentOvenTemp` is 0 while the oven is off, because that is what an off
+   * event stores. Any message about restarting the oven needs the temperature
+   * to restart AT, not the zero it is sitting at.
+   */
+  const lastActiveOvenTemp = computed(() => {
+    const events = ovenEvents.value;
+    for (let i = events.length - 1; i >= 0; i--) {
+      if (!events[i].isOff) return events[i].setTemp;
+    }
+    return config.value?.initialOvenTemp ?? null;
+  });
+  
   /**
    * The unit preference to offer a *new* session, before any config exists.
    * Reads the module cache so it survives endSession().
@@ -317,10 +353,9 @@ export function useSession() {
     if (!session.value) return;
     
     const tempF = toStorageUnit(setTemp, displayUnits.value);
-    const previousTemp = currentOvenTemp.value;
     
-    const event = createOvenEvent(tempF, previousTemp, timestamp);
-    session.value.ovenEvents.push(event);
+    session.value.ovenEvents.push(createOvenEvent(tempF, null, timestamp));
+    normalizeOvenEvents();
     saveSession();
   }
   
@@ -344,6 +379,7 @@ export function useSession() {
       ...updates
     };
     
+    normalizeOvenEvents();
     saveSession();
   }
   
@@ -355,6 +391,7 @@ export function useSession() {
     if (!session.value) return;
     
     session.value.ovenEvents = session.value.ovenEvents.filter(e => e.id !== id);
+    normalizeOvenEvents();
     saveSession();
   }
   
@@ -365,10 +402,8 @@ export function useSession() {
   function logOvenOff(timestamp = null) {
     if (!session.value) return;
     
-    const previousTemp = currentOvenTemp.value;
-    const event = createOvenEvent(0, previousTemp, timestamp, true);
-    
-    session.value.ovenEvents.push(event);
+    session.value.ovenEvents.push(createOvenEvent(0, null, timestamp, true));
+    normalizeOvenEvents();
     saveSession();
   }
   
@@ -381,10 +416,30 @@ export function useSession() {
     if (!session.value) return;
     
     const tempInF = toStorageUnit(temperature, displayUnits.value);
-    const event = createOvenEvent(tempInF, 0, timestamp, false);
     
-    session.value.ovenEvents.push(event);
+    session.value.ovenEvents.push(createOvenEvent(tempInF, null, timestamp, false));
+    normalizeOvenEvents();
     saveSession();
+  }
+  
+  /**
+   * Set the temperature units.
+   *
+   * Works with or without an active session: the standing preference is always
+   * recorded, and the running cook is switched too when there is one. Settings
+   * is reachable from the header at all times, so a units control that only
+   * worked mid-cook would just be another dead end.
+   * @param {'F'|'C'} units
+   */
+  function setUnits(units) {
+    if (units !== 'F' && units !== 'C') return;
+    
+    persistedUnits.value = units;
+    storageService.saveUnits(units);
+    
+    if (session.value) {
+      updateConfig({ units });
+    }
   }
   
   /**
@@ -445,6 +500,7 @@ export function useSession() {
     currentOvenTemp,
     displayUnits,
     preferredUnits,
+    lastActiveOvenTemp,
     
     // Methods
     initialize,
@@ -460,7 +516,8 @@ export function useSession() {
     logOvenOff,
     logOvenOn,
     updateSettings,
-    updateConfig
+    updateConfig,
+    setUnits
   };
 }
 

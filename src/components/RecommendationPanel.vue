@@ -1,268 +1,79 @@
 <template>
-  <div class="mx-4 my-4">
-    <div 
-      class="rounded-xl border-2 p-4 transition-colors duration-300"
-      :class="panelClasses"
-    >
-      <!-- Header -->
-      <div class="flex items-start gap-3">
-        <div class="flex-shrink-0">
-          <!-- Clock Icon (default/collecting data) -->
-          <svg v-if="statusIcon === 'ClockIcon'" class="w-8 h-8" :class="iconClass" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-          </svg>
-          <!-- Alert Circle Icon (errors) -->
-          <svg v-else-if="statusIcon === 'AlertCircleIcon'" class="w-8 h-8" :class="iconClass" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-          </svg>
-          <!-- Check Circle Icon (hold steady) -->
-          <svg v-else-if="statusIcon === 'CheckCircleIcon'" class="w-8 h-8" :class="iconClass" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-          </svg>
-          <!-- Arrow Up Circle Icon (raise temp) -->
-          <svg v-else-if="statusIcon === 'ArrowUpCircleIcon'" class="w-8 h-8" :class="iconClass" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 11l3-3m0 0l3 3m-3-3v8m0-13a9 9 0 110 18 9 9 0 010-18z" />
-          </svg>
-          <!-- Arrow Down Circle Icon (lower temp) -->
-          <svg v-else-if="statusIcon === 'ArrowDownCircleIcon'" class="w-8 h-8" :class="iconClass" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 13l-3 3m0 0l-3-3m3 3V8m0 13a9 9 0 110-18 9 9 0 010 18z" />
-          </svg>
-        </div>
-        
-        <div class="flex-1 min-w-0">
-          <!-- Can recommend -->
-          <template v-if="canRecommend">
-            <h3 class="font-semibold text-lg" :class="textClass">
-              {{ actionTitle }}
-            </h3>
-            
-            <p class="mt-1 text-gray-700 dark:text-gray-300">
-              {{ message }}
-            </p>
-            
-            <!-- Alternative message for oven-off recommendation -->
-            <div v-if="alternativeMessage" class="mt-3 p-3 bg-white dark:bg-gray-900 rounded-lg border border-purple-200 dark:border-purple-700">
-              <p class="text-sm font-medium text-purple-800 dark:text-purple-200">
-                💡 Alternative Approach:
-              </p>
-              <p class="mt-1 text-sm text-gray-700 dark:text-gray-300">
-                {{ alternativeMessage }}
-              </p>
-            </div>
-            
-            <!-- Temperature change visual -->
-            <div v-if="action !== 'hold' && action !== 'oven-off'" class="mt-3 flex items-center gap-3">
-              <div class="text-center">
-                <div class="text-xs text-gray-500 dark:text-gray-400 uppercase">Current</div>
-                <div class="text-xl font-bold text-gray-600 dark:text-gray-400">
-                  {{ currentOvenFormatted }}
-                </div>
-              </div>
-              
-              <!-- Arrow Right Icon -->
-              <svg class="w-6 h-6 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3" />
-              </svg>
-              
-              <div class="text-center">
-                <div class="text-xs uppercase" :class="suggestedLabelClass">Suggested</div>
-                <div class="text-2xl font-bold" :class="textClass">
-                  {{ suggestedTempFormatted }}
-                </div>
-              </div>
-              
-              <div class="ml-2 px-2 py-1 rounded-full text-sm font-medium" :class="changeBadgeClass">
-                {{ changeAmountFormatted }}
-              </div>
-            </div>
-            
-            <!-- Apply button for raise/lower actions -->
-            <div v-if="action === 'raise' || action === 'lower'" class="mt-4">
-              <button
-                @click="applyRecommendation"
-                class="w-full py-3 px-4 rounded-lg font-semibold text-white transition-colors"
-                :class="applyButtonClass"
-              >
-                Apply: Set oven to {{ suggestedTempFormatted }}
-              </button>
-              <p class="text-xs text-gray-500 dark:text-gray-400 text-center mt-2">
-                This will log the oven temperature change
-              </p>
-            </div>
-            
-            <!-- Apply button for oven-off action when oven is currently off (restart recommendation) -->
-            <div v-if="action === 'oven-off' && isOvenCurrentlyOff && restartTime" class="mt-4 space-y-3">
-              <!-- Display estimated current meat temp -->
-              <div v-if="estimatedCurrentMeatTempFormatted" class="p-3 bg-white dark:bg-gray-900 rounded-lg border border-purple-200 dark:border-purple-700">
-                <p class="text-sm text-gray-600 dark:text-gray-400">
-                  {{ alternativeMessage }}
-                </p>
-              </div>
-              
-              <!-- Restart time display -->
-              <div class="p-4 bg-purple-50 dark:bg-purple-900/30 rounded-lg border-2 border-purple-300 dark:border-purple-700">
-                <div class="text-center">
-                  <p class="text-sm text-purple-600 dark:text-purple-300 font-medium mb-2">
-                    {{ shouldRestartNow ? '🔥 Restart Now' : '⏰ Restart Time' }}
-                  </p>
-                  <p class="text-2xl font-bold text-purple-700 dark:text-purple-200">
-                    {{ shouldRestartNow ? 'NOW' : restartTimeFormatted }}
-                  </p>
-                  <p class="text-sm text-purple-600 dark:text-purple-300 mt-2">
-                    at {{ suggestedTempFormatted }}
-                  </p>
-                  <p v-if="!shouldRestartNow && minutesUntilRestart !== null" class="text-xs text-purple-500 dark:text-purple-400 mt-1">
-                    (in {{ Math.round(minutesUntilRestart) }} minutes)
-                  </p>
-                </div>
-              </div>
-              
-              <!-- Quick restart button -->
-              <button
-                @click="emit('openRestartModal')"
-                class="w-full py-3 px-4 rounded-lg font-semibold text-white transition-colors"
-                :class="shouldRestartNow ? 'bg-green-600 hover:bg-green-700 dark:bg-green-700 dark:hover:bg-green-800' : 'bg-purple-500 hover:bg-purple-600 dark:bg-purple-600 dark:hover:bg-purple-700'"
-              >
-                {{ shouldRestartNow ? 'Restart Oven Now' : 'Log Oven Restart' }}
-              </button>
-            </div>
-            
-            <!-- Apply button for oven-off action when oven is ON (pause recommendation) -->
-            <div v-else-if="action === 'oven-off' && !isOvenCurrentlyOff && ovenOffMinutes" class="mt-4 space-y-2">
-              <button
-                @click="emit('openPauseModal')"
-                class="w-full py-3 px-4 rounded-lg font-semibold text-white transition-colors"
-                :class="applyButtonClass"
-              >
-                Turn Off Oven ({{ ovenOffMinutes }} min pause)
-              </button>
-              <p class="text-xs text-gray-500 dark:text-gray-400 text-center">
-                Set a timer and restart the oven after {{ ovenOffMinutes }} minutes
-              </p>
-            </div>
-            
-            <!-- Oven-off action note (only when recommending pause, not restart) -->
-            <div v-if="action === 'oven-off' && !isOvenCurrentlyOff" class="mt-4 p-3 bg-white dark:bg-gray-900 rounded-lg border border-purple-200 dark:border-purple-700">
-              <p class="text-sm text-gray-600 dark:text-gray-400">
-                <strong>💡 Tip:</strong> Pausing your oven temporarily is a practical way to slow down cooking when you can't lower the temperature any further. Set a timer and restart at the same temperature after the suggested time.
-              </p>
-            </div>
-            
-            <!-- Reasoning (collapsible) -->
-            <details class="mt-3">
-              <summary class="text-sm text-gray-500 dark:text-gray-400 cursor-pointer hover:text-gray-700 dark:hover:text-gray-300">
-                Why this recommendation?
-              </summary>
-              <p class="mt-2 text-sm text-gray-600 dark:text-gray-400 pl-4 border-l-2 border-gray-200 dark:border-gray-700">
-                {{ reasoning }}
-              </p>
-            </details>
-          </template>
-          
-          <!-- Cannot recommend -->
-          <template v-else>
-            <h3 class="font-semibold text-gray-700 dark:text-gray-300">
-              {{ blockerTitle }}
-            </h3>
-            
-            <p class="mt-1 text-gray-600 dark:text-gray-400">
-              {{ blockerReason }}
-            </p>
-            
-            <!-- Progress indicator -->
-            <div v-if="blockerProgress" class="mt-3">
-              <div class="flex justify-between text-xs text-gray-500 dark:text-gray-400 mb-1">
-                <span>{{ blockerProgress.message }}</span>
-                <span>{{ blockerProgress.current }}/{{ blockerProgress.required }}</span>
-              </div>
-              <div class="h-2 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
-                <div 
-                  class="h-full bg-blue-500 rounded-full transition-all duration-500"
-                  :style="{ width: `${progressPercent}%` }"
-                />
-              </div>
-            </div>
-            
-            <!-- Quick action for missing data -->
-            <div v-if="quickAction" class="mt-3">
-              <button 
-                @click="handleQuickAction"
-                class="text-sm text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300 font-medium"
-              >
-                {{ quickAction.label }} →
-              </button>
-            </div>
-          </template>
-        </div>
-      </div>
-      
-      <!-- Disclaimer -->
-      <p class="mt-4 text-xs text-gray-400 dark:text-gray-500 border-t border-gray-200 dark:border-gray-700 pt-3">
-        {{ disclaimer }}
+  <!--
+    The next-action band. One sentence, at most one control.
+
+    The sentence comes straight from the composable's `message` / `blockerReason`
+    — both are already substituted and unit-correct, so the UI never assembles a
+    temperature string of its own. The dot carries the verdict, which lets the
+    sentence stay in a single ink register instead of tinting a whole panel.
+  -->
+  <section class="band rule py-4" aria-label="What to do next">
+    <div class="flex items-start gap-2.5">
+      <span
+        class="mt-[7px] h-2 w-2 shrink-0 rounded-full"
+        :class="dotClass"
+        aria-hidden="true"
+      />
+      <p class="min-w-0 flex-1 text-[17px] leading-snug text-ink">
+        {{ headline }}
       </p>
     </div>
-    
-    <!-- Manual Pause/Restart Button (Always Visible) -->
-    <div class="mt-3 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-3">
-      <div class="flex items-center justify-between gap-3">
-        <div class="flex-1">
-          <h4 class="text-sm font-medium text-gray-700 dark:text-gray-300">
-            {{ isOvenCurrentlyOff ? 'Restart Cooking' : 'Pause Cooking' }}
-          </h4>
-          <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-            {{ isOvenCurrentlyOff ? 'Turn the oven back on to continue cooking' : 'Turn off oven temporarily to slow down cooking' }}
-          </p>
-        </div>
-        <button
-          @click="isOvenCurrentlyOff ? emit('openRestartModal') : emit('openPauseModal')"
-          class="px-4 py-2 rounded-lg font-medium text-white transition-colors whitespace-nowrap"
-          :class="isOvenCurrentlyOff ? 'bg-green-600 hover:bg-green-700 dark:bg-green-700 dark:hover:bg-green-800' : 'bg-purple-600 hover:bg-purple-700 dark:bg-purple-700 dark:hover:bg-purple-800'"
-        >
-          {{ isOvenCurrentlyOff ? 'Restart Oven' : 'Pause Now' }}
-        </button>
-      </div>
+
+    <!-- Supporting line: the oven-off alternative, or the blocker's progress
+         hint. "Need one more reading" is information, not an alarm. -->
+    <p v-if="detail" class="mt-1.5 pl-[18px] text-[13px] leading-snug text-ink-dim">
+      {{ detail }}
+    </p>
+
+    <!-- How long the oven has been off. Driven by the shared tick, not by a
+         `new Date()` read inside a dependency-free computed — that pattern
+         froze at first evaluation. -->
+    <p v-if="pausedLine" class="mt-1.5 pl-[18px] text-[13px] leading-snug text-ink-mute">
+      {{ pausedLine }}
+    </p>
+
+    <div v-if="control" class="mt-3">
+      <button
+        type="button"
+        :class="control.kind === 'primary' ? 'btn-primary' : 'btn-ghost'"
+        @click="runControl"
+      >
+        {{ control.label }}
+      </button>
     </div>
-    
-    <!-- Oven Responsiveness (optional, collapsible) -->
-    <details v-if="hasResponsivenessData" class="mt-3">
-      <summary class="text-sm text-gray-500 dark:text-gray-400 cursor-pointer hover:text-gray-700 dark:hover:text-gray-300 px-2">
-        View observed oven responsiveness
+
+    <details v-if="explanation" class="mt-2">
+      <summary class="flex min-h-[44px] cursor-pointer items-center text-[13px] text-ink-mute">
+        Why?
       </summary>
-      <div class="mt-2 p-3 bg-gray-50 dark:bg-gray-800 rounded-lg text-sm text-gray-600 dark:text-gray-400">
-        {{ responsiveness.description }}
-      </div>
+      <p class="pb-1 text-[13px] leading-relaxed text-ink-dim">
+        {{ explanation }}
+      </p>
     </details>
-  </div>
+  </section>
 </template>
 
 <script setup>
 import { computed } from 'vue';
 import { useSession } from '../composables/useSession.js';
 import { useRecommendations } from '../composables/useRecommendations.js';
+import { useRefreshTimer } from '../composables/useRefreshTimer.js';
 import { useToast } from '../composables/useToast.js';
-import { formatTemperature } from '../utils/temperatureUtils.js';
-import { DISCLAIMER } from '../constants/defaults.js';
+import { formatDuration, formatTime, minutesBetween, now } from '../utils/timeUtils.js';
 
-const emit = defineEmits(['openOvenModal', 'openReadingModal', 'openSettings', 'openPauseModal', 'openRestartModal']);
+const emit = defineEmits(['openOvenModal', 'openReadingModal', 'openSettings', 'openPauseModal', 'openRestartModal', 'openEndSession']);
 
-const { currentOvenTemp, displayUnits, addOvenEvent, ovenEvents } = useSession();
+const { addOvenEvent, ovenEvents } = useSession();
 const {
   canRecommend,
   action,
   suggestedTemp,
   suggestedTempFormatted,
-  changeAmountFormatted,
   message,
   reasoning,
-  severity,
   alternativeMessage,
   ovenOffMinutes,
-  restartTime,
-  restartTimeFormatted,
-  shouldRestartNow,
-  minutesUntilRestart,
-  estimatedCurrentMeatTemp,
-  estimatedCurrentMeatTempFormatted,
+  isPaused,
   blockerReason,
   blockerType,
   blockerProgress,
@@ -270,163 +81,138 @@ const {
   hasResponsivenessData
 } = useRecommendations();
 const { showToast } = useToast();
+const { tick } = useRefreshTimer();
 
-const disclaimer = DISCLAIMER;
-
-// Check if oven is currently off
-const isOvenCurrentlyOff = computed(() => {
-  if (!ovenEvents.value || ovenEvents.value.length === 0) return false;
-  const lastEvent = ovenEvents.value[ovenEvents.value.length - 1];
-  return lastEvent.isOff === true;
+/** Timestamp of the oven-off event we are currently sitting in, if any. */
+const pausedSince = computed(() => {
+  if (!isPaused.value) return null;
+  const events = ovenEvents.value;
+  return events[events.length - 1]?.timestamp ?? null;
 });
 
-// Computed display values
-const currentOvenFormatted = computed(() => {
-  if (currentOvenTemp.value === null) return '--';
-  return formatTemperature(currentOvenTemp.value, displayUnits.value);
+const pausedLine = computed(() => {
+  if (!pausedSince.value) return null;
+  // Touch the tick so the elapsed figure actually advances.
+  tick.value;
+  const elapsed = minutesBetween(pausedSince.value, now());
+  return `Oven off since ${formatTime(pausedSince.value)} · ${formatDuration(Math.max(0, elapsed))}`;
 });
 
-const progressPercent = computed(() => {
-  if (!blockerProgress.value) return 0;
-  return Math.min(100, (blockerProgress.value.current / blockerProgress.value.required) * 100);
+const headline = computed(() => {
+  if (!canRecommend.value) return blockerReason.value || 'Not enough data yet.';
+  return message.value || 'No recommendation yet.';
 });
 
-// Action title based on recommendation
-const actionTitle = computed(() => {
+const detail = computed(() => {
+  if (!canRecommend.value) return blockerProgress.value?.message ?? null;
+  // Only oven-off carries an alternative, and it is the whole point of it — but
+  // it describes turning the oven off, so it is noise once the oven is already
+  // off (and its {ovenTemp} resolves to 0° in that state).
+  if (isPaused.value) return null;
+  return alternativeMessage.value;
+});
+
+/** Muted interpretation colours only — the heat ramp is reserved for measurement. */
+const dotClass = computed(() => {
+  if (!canRecommend.value) return 'bg-ink-mute';
   switch (action.value) {
-    case 'raise': return 'Raise Oven Temperature';
-    case 'lower': return 'Lower Oven Temperature';
-    case 'hold': return 'Hold Steady';
-    case 'oven-off': 
-      // Check if this is a restart recommendation (oven currently off)
-      if (isOvenCurrentlyOff.value && restartTime.value) {
-        return shouldRestartNow.value ? 'Restart Oven Now' : 'Oven Restart Scheduled';
-      }
-      return 'Pause Cooking Temporarily';
-    default: return 'No Recommendation';
+    case 'at-target': return 'bg-ontrack';
+    case 'hold': return 'bg-ontrack';
+    case 'raise': return 'bg-late';
+    case 'lower': return 'bg-early';
+    case 'oven-off': return 'bg-early';
+    // Pause is an action, not a status, so it gets neutral treatment.
+    case 'needs-reading': return 'bg-ink-dim';
+    default: return 'bg-ink-mute';
   }
 });
 
-// Blocker title based on blocker type
-const blockerTitle = computed(() => {
-  switch (blockerType.value) {
-    case 'insufficient_readings': return 'Collecting Data...';
-    case 'insufficient_time': return 'Gathering More Data...';
-    case 'no_oven_data': return 'Oven Temperature Needed';
-    case 'stale_oven_data': return 'Confirm Oven Temperature';
-    case 'no_serve_time': return 'Set a Target Time';
-    case 'bad_rate': return 'Check Thermometer';
-    case 'unstable_rate': return 'Waiting for Stability';
-    default: return 'Cannot Recommend Yet';
-  }
-});
+/**
+ * Manual pause / restart. This band is the only route to those two sheets, so
+ * it stays reachable whenever the recommendation has no action of its own.
+ */
+const pauseControl = computed(() =>
+  isPaused.value
+    ? { kind: 'ghost', label: 'Log oven restart', event: 'openRestartModal' }
+    : { kind: 'ghost', label: 'Pause cooking', event: 'openPauseModal' }
+);
 
-// Status icon based on action/state
-const statusIcon = computed(() => {
+/**
+ * Exactly one control, ever. `kind: 'primary'` is the recommendation's own
+ * action; `'ghost'` is the session escape hatch we offer when the
+ * recommendation itself needs no button.
+ */
+const control = computed(() => {
   if (!canRecommend.value) {
-    return blockerType.value === 'bad_rate' ? 'AlertCircleIcon' : 'ClockIcon';
+    switch (blockerType.value) {
+      case 'no_oven_data':
+      case 'stale_oven_data':
+        return { kind: 'ghost', label: 'Update oven temp', event: 'openOvenModal' };
+      case 'insufficient_readings':
+        return { kind: 'ghost', label: 'Add reading', event: 'openReadingModal' };
+      case 'no_serve_time':
+        return { kind: 'ghost', label: 'Set serve time', event: 'openSettings' };
+      // Nothing to offer before there is a session to act on.
+      case 'no_session':
+        return null;
+      default:
+        return pauseControl.value;
+    }
   }
-  switch (action.value) {
-    case 'raise': return 'ArrowUpCircleIcon';
-    case 'lower': return 'ArrowDownCircleIcon';
-    case 'hold': return 'CheckCircleIcon';
-    case 'oven-off': return 'ClockIcon';
-    default: return 'ClockIcon';
-  }
-});
 
-// Panel styling based on state
-const panelClasses = computed(() => {
-  if (!canRecommend.value) {
-    return 'bg-gray-50 dark:bg-gray-800 border-gray-200 dark:border-gray-700';
-  }
   switch (action.value) {
-    case 'raise': 
-      return severity.value === 'urgent' 
-        ? 'bg-red-50 dark:bg-red-900/20 border-red-300 dark:border-red-800' 
-        : 'bg-amber-50 dark:bg-amber-900/20 border-amber-300 dark:border-amber-800';
-    case 'lower': return 'bg-blue-50 dark:bg-blue-900/20 border-blue-300 dark:border-blue-800';
-    case 'hold': return 'bg-green-50 dark:bg-green-900/20 border-green-300 dark:border-green-800';
-    case 'oven-off': return 'bg-purple-50 dark:bg-purple-900/20 border-purple-300 dark:border-purple-800';
-    default: return 'bg-gray-50 dark:bg-gray-800 border-gray-200 dark:border-gray-700';
-  }
-});
+    case 'needs-reading':
+      // The locked decision: measure the meat, never estimate how far it cooled.
+      return { kind: 'primary', label: 'Add reading', event: 'openReadingModal' };
 
-const iconClass = computed(() => {
-  if (!canRecommend.value) return 'text-gray-400';
-  switch (action.value) {
-    case 'raise': return severity.value === 'urgent' ? 'text-red-500' : 'text-amber-500';
-    case 'lower': return 'text-blue-500';
-    case 'hold': return 'text-green-500';
-    case 'oven-off': return 'text-purple-500';
-    default: return 'text-gray-400';
-  }
-});
+    case 'raise':
+    case 'lower':
+      return { kind: 'primary', label: `Set oven to ${suggestedTempFormatted.value}`, apply: true };
 
-const textClass = computed(() => {
-  if (!canRecommend.value) return 'text-gray-700 dark:text-gray-300';
-  switch (action.value) {
-    case 'raise': return severity.value === 'urgent' ? 'text-red-700 dark:text-red-300' : 'text-amber-700 dark:text-amber-300';
-    case 'lower': return 'text-blue-700 dark:text-blue-300';
-    case 'hold': return 'text-green-700 dark:text-green-300';
-    case 'oven-off': return 'text-purple-700 dark:text-purple-300';
-    default: return 'text-gray-700 dark:text-gray-300';
-  }
-});
+    case 'oven-off':
+      // oven-off can fire while the oven is already off (paused, fresh reading,
+      // still early), so the oven's actual state decides the control.
+      if (isPaused.value) return { kind: 'primary', label: 'Log oven restart', event: 'openRestartModal' };
+      return {
+        kind: 'primary',
+        label: ovenOffMinutes.value ? `Turn oven off for ${ovenOffMinutes.value} min` : 'Turn oven off',
+        event: 'openPauseModal'
+      };
 
-const suggestedLabelClass = computed(() => {
-  switch (action.value) {
-    case 'raise': return 'text-amber-600 dark:text-amber-400';
-    case 'lower': return 'text-blue-600 dark:text-blue-400';
-    default: return 'text-gray-500 dark:text-gray-400';
-  }
-});
+    case 'at-target':
+      // Nothing to apply - the cook is done, so the only thing left to offer is
+      // finishing it. Straight to the confirmation rather than via Settings.
+      return { kind: 'ghost', label: 'End session…', event: 'openEndSession' };
 
-const changeBadgeClass = computed(() => {
-  switch (action.value) {
-    case 'raise': return 'bg-amber-100 dark:bg-amber-900/50 text-amber-700 dark:text-amber-300';
-    case 'lower': return 'bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300';
-    default: return 'bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300';
-  }
-});
-
-const applyButtonClass = computed(() => {
-  switch (action.value) {
-    case 'raise': return 'bg-amber-500 hover:bg-amber-600 dark:bg-amber-600 dark:hover:bg-amber-700';
-    case 'lower': return 'bg-blue-500 hover:bg-blue-600 dark:bg-blue-600 dark:hover:bg-blue-700';
-    case 'oven-off': return 'bg-purple-500 hover:bg-purple-600 dark:bg-purple-600 dark:hover:bg-purple-700';
-    default: return 'bg-gray-500 hover:bg-gray-600';
-  }
-});
-
-// Quick action for certain blocker types
-const quickAction = computed(() => {
-  switch (blockerType.value) {
-    case 'no_oven_data':
-    case 'stale_oven_data':
-      return { label: 'Update oven temperature', action: 'openOvenModal' };
-    case 'insufficient_readings':
-      return { label: 'Add a reading', action: 'openReadingModal' };
-    case 'no_serve_time':
-      return { label: 'Set target time in session settings', action: 'openSettings' };
     default:
-      return null;
+      return pauseControl.value;
   }
 });
 
-function handleQuickAction() {
-  if (!quickAction.value) return;
-  emit(quickAction.value.action);
+// "Why?" is only a fair label when there is a recommendation to explain. The
+// oven-responsiveness note rides along here rather than earning a second
+// disclosure of its own.
+const explanation = computed(() => {
+  if (!canRecommend.value || !reasoning.value) return null;
+  const parts = [reasoning.value];
+  if (hasResponsivenessData.value) parts.push(responsiveness.value.description);
+  return parts.join(' ');
+});
+
+function runControl() {
+  const next = control.value;
+  if (!next) return;
+  if (next.apply) {
+    applyRecommendation();
+    return;
+  }
+  emit(next.event);
 }
 
 function applyRecommendation() {
   if (suggestedTemp.value === null) return;
-  
   addOvenEvent(suggestedTemp.value);
-  
-  const actionVerb = action.value === 'raise' ? 'raised' : 'lowered';
-  showToast(`Oven ${actionVerb} to ${suggestedTempFormatted.value}`, 'success');
+  const verb = action.value === 'raise' ? 'raised' : 'lowered';
+  showToast(`Oven ${verb} to ${suggestedTempFormatted.value}`, 'success');
 }
 </script>
-
-

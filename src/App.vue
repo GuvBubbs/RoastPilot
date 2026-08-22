@@ -20,6 +20,7 @@
           </svg>
         </button>
       </div>
+      <OfflineIndicator />
     </header>
 
     <!-- Loading -->
@@ -56,6 +57,7 @@
         @openSettings="state.showSettings = true"
         @openPauseModal="state.showPauseCookingModal = true"
         @openRestartModal="state.showRestartOvenModal = true"
+        @openEndSession="state.showEndConfirmation = true"
       />
 
       <ReadingsLog />
@@ -123,7 +125,6 @@
     <PauseCookingModal v-model="state.showPauseCookingModal" />
 
     <ToastContainer />
-    <OfflineIndicator />
   </ErrorBoundary>
 </template>
 

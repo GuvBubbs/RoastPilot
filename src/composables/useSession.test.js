@@ -258,3 +258,160 @@ describe('useSession settings persistence', () => {
     expect(second.settings.value.ovenTempMaxF).toBe(260);
   });
 });
+
+describe('useSession oven-event invariants', () => {
+  let session;
+
+  beforeEach(() => {
+    localStorage.clear();
+    session = useSession();
+    // No initialOvenTemp override: createSession still defaults config
+    // .initialOvenTemp to 200, but startSession only logs an opening event
+    // when one is passed explicitly. These tests want a clean event list.
+    session.startSession({ targetTemp: 200, units: 'F' });
+  });
+
+  afterEach(() => {
+    session.endSession();
+    localStorage.clear();
+  });
+
+  it('places a back-dated oven event in timestamp order', () => {
+    session.addOvenEvent(225, at(10));
+    session.addOvenEvent(275, at(12));
+    session.addOvenEvent(250, at(11)); // back-dated, arrives last
+
+    expect(session.ovenEvents.value.map(e => e.timestamp)).toEqual([at(10), at(11), at(12)]);
+    expect(session.ovenEvents.value.map(e => e.setTemp)).toEqual([225, 250, 275]);
+  });
+
+  it('derives previousTemp as a chain, seeded from the configured initial temp', () => {
+    session.addOvenEvent(225, at(10));
+    session.addOvenEvent(275, at(11));
+
+    expect(session.ovenEvents.value.map(e => e.previousTemp)).toEqual([200, 225]);
+  });
+
+  it('re-derives the next event\'s previousTemp when one is edited', () => {
+    session.addOvenEvent(225, at(10));
+    session.addOvenEvent(275, at(11));
+
+    const first = session.ovenEvents.value[0];
+    session.updateOvenEvent(first.id, { setTemp: 240 });
+
+    // Without re-derivation the second event would still claim it changed
+    // from 225, describing a step that never happened.
+    expect(session.ovenEvents.value.map(e => e.setTemp)).toEqual([240, 275]);
+    expect(session.ovenEvents.value.map(e => e.previousTemp)).toEqual([200, 240]);
+  });
+
+  it('re-derives previousTemp when an event is deleted from the middle', () => {
+    session.addOvenEvent(225, at(10));
+    session.addOvenEvent(250, at(11));
+    session.addOvenEvent(275, at(12));
+
+    const middle = session.ovenEvents.value[1];
+    session.deleteOvenEvent(middle.id);
+
+    expect(session.ovenEvents.value.map(e => e.setTemp)).toEqual([225, 275]);
+    expect(session.ovenEvents.value.map(e => e.previousTemp)).toEqual([200, 225]);
+  });
+
+  it('reports the last temperature actually set, not the zero of an off event', () => {
+    session.addOvenEvent(225, at(10));
+    session.logOvenOff(at(11));
+
+    // currentOvenTemp is what the oven is at: nothing.
+    expect(session.currentOvenTemp.value).toBe(0);
+    // lastActiveOvenTemp is what to restart it at. Rendering the former into
+    // "then restart at {ovenTemp}" produced "restart at 0°F".
+    expect(session.lastActiveOvenTemp.value).toBe(225);
+  });
+
+  it('falls back to the configured initial temp when no event has been logged', () => {
+    expect(session.lastActiveOvenTemp.value).toBe(200);
+  });
+
+  it('keeps reporting the last active temp across an off/on cycle', () => {
+    session.addOvenEvent(225, at(10));
+    session.logOvenOff(at(11));
+    session.logOvenOn(225, at(12));
+
+    expect(session.lastActiveOvenTemp.value).toBe(225);
+  });
+});
+
+describe('useSession units preference', () => {
+  /**
+   * The composable's state is a module singleton, so a genuinely fresh one
+   * needs the module re-imported.
+   */
+  async function freshSession() {
+    vi.resetModules();
+    const mod = await import('./useSession.js');
+    return mod.useSession();
+  }
+
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  afterEach(() => {
+    localStorage.clear();
+  });
+
+  it('records a units choice made with no cook running', async () => {
+    const s = await freshSession();
+    s.initialize();
+
+    s.setUnits('C');
+
+    // Settings is reachable from the header at all times, so this has to land
+    // somewhere even with no session to write onto.
+    expect(s.preferredUnits.value).toBe('C');
+    expect(storageService.loadUnits()).toBe('C');
+  });
+
+  it('switches the running cook and the standing preference together', async () => {
+    const s = await freshSession();
+    s.initialize();
+    s.startSession({ targetTemp: 200, units: 'F' });
+
+    s.setUnits('C');
+
+    expect(s.displayUnits.value).toBe('C');
+    expect(storageService.loadUnits()).toBe('C');
+  });
+
+  it('seeds a new cook from the stored preference', async () => {
+    const first = await freshSession();
+    first.initialize();
+    first.setUnits('C');
+    first.endSession();
+
+    const second = await freshSession();
+    second.initialize();
+    second.startSession({ targetTemp: 200 }); // no explicit units
+
+    expect(second.displayUnits.value).toBe('C');
+  });
+
+  it('lets an explicit units choice at setup win over the preference', async () => {
+    const first = await freshSession();
+    first.initialize();
+    first.setUnits('C');
+
+    const second = await freshSession();
+    second.initialize();
+    second.startSession({ targetTemp: 200, units: 'F' });
+
+    expect(second.displayUnits.value).toBe('F');
+  });
+
+  it('ignores a bogus units value', async () => {
+    const s = await freshSession();
+    s.initialize();
+    s.setUnits('K');
+    expect(s.preferredUnits.value).toBe('F');
+  });
+});
