@@ -8,7 +8,9 @@
     "build": "vite build",
     "preview": "vite preview",
     "test": "vitest",
-    "test:ui": "vitest --ui"
+    "test:ui": "vitest --ui",
+    "test:run": "vitest run",
+    "generate-pwa-assets": "pwa-assets-generator"
   },
   "dependencies": {
     "@vueuse/core": "^10.0.0",
@@ -21,6 +23,7 @@
     "vue-chartjs": "^5.3.3"
   },
   "devDependencies": {
+    "@vite-pwa/assets-generator": "^0.2.6",
     "@vitejs/plugin-vue": "^5.0.0",
     "autoprefixer": "^10.4.0",
     "postcss": "^8.4.0",

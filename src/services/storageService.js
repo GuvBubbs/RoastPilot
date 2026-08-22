@@ -143,6 +143,21 @@ export const storageService = {
   },
 
   /**
+   * Remove every key this app owns. Deliberately not localStorage.clear() —
+   * the origin is shared with other sites on the same host.
+   * @returns {boolean} Success status
+   */
+  clearAll() {
+    try {
+      Object.values(STORAGE_KEYS).forEach(key => localStorage.removeItem(key));
+      return true;
+    } catch (error) {
+      console.error('Failed to clear storage:', error);
+      return false;
+    }
+  },
+
+  /**
    * Save application settings independent of session
    * @param {AppSettings} settings
    * @returns {boolean} Success status
@@ -235,12 +250,15 @@ export const storageService = {
    * @returns {{used: number, available: number, percentage: number}}
    */
   getStorageInfo() {
+    // Only count our own keys — the origin is shared with other sites on the
+    // same host, so a full scan would over-report.
     let used = 0;
-    for (let key in localStorage) {
-      if (localStorage.hasOwnProperty(key)) {
-        used += localStorage.getItem(key).length * 2; // UTF-16 = 2 bytes per char
+    Object.values(STORAGE_KEYS).forEach(key => {
+      const value = localStorage.getItem(key);
+      if (value !== null) {
+        used += (key.length + value.length) * 2; // UTF-16 = 2 bytes per char
       }
-    }
+    });
     
     // localStorage limit is typically 5-10MB
     const estimatedLimit = 5 * 1024 * 1024; // 5MB

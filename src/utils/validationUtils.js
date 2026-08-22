@@ -85,12 +85,16 @@ export function validateReading(temp, units, previousTempF = null) {
     return { valid: false, error: 'Temperature exceeds boiling point', warning: null };
   }
   
-  // Warning for large jumps from previous reading
+  // Warning for large jumps from previous reading. The threshold stays in
+  // Fahrenheit so the behaviour is unit-independent, but the delta is shown
+  // in the user's units. A temperature difference converts by scale only --
+  // no 32 degree offset -- so fahrenheitToCelsius must not be used here.
   let warning = null;
   if (previousTempF !== null) {
-    const delta = Math.abs(tempF - previousTempF);
-    if (delta > 20) {
-      warning = `Large change from previous reading (${delta.toFixed(1)}°F). Please verify.`;
+    const deltaF = Math.abs(tempF - previousTempF);
+    if (deltaF > 20) {
+      const delta = units === 'C' ? deltaF / 1.8 : deltaF;
+      warning = `Large change from previous reading (${delta.toFixed(1)}°${units}). Please verify.`;
     }
   }
   

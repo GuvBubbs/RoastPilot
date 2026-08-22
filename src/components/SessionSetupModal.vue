@@ -37,7 +37,7 @@
               
               <div class="pt-8">
                 <UnitToggle
-                  v-model="form.units.value"
+                  :model-value="form.units.value"
                   @update:model-value="handleUnitChange"
                 />
               </div>
@@ -399,6 +399,11 @@ const isFormValid = computed(() => {
 });
 
 // Handle unit change - convert displayed values
+// Note: UnitToggle is bound with :model-value rather than v-model on purpose.
+// v-model would assign form.units.value from the same update:modelValue event
+// and, being registered first, would run before this handler -- making the
+// oldUnit check below always true and silently skipping every conversion.
+// This function owns the assignment instead (see the end of the body).
 function handleUnitChange(newUnit) {
   const oldUnit = form.units.value;
   
@@ -430,6 +435,9 @@ function handleUnitChange(newUnit) {
       form.startingTemp.value = Math.round(celsiusToFahrenheit(form.startingTemp.value));
     }
   }
+  
+  // Switch units only after the values above have been converted out of oldUnit
+  form.units.value = newUnit;
 }
 
 // Select quick target

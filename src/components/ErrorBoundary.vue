@@ -33,6 +33,7 @@
 
 <script setup>
 import { ref, onErrorCaptured } from 'vue';
+import { storageService } from '../services/storageService.js';
 
 const error = ref(null);
 const errorDetails = ref('');
@@ -54,9 +55,9 @@ function handleRetry() {
 }
 
 function handleReset() {
-  // Clear storage and reload
+  // Clear this app's storage keys only, then reload
   if (confirm('This will clear all saved data and reload the app. Continue?')) {
-    localStorage.clear();
+    storageService.clearAll();
     window.location.reload();
   }
 }

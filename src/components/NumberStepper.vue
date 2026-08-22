@@ -35,7 +35,7 @@
           :value="modelValue"
           :min="min"
           :max="max"
-          :step="step"
+          step="any"
           :placeholder="placeholder"
           :disabled="disabled"
           :aria-describedby="error ? `${inputId}-error` : undefined"
@@ -100,6 +100,11 @@ const props = defineProps({
     type: Number,
     default: Infinity
   },
+  // Increment applied by the -/+ buttons. Deliberately not bound to the
+  // input's step attribute: values often land off-step (e.g. a target of
+  // 54.4 after an F->C conversion, or a 41.3 probe reading), and native
+  // step validation would silently block form submit. Range and format
+  // checks are handled by handleBlur and the `error` prop instead.
   step: {
     type: Number,
     default: 1
