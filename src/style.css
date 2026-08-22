@@ -2,14 +2,41 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
-  line-height: 1.5;
-  font-weight: 400;
+/* ---------------------------------------------------------------------------
+   Self-hosted type. A CDN link would fail offline, which defeats the point of
+   a PWA — these are precached by workbox (see the woff2 glob in vite.config).
+   Latin subsets only.
+   --------------------------------------------------------------------------- */
 
-  color-scheme: light dark;
-  color: rgba(0, 0, 0, 0.87);
-  background-color: #ffffff;
+@font-face {
+  font-family: 'Barlow Semi Condensed';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('/fonts/barlow-semi-condensed-600.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Barlow Semi Condensed';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('/fonts/barlow-semi-condensed-700.woff2') format('woff2');
+}
+
+/* Variable font — one file covers 400..700. */
+@font-face {
+  font-family: 'Instrument Sans';
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url('/fonts/instrument-sans-var.woff2') format('woff2');
+}
+
+:root {
+  --gutter: 16px;
+
+  color-scheme: dark;
 
   font-synthesis: none;
   text-rendering: optimizeLegibility;
@@ -17,36 +44,201 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    color: rgba(255, 255, 255, 0.87);
-    background-color: #1a1a1a;
-  }
+html {
+  /* Kills the iOS rubber-band white flash above/below the ground. */
+  background-color: #14110F;
 }
 
 body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
+  background-color: #14110F;
+  color: #F5F0EA;
+  font-family: 'Instrument Sans', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  line-height: 1.45;
+  font-weight: 400;
+  /* Nothing in this app scrolls sideways; a stray wide child should be a
+     visible bug in review, not a silent horizontal pan on the device. */
+  overflow-x: hidden;
+  -webkit-text-size-adjust: 100%;
 }
 
-#app {
-  max-width: 1280px;
-  margin: 0 auto;
-  padding: 1rem;
+@layer components {
+  /* -- Layout ------------------------------------------------------------ */
+
+  /* Full-bleed horizontal band. Owns ALL horizontal padding in the app —
+     nothing else should set px-* at the section level. */
+  .band {
+    padding-left: var(--gutter);
+    padding-right: var(--gutter);
+  }
+
+  /* Opt out of the gutter: the chart draws to the screen edge. */
+  .band-flush {
+    padding-left: 0;
+    padding-right: 0;
+  }
+
+  /* Hairline separator between bands. */
+  .rule {
+    border-bottom: 1px solid #2C2621;
+  }
+
+  .rule-t {
+    border-top: 1px solid #2C2621;
+  }
+
+  /* -- Readout ----------------------------------------------------------- */
+
+  /* The headline number. Condensed is a functional win for a 76px numeral on
+     a 390px screen. */
+  .readout {
+    font-family: 'Barlow Semi Condensed', system-ui, sans-serif;
+    font-weight: 700;
+    font-size: 76px;
+    line-height: 0.9;
+    letter-spacing: -0.01em;
+    font-variant-numeric: tabular-nums;
+    color: #F5F0EA;
+  }
+
+  /* Any numeral that sits in a row with other numerals. */
+  .num {
+    font-family: 'Barlow Semi Condensed', system-ui, sans-serif;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* One cell of the dense 3-up stat row. */
+  .stat {
+    @apply flex flex-col justify-center py-3 min-w-0;
+  }
+
+  .stat-label {
+    @apply text-[11px] uppercase tracking-wider text-ink-mute truncate;
+  }
+
+  .stat-value {
+    font-family: 'Barlow Semi Condensed', system-ui, sans-serif;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    @apply text-[22px] leading-tight text-ink truncate;
+  }
+
+  /* -- Rows -------------------------------------------------------------- */
+
+  /* Flat full-bleed log row. */
+  .row {
+    @apply flex items-center gap-3 w-full text-left;
+    padding: 10px var(--gutter);
+    border-bottom: 1px solid #2C2621;
+  }
+
+  .section-label {
+    @apply text-[11px] uppercase tracking-[0.12em] text-ink-mute;
+  }
+
+  /* -- Chips ------------------------------------------------------------- */
+
+  .chip {
+    @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium;
+    @apply bg-raised text-ink-dim;
+  }
+
+  /* -- Controls ---------------------------------------------------------- */
+
+  /* Guarantees a 44px touch target regardless of visual size. Mirrors the one
+     good precedent the codebase already had (NumberStepper's stepper-button). */
+  .tap {
+    @apply inline-flex items-center justify-center;
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .btn-primary {
+    @apply tap w-full rounded-xl px-4 text-[15px] font-semibold;
+    @apply bg-heat-hot text-white;
+    @apply transition-colors duration-150;
+    @apply active:bg-[#c23a22];
+    @apply disabled:opacity-40 disabled:cursor-not-allowed;
+  }
+
+  .btn-ghost {
+    @apply tap rounded-xl px-4 text-[15px] font-medium;
+    @apply bg-raised text-ink border border-rule;
+    @apply transition-colors duration-150;
+    @apply active:bg-[#2C2621];
+    @apply disabled:opacity-40 disabled:cursor-not-allowed;
+  }
+
+  .btn-danger {
+    @apply tap w-full rounded-xl px-4 text-[15px] font-semibold;
+    @apply bg-danger text-white transition-colors duration-150;
+    @apply active:bg-[#b9351f];
+    @apply disabled:opacity-40 disabled:cursor-not-allowed;
+  }
+
+  /* Bare icon button — no fill, but still a legal target. */
+  .btn-icon {
+    @apply tap rounded-lg text-ink-dim transition-colors duration-150;
+    @apply active:bg-raised;
+  }
+
+  /* -- Fields ------------------------------------------------------------ */
+
+  .label {
+    @apply block text-[11px] uppercase tracking-wider text-ink-dim mb-1.5;
+  }
+
+  .field {
+    @apply w-full rounded-xl px-3 text-[16px] text-ink;
+    @apply bg-raised border border-rule;
+    min-height: 44px;
+    @apply transition-colors duration-150;
+    @apply placeholder:text-ink-mute;
+    @apply focus:border-heat-warm focus:outline-none;
+    @apply disabled:opacity-40 disabled:cursor-not-allowed;
+  }
+
+  /* Native select needs its own arrow once the OS chrome is overridden. */
+  .field-select {
+    @apply field appearance-none pr-9;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='%23A79C91'%3E%3Cpath fill-rule='evenodd' d='M5.23 7.21a.75.75 0 011.06.02L10 11.17l3.71-3.94a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z' clip-rule='evenodd'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 10px center;
+    background-size: 18px;
+  }
+}
+
+@layer utilities {
+  /* Safe-area insets. `viewport-fit=cover` in index.html is what makes these
+     non-zero on a notched device. */
+  .pt-safe {
+    padding-top: env(safe-area-inset-top, 0px);
+  }
+
+  .pb-safe {
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  .pl-safe {
+    padding-left: env(safe-area-inset-left, 0px);
+  }
+
+  .pr-safe {
+    padding-right: env(safe-area-inset-right, 0px);
+  }
+
+  /* Clears the fixed BottomBar plus the home indicator. */
+  .pb-bottombar {
+    padding-bottom: calc(72px + env(safe-area-inset-bottom, 0px));
+  }
 }
 
 /* Accessibility: Focus styles */
 *:focus-visible {
-  outline: 2px solid #3b82f6;
-  outline-offset: 2px;
-}
-
-button:focus-visible,
-input:focus-visible,
-select:focus-visible,
-textarea:focus-visible {
-  outline: 2px solid #3b82f6;
+  outline: 2px solid #D98324;
   outline-offset: 2px;
 }
 
@@ -68,5 +260,3 @@ textarea:focus-visible {
     border-color: currentColor;
   }
 }
-
-

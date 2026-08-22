@@ -1,8 +1,8 @@
 <template>
-  <div 
-    role="radiogroup" 
+  <div
+    role="radiogroup"
     aria-label="Temperature unit selection"
-    class="unit-toggle-container"
+    class="inline-flex shrink-0 gap-0.5 rounded-xl bg-raised border border-rule p-0.5"
   >
     <button
       type="button"
@@ -10,12 +10,8 @@
       :aria-checked="modelValue === 'F'"
       :disabled="disabled"
       @click="selectUnit('F')"
-      class="unit-toggle-button"
-      :class="{
-        'active': modelValue === 'F',
-        'inactive': modelValue !== 'F',
-        'disabled': disabled
-      }"
+      class="unit-button"
+      :class="modelValue === 'F' ? 'unit-button--on' : 'unit-button--off'"
     >
       °F
     </button>
@@ -25,12 +21,8 @@
       :aria-checked="modelValue === 'C'"
       :disabled="disabled"
       @click="selectUnit('C')"
-      class="unit-toggle-button"
-      :class="{
-        'active': modelValue === 'C',
-        'inactive': modelValue !== 'C',
-        'disabled': disabled
-      }"
+      class="unit-button"
+      :class="modelValue === 'C' ? 'unit-button--on' : 'unit-button--off'"
     >
       °C
     </button>
@@ -59,40 +51,21 @@ function selectUnit(unit) {
 </script>
 
 <style scoped>
-.unit-toggle-container {
-  @apply inline-flex rounded-lg border border-gray-300 dark:border-gray-600;
-  @apply overflow-hidden;
+/* Was ~36px tall — under the 44px floor, and this is a control the user hits
+   while holding a probe in the other hand. */
+.unit-button {
+  @apply tap rounded-[10px] px-4 text-[15px] font-semibold;
+  @apply transition-colors duration-150;
+  @apply disabled:opacity-40 disabled:cursor-not-allowed;
 }
 
-.unit-toggle-button {
-  @apply px-4 py-2 text-sm font-medium;
-  @apply transition-all duration-150;
-  @apply min-w-[60px];
-  @apply focus:outline-none focus:ring-2 focus:ring-blue-500 focus:z-10;
+/* Selected state is neutral-inverted rather than a heat colour: saturation in
+   this app means live measurement, and a unit preference is not one. */
+.unit-button--on {
+  @apply bg-ink text-ground;
 }
 
-.unit-toggle-button.active {
-  @apply bg-blue-600 text-white;
-  @apply hover:bg-blue-700;
-}
-
-.unit-toggle-button.inactive {
-  @apply bg-white dark:bg-gray-800;
-  @apply text-gray-700 dark:text-gray-300;
-  @apply hover:bg-gray-50 dark:hover:bg-gray-700;
-}
-
-.unit-toggle-button.disabled {
-  @apply opacity-50 cursor-not-allowed;
-  @apply hover:bg-white dark:hover:bg-gray-800;
-}
-
-.unit-toggle-button.active.disabled {
-  @apply hover:bg-blue-600;
+.unit-button--off {
+  @apply text-ink-dim active:bg-rule;
 }
 </style>
-
-
-
-
-

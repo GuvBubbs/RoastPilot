@@ -1,4 +1,5 @@
 import { ref } from 'vue';
+import { UI_CONSTANTS } from '../constants/defaults.js';
 
 const toasts = ref([]);
 let toastId = 0;
@@ -8,9 +9,9 @@ export function useToast() {
    * Show a toast notification
    * @param {string} message - The message to display
    * @param {'success'|'error'|'warning'|'info'} [type='success'] - Toast type for styling
-   * @param {number} [duration=3000] - Duration in milliseconds
+   * @param {number} [duration] - Duration in ms; defaults to UI_CONSTANTS
    */
-  function showToast(message, type = 'success', duration = 3000) {
+  function showToast(message, type = 'success', duration = UI_CONSTANTS.TOAST_DURATION_MS) {
     const id = ++toastId;
     
     toasts.value.push({

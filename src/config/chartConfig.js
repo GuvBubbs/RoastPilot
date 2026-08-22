@@ -1,61 +1,90 @@
 import {
   Chart as ChartJS,
-  CategoryScale,
   LinearScale,
   PointElement,
   LineElement,
-  Title,
   Tooltip,
-  Legend,
   Filler,
   TimeScale
 } from 'chart.js';
 import annotationPlugin from 'chartjs-plugin-annotation';
 import 'chartjs-adapter-date-fns';
 
-// Register Chart.js components
+// Only what the one chart in this app actually draws. Legend, Title and
+// CategoryScale are deliberately absent — the chart has no legend and no axis
+// titles, and its x axis is time, not categories.
 ChartJS.register(
-  CategoryScale,
   LinearScale,
+  TimeScale,
   PointElement,
   LineElement,
-  Title,
-  Tooltip,
-  Legend,
   Filler,
-  TimeScale,
+  Tooltip,
   annotationPlugin
 );
 
 /**
- * Default chart options for consistent styling
+ * Canvas can't read CSS custom properties, so the chart carries its own copy of
+ * the palette. These are the same hex values as tailwind.config.js — if one
+ * moves, both move.
+ *
+ * Saturation encodes register, exactly as it does in the DOM: the heat ramp is
+ * live measurement (the internal line, its fill, the oven track) and nothing
+ * else. Interpretation — the target rule, the serve rule, the projection —
+ * stays in the neutral inks.
+ */
+export const chartPalette = {
+  ground: '#14110F',
+  rule: '#2C2621',
+  // A notch below `rule`: gridlines are orientation, not content, and the data
+  // has to dominate them at arm's length.
+  grid: '#221D19',
+  ink: '#F5F0EA',
+  inkDim: '#A79C91',
+  inkMute: '#776C62',
+
+  heatCold: '#4E7FA8',
+  heatWarm: '#D98324',
+  heatHot: '#E0452A'
+};
+
+/** Condensed numerals, same face as `.readout` and `.num`. */
+export const DISPLAY_FONT = "'Barlow Semi Condensed', system-ui, sans-serif";
+
+/**
+ * Chrome-free defaults. No legend, no axis titles, hairline gridlines, and y
+ * ticks drawn *inside* the plot area (`mirror`) so the line gets the full
+ * screen width instead of surrendering ~34px to a tick gutter.
  */
 export const defaultChartOptions = {
   responsive: true,
   maintainAspectRatio: false,
+  // Long cook, rare updates — a slow tween just looks like lag.
+  animation: { duration: 200 },
+  // The plot bleeds to both edges. Top padding is headroom for the labels that
+  // sit above the topmost data; the small right inset keeps a flipped label off
+  // the bezel.
+  layout: { padding: { top: 12, right: 6, bottom: 0, left: 0 } },
   interaction: {
     mode: 'index',
     intersect: false
   },
   plugins: {
-    legend: {
-      display: true,
-      position: 'top',
-      labels: {
-        usePointStyle: true,
-        padding: 15,
-        font: {
-          size: 12
-        }
-      }
-    },
+    legend: { display: false },
     tooltip: {
-      backgroundColor: 'rgba(0, 0, 0, 0.8)',
-      titleFont: { size: 13 },
-      bodyFont: { size: 12 },
-      padding: 10,
-      cornerRadius: 6,
-      displayColors: true
+      // Dataset 0 is always the internal temperature (see chartData). The
+      // projection and the oven track are reference, not readings — offering
+      // them in a tooltip invites the user to read precision that isn't there.
+      filter: (item) => item.datasetIndex === 0,
+      backgroundColor: chartPalette.rule,
+      borderColor: chartPalette.rule,
+      titleColor: chartPalette.inkDim,
+      bodyColor: chartPalette.ink,
+      titleFont: { size: 11 },
+      bodyFont: { family: DISPLAY_FONT, size: 15, weight: 600 },
+      padding: 8,
+      cornerRadius: 8,
+      displayColors: false
     }
   },
   scales: {
@@ -63,81 +92,82 @@ export const defaultChartOptions = {
       type: 'time',
       time: {
         displayFormats: {
-          minute: 'h:mm a',
+          minute: 'h:mm',
           hour: 'h:mm a'
         },
-        tooltipFormat: 'MMM d, h:mm a'
+        tooltipFormat: 'h:mm a'
       },
-      title: {
-        display: true,
-        text: 'Time',
-        font: { size: 12, weight: 'bold' }
-      },
-      grid: {
-        display: true,
-        color: 'rgba(0, 0, 0, 0.05)'
-      },
+      // Vertical gridlines add nothing the time labels don't already say.
+      grid: { display: false },
+      border: { display: false },
       ticks: {
+        // 'inner' pulls the first and last label back inside the canvas. Without
+        // it Chart.js reserves horizontal padding for their overhang and the
+        // plot stops short of the screen edges.
+        align: 'inner',
         maxRotation: 0,
         autoSkip: true,
-        maxTicksLimit: 6
+        maxTicksLimit: 4,
+        padding: 4,
+        color: chartPalette.inkMute,
+        font: { family: DISPLAY_FONT, size: 11 }
       }
     },
     y: {
-      title: {
-        display: true,
-        text: 'Temperature',
-        font: { size: 12, weight: 'bold' }
-      },
       grid: {
-        display: true,
-        color: 'rgba(0, 0, 0, 0.05)'
+        color: chartPalette.grid,
+        lineWidth: 1,
+        drawTicks: false
       },
+      border: { display: false },
       ticks: {
-        callback: function(value) {
-          return value + '°';
-        }
+        mirror: true,
+        padding: 6,
+        maxTicksLimit: 3,
+        color: chartPalette.inkMute,
+        font: { family: DISPLAY_FONT, size: 11 },
+        callback: (value) => `${value}°`
       }
     }
   }
 };
 
 /**
- * Color palette for chart elements (Tailwind-based)
+ * The oven's own scale: the bottom fifth of the plot, sharing the time axis.
+ * Chart.js 4 stacked cartesian scales (`stack` + `stackWeight`) give the oven a
+ * real range of its own without a second axis on the right — the meat's scale
+ * stays untouched by oven temperatures, which is the whole point.
+ *
+ * @param {number} max - Highest oven setting in display units
+ * @returns {Object} Scale configuration for `yOven`
  */
-export const chartColors = {
-  internalTemp: {
-    line: 'rgb(239, 68, 68)',      // red-500
-    point: 'rgb(220, 38, 38)',     // red-600
-    fill: 'rgba(239, 68, 68, 0.1)'
-  },
-  ovenTemp: {
-    line: 'rgb(245, 158, 11)',     // amber-500
-    point: 'rgb(217, 119, 6)',     // amber-600
-    fill: 'rgba(245, 158, 11, 0.1)'
-  },
-  projection: {
-    line: 'rgba(239, 68, 68, 0.5)', // red-500 with transparency
-    dash: [5, 5]
-  },
-  target: {
-    line: 'rgb(34, 197, 94)',      // green-500
-    dash: [10, 5]
-  },
-  serveTime: {
-    line: 'rgb(59, 130, 246)',     // blue-500
-    dash: [5, 5]
-  },
-  rate: {
-    line: 'rgb(168, 85, 247)',     // purple-500
-    point: 'rgb(147, 51, 234)',    // purple-600
-    fill: 'rgba(168, 85, 247, 0.1)'
-  }
-};
+export function createOvenScale(max) {
+  return {
+    type: 'linear',
+    position: 'left',
+    stack: 'roast',
+    stackWeight: 1,
+    // Lower `weight` than the meat's scale, which is what puts the oven at the
+    // bottom of the stack. Both scales must set it explicitly — Chart.js sorts
+    // stacked boxes by weight, and an undefined one falls back to insertion
+    // order.
+    weight: 0,
+    min: 0,
+    // Headroom so the top step isn't welded to the band's ceiling.
+    max: Math.max(Math.ceil(max * 1.18), 1),
+    grid: { display: false },
+    border: { display: false },
+    // No axis, no ticks: the track is a reference silhouette, and its current
+    // value is spelled out in the footnote below the plot.
+    ticks: { display: false }
+  };
+}
 
 /**
- * Create annotation configuration for target temperature line
- * @param {number} targetTemp - Target temperature value
+ * Horizontal rule at the target temperature. Interpretation, so it stays in the
+ * neutral inks — it must never read as a third heat series.
+ *
+ * @param {number} targetTemp - Target temperature in display units
  * @param {'F'|'C'} units - Display units
  * @returns {Object} Annotation configuration
  */
@@ -146,23 +176,31 @@ export function createTargetAnnotation(targetTemp, units) {
     type: 'line',
     yMin: targetTemp,
     yMax: targetTemp,
-    borderColor: chartColors.target.line,
-    borderWidth: 2,
-    borderDash: chartColors.target.dash,
+    borderColor: chartPalette.inkMute,
+    borderWidth: 1,
+    borderDash: [2, 4],
     label: {
       display: true,
-      content: `Target: ${targetTemp}°${units}`,
-      position: 'end',
-      backgroundColor: 'rgba(34, 197, 94, 0.8)',
-      color: 'white',
-      font: { size: 11, weight: 'bold' },
-      padding: 4
+      content: `TARGET ${Math.round(targetTemp)}°${units}`,
+      position: 'start',
+      rotation: 0,
+      // Inset from the left edge, lifted clear of the rule itself.
+      xAdjust: 2,
+      yAdjust: -9,
+      backgroundColor: 'transparent',
+      borderWidth: 0,
+      color: chartPalette.inkDim,
+      font: { family: DISPLAY_FONT, size: 10, weight: 600 },
+      padding: 0
     }
   };
 }
 
 /**
- * Create annotation configuration for serve time vertical line
+ * Vertical rule at the desired serve time. Bare hairline — its label is placed
+ * separately (see createDataLabel) so the caller can flip it away from the
+ * right edge and keep it clear of the crossing marker.
+ *
  * @param {Date} serveTime - Desired serve time
  * @returns {Object} Annotation configuration
  */
@@ -171,46 +209,147 @@ export function createServeTimeAnnotation(serveTime) {
     type: 'line',
     xMin: serveTime,
     xMax: serveTime,
-    borderColor: chartColors.serveTime.line,
-    borderWidth: 2,
-    borderDash: chartColors.serveTime.dash,
-    label: {
-      display: true,
-      content: 'Serve Time',
-      position: 'start',
-      backgroundColor: 'rgba(59, 130, 246, 0.8)',
-      color: 'white',
-      font: { size: 11 },
-      padding: 4
-    }
+    borderColor: chartPalette.inkMute,
+    borderWidth: 1,
+    borderDash: [3, 3]
   };
 }
 
 /**
- * Create segment annotations for oven temperature periods
- * @param {Array} segments - Array of segment objects with startTime, endTime, ovenTemp
- * @returns {Object} Annotations object
+ * The crossing marker: where the projection lands on the target rule. The
+ * horizontal distance between this dot and the serve rule *is* the early/late
+ * verdict, which is why it's the one loud mark on the plot.
+ *
+ * @param {Date} time - Predicted target time
+ * @param {number} temp - Target temperature in display units
+ * @returns {Object} Annotation configuration
  */
-export function createSegmentAnnotations(segments) {
-  const annotations = {};
-  
-  segments.forEach((segment, index) => {
-    // Color based on oven temp (warmer = more red/orange, cooler = more blue)
-    const hue = Math.max(0, Math.min(60, (300 - segment.ovenTemp) * 0.5));
-    const color = `hsla(${hue}, 70%, 50%, 0.1)`;
-    
-    annotations[`segment_${index}`] = {
-      type: 'box',
-      xMin: segment.startTime,
-      xMax: segment.endTime,
-      backgroundColor: color,
-      borderWidth: 0
-    };
-  });
-  
-  return annotations;
+export function createCrossingMarker(time, temp) {
+  return {
+    type: 'point',
+    xValue: time,
+    yValue: temp,
+    radius: 5,
+    backgroundColor: chartPalette.ink,
+    // A ground-coloured ring separates the dot from the rule it sits on.
+    borderColor: chartPalette.ground,
+    borderWidth: 2
+  };
 }
 
+const LABEL_TONES = {
+  // The crossing time. The brightest thing on the plot, on purpose.
+  signature: {
+    color: chartPalette.ground,
+    backgroundColor: chartPalette.ink,
+    borderRadius: 4,
+    padding: { x: 6, y: 3 },
+    font: { family: DISPLAY_FONT, size: 14, weight: 700 }
+  },
+  // A live measurement labelled at its own end, in place of a legend entry.
+  live: {
+    color: chartPalette.heatHot,
+    backgroundColor: chartPalette.ground,
+    borderRadius: 3,
+    padding: { x: 3, y: 1 },
+    font: { family: DISPLAY_FONT, size: 12, weight: 700 }
+  },
+  // Reference text: the serve time, and anything else the eye should skip.
+  quiet: {
+    color: chartPalette.inkDim,
+    backgroundColor: chartPalette.ground,
+    borderRadius: 2,
+    padding: { x: 3, y: 1 },
+    font: { family: DISPLAY_FONT, size: 10, weight: 600 }
+  }
+};
 
+/**
+ * A label pinned to a data coordinate — the direct-labelling primitive that
+ * replaces the legend.
+ *
+ * `side` and `vertical` decide which side of the anchor the box hangs off, so
+ * the caller can flip a label inward near an edge. Annotations are clipped to
+ * the plot area, so an unflipped label at the right edge would be sliced in
+ * half at 320px rather than overflowing.
+ *
+ * @param {Object} spec
+ * @param {Date|number} spec.x - Anchor on the x scale
+ * @param {number} spec.y - Anchor on the y scale named by `scaleID`
+ * @param {string} spec.content - Label text
+ * @param {'right'|'left'} [spec.side] - Which side of the anchor to sit on
+ * @param {'above'|'below'|'middle'} [spec.vertical] - Vertical placement
+ * @param {'signature'|'live'|'quiet'} [spec.tone] - Visual weight
+ * @param {string} [spec.scaleID] - y scale to anchor against ('y' or 'yOven')
+ * @returns {Object} Annotation configuration
+ */
+export function createDataLabel({
+  x,
+  y,
+  content,
+  side = 'right',
+  vertical = 'middle',
+  tone = 'quiet',
+  scaleID = 'y'
+}) {
+  const gap = tone === 'signature' ? 9 : 6;
 
+  return {
+    type: 'label',
+    xValue: x,
+    yValue: y,
+    yScaleID: scaleID,
+    content,
+    // 'start' puts the box's leading edge on the anchor (label to the right of
+    // it); 'end' puts its trailing edge there (label to the left).
+    position: {
+      x: side === 'right' ? 'start' : 'end',
+      y: vertical === 'above' ? 'end' : vertical === 'below' ? 'start' : 'center'
+    },
+    xAdjust: side === 'right' ? gap : -gap,
+    yAdjust: vertical === 'above' ? -5 : vertical === 'below' ? 5 : 0,
+    borderWidth: 0,
+    ...LABEL_TONES[tone]
+  };
+}
 
+/**
+ * Stroke for the internal temperature line: a vertical ramp across the meat's
+ * own scale, so the line's hue reports roughly where in the range the meat sits
+ * — cold blue at the bottom, hot red as it approaches target.
+ *
+ * @param {CanvasRenderingContext2D} ctx
+ * @param {{top: number, bottom: number}} scale - The `y` scale, not chartArea:
+ *   chartArea includes the oven band, which would shift the ramp.
+ * @returns {CanvasGradient|string}
+ */
+export function createHeatStroke(ctx, scale) {
+  if (!scale || scale.bottom === scale.top) {
+    return chartPalette.heatWarm;
+  }
+
+  const gradient = ctx.createLinearGradient(0, scale.bottom, 0, scale.top);
+  gradient.addColorStop(0, chartPalette.heatCold);
+  gradient.addColorStop(0.55, chartPalette.heatWarm);
+  gradient.addColorStop(1, chartPalette.heatHot);
+  return gradient;
+}
+
+/**
+ * Wash under the internal temperature line. Warm, and faint enough that the
+ * gridlines still read through it.
+ *
+ * @param {CanvasRenderingContext2D} ctx
+ * @param {{top: number, bottom: number}} scale - The `y` scale
+ * @returns {CanvasGradient|string}
+ */
+export function createHeatFill(ctx, scale) {
+  if (!scale || scale.bottom === scale.top) {
+    return 'rgba(217, 131, 36, 0.12)';
+  }
+
+  const gradient = ctx.createLinearGradient(0, scale.top, 0, scale.bottom);
+  gradient.addColorStop(0, 'rgba(217, 131, 36, 0.22)');
+  gradient.addColorStop(1, 'rgba(217, 131, 36, 0)');
+  return gradient;
+}

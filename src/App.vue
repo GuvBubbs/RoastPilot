@@ -1,206 +1,134 @@
 <template>
   <ErrorBoundary>
-    <div class="min-h-screen bg-gray-50 dark:bg-gray-900">
-      <!-- Header -->
-      <header class="sticky top-0 z-40 bg-white dark:bg-gray-800 shadow">
-      <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex items-center justify-between">
-        <div>
-          <h1 class="text-2xl sm:text-3xl font-bold text-gray-900 dark:text-white">
-            🔥 Roast Tracker
-          </h1>
-          <p class="text-xs sm:text-sm text-gray-600 dark:text-gray-400 mt-1">
-            Reverse Sear Temperature Tracker
-          </p>
-        </div>
-        
-        <!-- Header Actions -->
-        <div class="flex items-center gap-2">
-          <!-- End Session Button (only when session active) -->
-          <button
-            v-if="hasActiveSession"
-            @click="handleShowEndDialog"
-            class="px-3 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
-            title="End Session"
+    <!-- Command bar. 48px, one line, no subtitle. End Session lives in
+         Settings now — it is a once-per-cook action and does not earn a
+         permanent slot next to the title. -->
+    <header class="sticky top-0 z-40 bg-ground/95 backdrop-blur rule pt-safe">
+      <div class="band h-12 flex items-center gap-3">
+        <h1 class="flex-1 min-w-0 flex items-center gap-2 text-[17px] font-semibold text-ink">
+          <!-- Wordmark, not a readout: the flame takes text-ink so the lockup
+               reads as one unit. Saturated heat-* is reserved for live
+               measurement. -->
+          <svg
+            class="w-5 h-5 shrink-0"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.8"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
           >
-            End Session
-          </button>
-          
-          <!-- Settings Button -->
-          <button
-            @click="state.showSettings = true"
-            class="p-2 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
-            aria-label="Settings"
-          >
-            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-            </svg>
-          </button>
-        </div>
+            <path d="M12 3c.6 2.6 2.1 4.5 4 6.1 1.9 1.6 2.9 3.4 2.9 5.4a6.9 6.9 0 0 1-13.8 0c0-1.1.4-2.2 1-2.9a2.5 2.5 0 0 0 2.5 2.5A2.5 2.5 0 0 0 11 11.6c0-1.3-.5-2-1-3-1-2.1-.2-4 2-5.6Z" />
+          </svg>
+          <span class="truncate">Roast Tracker</span>
+        </h1>
+        <button
+          type="button"
+          class="btn-icon -mr-2 shrink-0"
+          aria-label="Settings"
+          @click="state.showSettings = true"
+        >
+          <svg class="w-[22px] h-[22px]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+          </svg>
+        </button>
       </div>
+      <OfflineIndicator />
     </header>
 
-    <!-- Main Content -->
-    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-      <!-- Loading State -->
-      <div v-if="state.isLoading" class="flex items-center justify-center py-12">
-        <div class="text-center">
-          <div class="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
-          <p class="mt-4 text-gray-600 dark:text-gray-400">Loading...</p>
-        </div>
-      </div>
-
-      <!-- No Active Session - Welcome Screen -->
-      <div v-else-if="!hasActiveSession" class="max-w-2xl mx-auto">
-        <div class="bg-white dark:bg-gray-800 shadow rounded-lg p-8 text-center">
-          <div class="text-6xl mb-4">🥩</div>
-          <h2 class="text-3xl font-bold text-gray-900 dark:text-white mb-3">
-            Welcome to Roast Tracker
-          </h2>
-          <p class="text-gray-600 dark:text-gray-400 mb-8 max-w-lg mx-auto">
-            Track your reverse sear cooking with precision. Monitor internal temperature, 
-            predict finish time, and get recommendations for oven adjustments.
-          </p>
-          
-          <button
-            @click="handleStartNew"
-            class="px-8 py-4 bg-safe hover:bg-green-600 text-white text-lg font-medium rounded-lg shadow-lg transition-colors duration-150 focus:outline-none focus:ring-2 focus:ring-safe focus:ring-offset-2"
-          >
-            Start New Session
-          </button>
-          
-          <div class="mt-8 pt-8 border-t border-gray-200 dark:border-gray-700">
-            <h3 class="text-lg font-semibold text-gray-900 dark:text-white mb-3">
-              Features
-            </h3>
-            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 text-left">
-              <div class="flex items-start space-x-3">
-                <span class="text-safe text-xl">✓</span>
-                <div>
-                  <p class="font-medium text-gray-900 dark:text-white">Temperature Tracking</p>
-                  <p class="text-sm text-gray-600 dark:text-gray-400">Log internal temps with timestamps</p>
-                </div>
-              </div>
-              <div class="flex items-start space-x-3">
-                <span class="text-safe text-xl">✓</span>
-                <div>
-                  <p class="font-medium text-gray-900 dark:text-white">ETA Predictions</p>
-                  <p class="text-sm text-gray-600 dark:text-gray-400">See when you'll hit your target</p>
-                </div>
-              </div>
-              <div class="flex items-start space-x-3">
-                <span class="text-safe text-xl">✓</span>
-                <div>
-                  <p class="font-medium text-gray-900 dark:text-white">Smart Recommendations</p>
-                  <p class="text-sm text-gray-600 dark:text-gray-400">Get oven adjustment suggestions</p>
-                </div>
-              </div>
-              <div class="flex items-start space-x-3">
-                <span class="text-safe text-xl">✓</span>
-                <div>
-                  <p class="font-medium text-gray-900 dark:text-white">Data Export</p>
-                  <p class="text-sm text-gray-600 dark:text-gray-400">Export session as CSV or JSON</p>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-        
-        <!-- Phase 4 Complete Info -->
-        <div class="mt-6 bg-blue-50 dark:bg-blue-900 dark:bg-opacity-20 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
-          <p class="text-sm text-blue-800 dark:text-blue-300">
-            <strong>Phase 4 Complete!</strong> Status cards with ETA predictions and rate calculations are ready. 
-            Start a session to begin tracking your roast.
-          </p>
-        </div>
-      </div>
-
-      <!-- Active Session - Dashboard -->
-      <div v-else class="space-y-6">
-        <!-- Session Info Card -->
-        <div class="bg-white dark:bg-gray-800 shadow rounded-lg p-6">
-          <div class="flex items-start justify-between">
-            <div>
-              <h2 class="text-xl font-semibold text-gray-900 dark:text-white mb-2">
-                Active Session
-              </h2>
-              <div class="space-y-1 text-sm text-gray-600 dark:text-gray-400">
-                <p>
-                  <span class="font-medium">Target:</span> 
-                  {{ formatTemperature(config.targetTemp, displayUnits) }}
-                </p>
-                <p>
-                  <span class="font-medium">Started:</span> 
-                  {{ formatDateTime(config.createdAt) }}
-                </p>
-                <p v-if="config.meatType">
-                  <span class="font-medium">Meat:</span> 
-                  {{ config.meatType }}{{ config.meatCut ? ` (${config.meatCut})` : '' }}
-                </p>
-                <p v-if="config.desiredServeTime">
-                  <span class="font-medium">Desired Serve Time:</span> 
-                  {{ formatTime(config.desiredServeTime) }}
-                </p>
-              </div>
-            </div>
-            
-            <div class="flex flex-col items-end gap-2">
-              <div class="text-right">
-                <div class="text-2xl font-bold text-gray-900 dark:text-white">
-                  {{ readings.length }}
-                </div>
-                <div class="text-xs text-gray-500 dark:text-gray-400">
-                  Readings
-                </div>
-              </div>
-              <div v-if="latestReading" class="text-right">
-                <div class="text-lg font-semibold text-blue-600 dark:text-blue-400">
-                  {{ formatTemperature(latestReading.temp, displayUnits) }}
-                </div>
-                <div class="text-xs text-gray-500 dark:text-gray-400">
-                  Current
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Input Panel -->
-        <InputPanel ref="inputPanelRef" />
-
-        <!-- Status Display -->
-        <StatusCards />
-
-        <!-- Recommendation Panel -->
-        <RecommendationPanel 
-          @openOvenModal="handleOpenOvenModal"
-          @openReadingModal="handleOpenReadingModal"
-          @openSettings="handleOpenSettings"
-          @openPauseModal="state.showPauseCookingModal = true"
-          @openRestartModal="state.showRestartOvenModal = true"
-        />
-
-        <!-- Temperature Chart -->
-        <TemperatureChart />
-
-        <!-- Rate Chart (shown when 3+ readings) -->
-        <RateChart v-if="readings.length >= 3" />
-
-        <!-- Temperature Logs -->
-        <div class="space-y-4">
-          <ReadingsLog />
-          <OvenEventsLog />
-        </div>
-      </div>
+    <!-- Loading -->
+    <main v-if="state.isLoading" class="band py-16 text-center text-ink-mute">
+      <p>Loading…</p>
     </main>
 
-      <!-- Footer -->
-      <footer class="mt-12 py-6 text-center text-sm text-gray-500 dark:text-gray-400 border-t border-gray-200 dark:border-gray-700">
+    <!-- No active session -->
+    <main v-else-if="!hasActiveSession" class="pb-bottombar">
+      <div class="band py-10 text-center">
+        <!-- A thermometer, not a cut of meat. Tested against four alternatives
+             rendered at their real 48px: the roast-and-probe silhouette only
+             resolves at ~96px and reads as an insect at the size actually used.
+             A thermometer is also the truer subject — the app's job is the
+             reading, which is what the sentence below says. -->
+        <svg
+          class="w-12 h-12 mx-auto mb-5 text-ink-dim"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.8"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <path d="M14 14.8V5a2 2 0 1 0-4 0v9.8a4 4 0 1 0 4 0Z" />
+          <path d="M12 8.5v6.8" />
+          <path d="M16.5 7h2.5M16.5 10.5h2.5M16.5 14h2.5" />
+        </svg>
+        <h2 class="text-[22px] font-semibold text-ink mb-2">Reverse sear, on schedule</h2>
+        <p class="text-[15px] text-ink-dim max-w-sm mx-auto">
+          Log internal temperature as you go. Roast Tracker fits the heating rate,
+          predicts when you'll hit target, and tells you what to do about it.
+        </p>
+      </div>
+      <footer class="band rule-t py-4 text-center text-xs text-ink-mute">
         <p>{{ DISCLAIMER }}</p>
       </footer>
-    </div>
+    </main>
 
-    <!-- Modals -->
+    <!-- Active session. Bands in glance-priority order, separated by hairline
+         rules — not a scroll of equal-weight cards. -->
+    <main v-else class="pb-bottombar">
+      <StatusCards />
+
+      <!-- Full bleed: the chart draws to the screen edge. -->
+      <TemperatureChart />
+
+      <RecommendationPanel
+        @openOvenModal="state.showOvenModal = true"
+        @openReadingModal="state.showReadingModal = true"
+        @openSettings="state.showSettings = true"
+        @openPauseModal="state.showPauseCookingModal = true"
+        @openRestartModal="state.showRestartOvenModal = true"
+        @openEndSession="state.showEndConfirmation = true"
+      />
+
+      <ReadingsLog />
+      <OvenEventsLog />
+
+      <!-- The app's only disclaimer. It used to render in three places. -->
+      <footer class="band py-5 text-center text-xs text-ink-mute">
+        <p>{{ DISCLAIMER }}</p>
+      </footer>
+    </main>
+
+    <!-- Primary actions in the thumb zone. This is what reclaims the ~200px the
+         two gradient buttons used to spend mid-scroll. -->
+    <BottomBar v-if="!state.isLoading">
+      <template #primary>
+        <button
+          v-if="hasActiveSession"
+          type="button"
+          class="btn-primary"
+          @click="state.showReadingModal = true"
+        >
+          + Add reading
+        </button>
+        <button v-else type="button" class="btn-primary" @click="handleStartNew">
+          Start new session
+        </button>
+      </template>
+      <template v-if="hasActiveSession" #secondary>
+        <button type="button" class="btn-ghost" @click="state.showOvenModal = true">
+          Oven
+        </button>
+      </template>
+    </BottomBar>
+
+    <!-- Sheets and dialogs -->
+    <AddReadingModal v-model="state.showReadingModal" />
+    <UpdateOvenModal v-model="state.showOvenModal" />
+
     <SessionSetupModal
       v-model="state.showSessionSetup"
       @submit="handleSessionCreated"
@@ -221,81 +149,63 @@
       @export="handleExportBeforeEnd"
     />
 
-    <!-- Toast Notifications -->
+    <SettingsPanel
+      v-model="state.showSettings"
+      @end-session="handleShowEndDialog"
+    />
+
+    <RestartOvenModal v-model="state.showRestartOvenModal" />
+    <PauseCookingModal v-model="state.showPauseCookingModal" />
+
     <ToastContainer />
-
-    <!-- Settings Panel -->
-    <SettingsPanel v-model="state.showSettings" />
-
-    <!-- Restart Oven Modal -->
-    <RestartOvenModal
-      v-model="state.showRestartOvenModal"
-      @restarted="handleOvenRestarted"
-    />
-    
-    <!-- Pause Cooking Modal -->
-    <PauseCookingModal
-      v-model="state.showPauseCookingModal"
-      @paused="handleCookingPaused"
-    />
-    
-    <!-- Offline Indicator -->
-    <OfflineIndicator />
   </ErrorBoundary>
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, defineAsyncComponent } from 'vue';
+import { ref, reactive, onMounted, defineAsyncComponent } from 'vue';
 import { useSession } from './composables/useSession.js';
-import SessionSetupModal from './components/SessionSetupModal.vue';
-import ResumeSessionDialog from './components/ResumeSessionDialog.vue';
-import EndSessionDialog from './components/EndSessionDialog.vue';
-import InputPanel from './components/InputPanel.vue';
+import BottomBar from './components/BottomBar.vue';
 import StatusCards from './components/StatusCards.vue';
 import RecommendationPanel from './components/RecommendationPanel.vue';
 import ReadingsLog from './components/ReadingsLog.vue';
 import OvenEventsLog from './components/OvenEventsLog.vue';
+import AddReadingModal from './components/AddReadingModal.vue';
+import UpdateOvenModal from './components/UpdateOvenModal.vue';
+import SessionSetupModal from './components/SessionSetupModal.vue';
+import ResumeSessionDialog from './components/ResumeSessionDialog.vue';
+import EndSessionDialog from './components/EndSessionDialog.vue';
+import RestartOvenModal from './components/RestartOvenModal.vue';
+import PauseCookingModal from './components/PauseCookingModal.vue';
 import ToastContainer from './components/ToastContainer.vue';
 import ErrorBoundary from './components/ErrorBoundary.vue';
 import OfflineIndicator from './components/OfflineIndicator.vue';
-import RestartOvenModal from './components/RestartOvenModal.vue';
-import PauseCookingModal from './components/PauseCookingModal.vue';
 
-// Lazy load heavy components for better performance
-const TemperatureChart = defineAsyncComponent(() => 
+// Chart.js and the settings sheet are the two heavy chunks.
+const TemperatureChart = defineAsyncComponent(() =>
   import('./components/TemperatureChart.vue')
-);
-const RateChart = defineAsyncComponent(() => 
-  import('./components/RateChart.vue')
 );
 const SettingsPanel = defineAsyncComponent(() =>
   import('./components/SettingsPanel.vue')
 );
 
-import { formatTemperature } from './utils/temperatureUtils.js';
-import { formatDateTime, formatTime } from './utils/timeUtils.js';
 import { DISCLAIMER } from './constants/defaults.js';
 import { storageService } from './services/storageService.js';
 
-// Session composable
 const {
   hasActiveSession,
   hasStoredSession,
-  config,
-  readings,
-  latestReading,
-  displayUnits,
   initialize,
   startSession,
   resumeSession,
   endSession
 } = useSession();
 
-// UI state
 const state = reactive({
   showSessionSetup: false,
   showSettings: false,
   showResumePrompt: false,
+  showReadingModal: false,
+  showOvenModal: false,
   showRestartOvenModal: false,
   showPauseCookingModal: false,
   showEndConfirmation: false,
@@ -304,112 +214,72 @@ const state = reactive({
 
 const sessionInfo = ref(null);
 
-// Get session info for resume dialog
+/** Summary of the stored session, for the resume prompt. */
 function getSessionInfo() {
   const stored = storageService.loadSession();
   if (!stored) return null;
-  
+
   const readingCount = stored.readings.length;
   const lastReading = readingCount > 0 ? stored.readings[readingCount - 1] : null;
-  
+
   return {
     createdAt: stored.config.createdAt,
     targetTemp: stored.config.targetTemp,
     units: stored.config.units,
-    readingCount: readingCount,
+    readingCount,
     lastReadingTemp: lastReading?.temp ?? null,
     lastReadingTime: lastReading?.timestamp ?? null,
     meatType: stored.config.meatType
   };
 }
 
-// Handler: Start new session
 function handleStartNew() {
   state.showSessionSetup = true;
 }
 
-// Handler: Resume previous session
-function handleResumePrevious() {
-  state.showResumePrompt = false;
-  resumeSession();
-}
-
-// Handler: Start new from resume dialog
-function handleStartNewFromResume() {
-  state.showResumePrompt = false;
-  // Clear the old session first
-  endSession();
-  // Show setup modal
-  state.showSessionSetup = true;
-}
-
-// Handler: Show end dialog
-function handleShowEndDialog() {
-  state.showEndConfirmation = true;
-}
-
-// Handler: End session confirmed
-function handleEndSession() {
-  endSession();
-  state.showEndConfirmation = false;
-}
-
-// Handler: Export before ending
-function handleExportBeforeEnd() {
-  // Export is now available through the settings panel
-  state.showSettings = true;
-  state.showEndConfirmation = false;
-}
-
-// Handler: Session created from modal
 function handleSessionCreated(configData) {
   startSession(configData);
   state.showSessionSetup = false;
 }
 
-// Handlers for RecommendationPanel quick actions
-const inputPanelRef = ref(null);
-
-function handleOpenOvenModal() {
-  // Open the oven modal in InputPanel
-  if (inputPanelRef.value) {
-    inputPanelRef.value.openOvenModal();
-  }
+function handleResumePrevious() {
+  state.showResumePrompt = false;
+  resumeSession();
 }
 
-function handleOpenReadingModal() {
-  // Open the reading modal in InputPanel
-  if (inputPanelRef.value) {
-    inputPanelRef.value.openReadingModal();
-  }
+function handleStartNewFromResume() {
+  state.showResumePrompt = false;
+  endSession();
+  state.showSessionSetup = true;
 }
 
-function handleOpenSettings() {
+function handleShowEndDialog() {
+  // Reached from Settings, so close that first — two stacked sheets would
+  // leave the user unsure which one Escape dismisses.
+  state.showSettings = false;
+  state.showEndConfirmation = true;
+}
+
+function handleEndSession() {
+  endSession();
+  state.showEndConfirmation = false;
+}
+
+function handleExportBeforeEnd() {
+  state.showEndConfirmation = false;
   state.showSettings = true;
 }
 
-function handleOvenRestarted() {
-  // Toast notification is handled by the RestartOvenModal component
-  state.showRestartOvenModal = false;
-}
-
-function handleCookingPaused() {
-  // Toast notification is handled by the PauseCookingModal component
-  state.showPauseCookingModal = false;
-}
-
-// Initialize on mount
 onMounted(() => {
   initialize();
-  
-  // Check if session exists and show resume prompt
+
   if (hasStoredSession.value && !hasActiveSession.value) {
     sessionInfo.value = getSessionInfo();
     if (sessionInfo.value) {
       state.showResumePrompt = true;
     }
   }
-  
+
   state.isLoading = false;
 });
 </script>

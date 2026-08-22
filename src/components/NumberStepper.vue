@@ -1,15 +1,16 @@
 <template>
-  <div class="number-stepper">
-    <label 
-      v-if="label" 
-      :for="inputId" 
-      class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2"
+  <div>
+    <label
+      v-if="label"
+      :for="inputId"
+      class="label"
+      :class="{ 'sr-only': hideLabel }"
     >
       {{ label }}
     </label>
-    
+
     <div class="flex items-center gap-2">
-      <!-- Decrement Button -->
+      <!-- Decrement -->
       <button
         type="button"
         :disabled="disabled || (modelValue !== null && modelValue <= min)"
@@ -19,16 +20,16 @@
         @touchstart.prevent="startDecrement"
         @touchend.prevent="stopIncrement"
         class="stepper-button"
-        :class="{ 'opacity-50 cursor-not-allowed': disabled || (modelValue !== null && modelValue <= min) }"
         aria-label="Decrease value"
       >
         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 12H4" />
         </svg>
       </button>
-      
-      <!-- Number Input -->
-      <div class="flex-1 relative">
+
+      <!-- Number input. min-w-0 so a long value can never push the buttons
+           off a 320px screen. -->
+      <div class="relative flex-1 min-w-0">
         <input
           :id="inputId"
           type="number"
@@ -41,20 +42,20 @@
           :aria-describedby="error ? `${inputId}-error` : undefined"
           :aria-invalid="error ? 'true' : 'false'"
           inputmode="decimal"
-          class="number-input"
-          :class="{ 'border-danger focus:ring-danger': error }"
+          class="field num text-center text-[18px]"
+          :class="{ 'border-danger': error, 'pr-10': suffix }"
           @input="handleInput"
           @blur="handleBlur"
         />
-        <span 
-          v-if="suffix" 
-          class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 dark:text-gray-400 pointer-events-none"
+        <span
+          v-if="suffix"
+          class="absolute right-3 top-1/2 -translate-y-1/2 text-[13px] text-ink-mute pointer-events-none"
         >
           {{ suffix }}
         </span>
       </div>
-      
-      <!-- Increment Button -->
+
+      <!-- Increment -->
       <button
         type="button"
         :disabled="disabled || (modelValue !== null && modelValue >= max)"
@@ -64,7 +65,6 @@
         @touchstart.prevent="startIncrement"
         @touchend.prevent="stopIncrement"
         class="stepper-button"
-        :class="{ 'opacity-50 cursor-not-allowed': disabled || (modelValue !== null && modelValue >= max) }"
         aria-label="Increase value"
       >
         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -72,12 +72,11 @@
         </svg>
       </button>
     </div>
-    
-    <!-- Error Message -->
-    <p 
-      v-if="error" 
+
+    <p
+      v-if="error"
       :id="`${inputId}-error`"
-      class="mt-1 text-sm text-danger"
+      class="mt-1.5 text-[12px] text-danger"
     >
       {{ error }}
     </p>
@@ -85,7 +84,7 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue';
+import { computed } from 'vue';
 
 const props = defineProps({
   modelValue: {
@@ -121,6 +120,13 @@ const props = defineProps({
     type: String,
     required: true
   },
+  // The label is required for the accessible name, but a stepper sitting
+  // inside a SettingsRow already has a visible label above it — rendering
+  // both reads as a duplicate.
+  hideLabel: {
+    type: Boolean,
+    default: false
+  },
   suffix: {
     type: String,
     default: ''
@@ -152,10 +158,10 @@ function updateValue(delta) {
 
 function startIncrement() {
   if (props.disabled || (props.modelValue !== null && props.modelValue >= props.max)) return;
-  
+
   // Immediate first step
   updateValue(props.step);
-  
+
   // Start continuous after delay
   pressTimeout = setTimeout(() => {
     pressInterval = setInterval(() => {
@@ -166,10 +172,10 @@ function startIncrement() {
 
 function startDecrement() {
   if (props.disabled || (props.modelValue !== null && props.modelValue <= props.min)) return;
-  
+
   // Immediate first step
   updateValue(-props.step);
-  
+
   // Start continuous after delay
   pressTimeout = setTimeout(() => {
     pressInterval = setInterval(() => {
@@ -191,7 +197,7 @@ function handleInput(event) {
     emit('update:modelValue', null);
     return;
   }
-  
+
   const numValue = parseFloat(value);
   if (!isNaN(numValue)) {
     emit('update:modelValue', numValue);
@@ -200,12 +206,12 @@ function handleInput(event) {
 
 function handleBlur(event) {
   const value = event.target.value;
-  
+
   if (value === '' || value === null) {
     emit('blur');
     return;
   }
-  
+
   const numValue = parseFloat(value);
   if (!isNaN(numValue)) {
     // Clamp to min/max
@@ -217,45 +223,29 @@ function handleBlur(event) {
     // Revert to previous valid value or 0
     emit('update:modelValue', props.modelValue ?? 0);
   }
-  
+
   emit('blur');
 }
 </script>
 
 <style scoped>
+/* `.tap` is the 44px guarantee this component used to hand-roll. */
 .stepper-button {
-  @apply min-w-[44px] min-h-[44px] flex items-center justify-center;
-  @apply bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600;
-  @apply border border-gray-300 dark:border-gray-600 rounded-lg;
-  @apply text-gray-700 dark:text-gray-300;
+  @apply tap shrink-0 rounded-xl;
+  @apply bg-raised border border-rule text-ink-dim;
   @apply transition-colors duration-150;
-  @apply active:bg-gray-300 dark:active:bg-gray-500;
-  @apply disabled:opacity-50 disabled:cursor-not-allowed;
+  @apply active:bg-rule;
+  @apply disabled:opacity-40 disabled:cursor-not-allowed;
 }
 
-.number-input {
-  @apply w-full px-3 py-2 text-center text-lg;
-  @apply border border-gray-300 dark:border-gray-600 rounded-lg;
-  @apply bg-white dark:bg-gray-800;
-  @apply text-gray-900 dark:text-white;
-  @apply focus:ring-2 focus:ring-blue-500 focus:border-blue-500;
-  @apply disabled:opacity-50 disabled:cursor-not-allowed disabled:bg-gray-100 dark:disabled:bg-gray-700;
-  @apply transition-colors duration-150;
-}
-
-/* Hide browser native spin buttons */
-.number-input::-webkit-inner-spin-button,
-.number-input::-webkit-outer-spin-button {
+/* Native spin buttons duplicate the -/+ controls and eat input width. */
+input[type='number']::-webkit-inner-spin-button,
+input[type='number']::-webkit-outer-spin-button {
   -webkit-appearance: none;
   margin: 0;
 }
 
-.number-input[type=number] {
+input[type='number'] {
   -moz-appearance: textfield;
 }
 </style>
-
-
-
-
-

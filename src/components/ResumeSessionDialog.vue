@@ -1,82 +1,66 @@
 <template>
-  <div 
+  <!-- Not dismissible: this is a genuine fork in the road. Backdrop or Escape
+       would have to pick one of the two branches on the user's behalf. -->
+  <Sheet
     v-if="sessionInfo"
-    class="fixed inset-0 z-50 flex items-center justify-center p-4"
-    @click.self="$emit('startNew')"
+    :model-value="true"
+    title="Resume previous cook?"
+    size="auto"
+    :dismissible="false"
   >
-    <!-- Backdrop -->
-    <div class="absolute inset-0 bg-black bg-opacity-50"></div>
-    
-    <!-- Dialog -->
-    <div class="relative bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-md w-full p-6">
-      <h2 class="text-2xl font-bold text-gray-900 dark:text-white mb-4">
-        Resume Previous Session?
-      </h2>
-      
-      <!-- Session Summary -->
-      <div class="space-y-3 mb-6 text-gray-700 dark:text-gray-300">
-        <div class="flex items-center justify-between py-2 border-b border-gray-200 dark:border-gray-700">
-          <span class="text-sm font-medium">Started:</span>
-          <span class="text-sm">{{ formatDateTime(sessionInfo.createdAt) }}</span>
+    <template #body>
+      <dl class="divide-y divide-rule text-[14px]">
+        <div class="flex items-baseline justify-between gap-3 py-2.5">
+          <dt class="text-ink-dim shrink-0">Started</dt>
+          <dd class="min-w-0 truncate text-right text-ink">{{ formatDateTime(sessionInfo.createdAt) }}</dd>
         </div>
-        
-        <div class="flex items-center justify-between py-2 border-b border-gray-200 dark:border-gray-700">
-          <span class="text-sm font-medium">Target:</span>
-          <span class="text-sm font-semibold">{{ formatTemperature(sessionInfo.targetTemp, sessionInfo.units) }}</span>
+
+        <div class="flex items-baseline justify-between gap-3 py-2.5">
+          <dt class="text-ink-dim shrink-0">Target</dt>
+          <dd class="num min-w-0 truncate text-right text-ink">
+            {{ formatTemperature(sessionInfo.targetTemp, sessionInfo.units) }}
+          </dd>
         </div>
-        
-        <div class="flex items-center justify-between py-2 border-b border-gray-200 dark:border-gray-700">
-          <span class="text-sm font-medium">Readings:</span>
-          <span class="text-sm">{{ sessionInfo.readingCount }} recorded</span>
+
+        <div class="flex items-baseline justify-between gap-3 py-2.5">
+          <dt class="text-ink-dim shrink-0">Readings</dt>
+          <dd class="num min-w-0 truncate text-right text-ink">{{ sessionInfo.readingCount }}</dd>
         </div>
-        
-        <div 
+
+        <div
           v-if="sessionInfo.lastReadingTemp !== null"
-          class="flex items-center justify-between py-2 border-b border-gray-200 dark:border-gray-700"
+          class="flex items-baseline justify-between gap-3 py-2.5"
         >
-          <span class="text-sm font-medium">Last Reading:</span>
-          <span class="text-sm">
-            {{ formatTemperature(sessionInfo.lastReadingTemp, sessionInfo.units) }}
-            <span class="text-gray-500 dark:text-gray-400 text-xs">
-              ({{ formatTimeAgo(sessionInfo.lastReadingTime) }})
-            </span>
-          </span>
+          <dt class="text-ink-dim shrink-0">Last reading</dt>
+          <dd class="min-w-0 truncate text-right">
+            <span class="num text-ink">{{ formatTemperature(sessionInfo.lastReadingTemp, sessionInfo.units) }}</span>
+            <span class="text-ink-mute text-[13px]"> {{ formatTimeAgo(sessionInfo.lastReadingTime) }}</span>
+          </dd>
         </div>
-        
-        <div 
-          v-if="sessionInfo.meatType"
-          class="flex items-center justify-between py-2"
-        >
-          <span class="text-sm font-medium">Meat:</span>
-          <span class="text-sm">{{ sessionInfo.meatType }}</span>
+
+        <div v-if="sessionInfo.meatType" class="flex items-baseline justify-between gap-3 py-2.5">
+          <dt class="text-ink-dim shrink-0">Meat</dt>
+          <dd class="min-w-0 truncate text-right text-ink">{{ sessionInfo.meatType }}</dd>
         </div>
-      </div>
-      
-      <!-- Actions -->
-      <div class="space-y-3">
-        <button
-          @click="$emit('resume')"
-          class="w-full px-4 py-3 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-colors duration-150 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
-        >
-          Resume Session
-        </button>
-        
-        <button
-          @click="$emit('startNew')"
-          class="w-full px-4 py-3 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 font-medium rounded-lg transition-colors duration-150 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2"
-        >
-          Start New Session
-        </button>
-        
-        <p class="text-xs text-center text-gray-500 dark:text-gray-400 mt-2">
-          Starting a new session will discard the previous session data
-        </p>
-      </div>
-    </div>
-  </div>
+      </dl>
+    </template>
+
+    <template #actions>
+      <button type="button" class="btn-primary" @click="$emit('resume')">
+        Resume cook
+      </button>
+      <button type="button" class="btn-ghost w-full mt-2" @click="$emit('startNew')">
+        Start a new cook
+      </button>
+      <p class="mt-2 text-center text-[12px] text-ink-mute">
+        Starting new discards the cook above.
+      </p>
+    </template>
+  </Sheet>
 </template>
 
 <script setup>
+import Sheet from './Sheet.vue';
 import { formatTemperature } from '../utils/temperatureUtils.js';
 import { formatDateTime, formatTimeAgo } from '../utils/timeUtils.js';
 
@@ -95,8 +79,3 @@ defineProps({
 
 defineEmits(['resume', 'startNew']);
 </script>
-
-
-
-
-

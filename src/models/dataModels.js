@@ -37,7 +37,10 @@
  * @typedef {Object} CalculationResult
  * @property {number|null} currentRate - Degrees F per hour, null if insufficient data
  * @property {number|null} averageRate - Session average rate in degrees F per hour
- * @property {number|null} predictedMinutesToTarget - Minutes until target reached
+ * @property {number|null} predictedMinutesToTarget - Heating minutes still needed,
+ *   measured from the last reading's timestamp (the projection anchor)
+ * @property {number|null} predictedMinutesFromNow - The same projection as a live
+ *   countdown from now; this is what a display should show
  * @property {string|null} predictedTargetTime - ISO 8601 datetime of predicted target
  * @property {number|null} scheduleVarianceMinutes - Positive = late, negative = early
  * @property {'early'|'late'|'on-track'|'unknown'} scheduleStatus
@@ -47,26 +50,30 @@
 
 /**
  * @typedef {Object} Recommendation
- * @property {'raise'|'lower'|'hold'|'oven-off'|'none'} action
+ * @property {'raise'|'lower'|'hold'|'oven-off'|'at-target'|'needs-reading'|'none'} action
  * @property {number|null} suggestedTemp - New oven set temp in Fahrenheit
  * @property {number|null} changeAmount - Degrees to change (always positive)
- * @property {string} message - Human-readable recommendation (may contain {minTemp} placeholder)
+ * @property {string|null} message - TEMPLATE with {placeholders}; substituted (and
+ *   unit-converted) by useRecommendations. Never render this field directly.
  * @property {string|null} reasoning - Explanation of why this recommendation
- * @property {string|null} alternativeMessage - Alternative action message (may contain {minutes}, {ovenTemp}, {estimatedTemp} placeholders)
+ * @property {string|null} alternativeMessage - Alternative action TEMPLATE with
+ *   {placeholders}; same substitution rule as `message`
  * @property {number|null} ovenOffMinutes - Suggested minutes to turn oven off
- * @property {number|null} practicalMinF - Practical minimum oven temp for message formatting
- * @property {string|null} restartTime - ISO timestamp when to restart oven (when oven is off)
- * @property {number|null} restartTemp - Temperature to restart oven at in Fahrenheit (when oven is off)
- * @property {number|null} minutesUntilRestart - Minutes until should restart oven (when oven is off)
- * @property {boolean} shouldRestartNow - Whether should restart oven immediately (when oven is off)
- * @property {number|null} estimatedCurrentMeatTemp - Estimated current meat temperature in Fahrenheit (when oven is off)
+ * @property {number|null} practicalMinF - Practical minimum oven temp in Fahrenheit
+ * @property {number|null} latestReadingTemp - Newest logged reading in Fahrenheit
+ * @property {'normal'|'moderate'|'urgent'|'warning'|'info'|'unknown'} severity
  * @property {boolean} canRecommend - Whether conditions allow a recommendation
- * @property {string|null} blockerReason - If canRecommend is false, why
+ * @property {string|null} blockerReason - If canRecommend is false, why (display string)
+ * @property {string|null} blockerType - Machine-readable blocker discriminant, e.g.
+ *   'insufficient_readings' | 'insufficient_time' | 'no_oven_data' |
+ *   'stale_oven_data' | 'no_serve_time' | 'insufficient_confidence' |
+ *   'bad_rate' | 'unstable_rate' | 'no_session'
+ * @property {{current: number, required: number, message: string}|null} progress -
+ *   Progress toward clearing a countable blocker
  */
 
 /**
  * @typedef {Object} AppSettings
- * @property {'F'|'C'} units - Temperature display units
  * @property {number} smoothingWindowReadings - Number of readings for rate smoothing (default 3)
  * @property {number} smoothingWindowMinutes - Alternative: time window for smoothing (default 30)
  * @property {'readings'|'time'} smoothingMode - Which smoothing approach to use
@@ -126,7 +133,6 @@ export function createSession(configOverrides = {}) {
  */
 export function createDefaultSettings() {
   return {
-    units: 'F',
     smoothingWindowReadings: 3,
     smoothingWindowMinutes: 30,
     smoothingMode: 'readings',

@@ -8,30 +8,10 @@ export const SESSION_DEFAULTS = {
 };
 
 /**
- * Default settings values
- */
-export const SETTINGS_DEFAULTS = {
-  SMOOTHING_WINDOW_READINGS: 3,
-  SMOOTHING_WINDOW_MINUTES: 30,
-  ON_TRACK_THRESHOLD_MINUTES: 10,
-  RECOMMENDATION_STEP_F: 10,
-  RECOMMENDATION_MAX_STEP_F: 25,
-  OVEN_TEMP_MIN_F: 150,
-  OVEN_TEMP_MAX_F: 300,
-  OVEN_TEMP_PRACTICAL_MIN_F: 175, // Most ovens can't go below ~80°C/175°F
-  ENABLE_LOW_TEMP_RECOMMENDATIONS: true, // Allow recommendations below practical minimum
-  MIN_READINGS_FOR_RECOMMENDATION: 3,
-  MIN_TIME_SPAN_MINUTES: 30,
-  OVEN_TEMP_STALE_MINUTES: 60
-};
-
-/**
  * Calculation thresholds
  */
 export const CALCULATION_THRESHOLDS = {
-  MIN_READINGS_FOR_RATE: 2,
-  MIN_READINGS_FOR_PROJECTION: 2,
-  RATE_VARIANCE_THRESHOLD: 0.5, // Coefficient of variation threshold for "noisy" data
+  MIN_READINGS_FOR_RATE: 2, // Coefficient of variation threshold for "noisy" data
   MIN_RATE_FOR_PREDICTION: 0.1 // °F/hr minimum to consider valid heating
 };
 
@@ -39,7 +19,6 @@ export const CALCULATION_THRESHOLDS = {
  * UI-related constants
  */
 export const UI_CONSTANTS = {
-  CHART_UPDATE_DEBOUNCE_MS: 250,
   AUTO_SAVE_DEBOUNCE_MS: 1000,
   TOAST_DURATION_MS: 3000
 };
@@ -55,11 +34,9 @@ export const RECOMMENDATION_MESSAGES = {
   LOWER_LARGE: 'Running very early. Lower oven to {suggestedTemp} to avoid overshooting.',
   OVEN_OFF_SUGGESTED: 'Running very early. Your oven can\'t go low enough to slow down heating.',
   OVEN_OFF_ALTERNATIVE: 'Turn off oven for approximately {minutes} minutes, then restart at {ovenTemp}.',
-  OVEN_TOO_LOW: 'Already at practical minimum oven temperature ({ovenTemp}). Most ovens can\'t go lower.',
   LOW_TEMP_DISABLED: 'Running early, but recommendations below {minTemp} are disabled.',
-  OVEN_RESTART_NOW: 'Turn oven on NOW at {ovenTemp}.',
-  OVEN_RESTART_TIMED: 'Turn oven on at {restartTime} at {ovenTemp}.',
-  OVEN_OFF_COOLING: 'Oven is off. Meat is cooling down (estimated current temp: {estimatedTemp}).',
+  AT_TARGET: 'Target reached. Latest reading is {latestTemp}. Turn the oven off and rest the meat.',
+  NEEDS_READING: 'Cooking is paused. Log a fresh reading to resume recommendations.',
   NEED_MORE_READINGS: 'Need at least {count} readings to make recommendations.',
   NEED_MORE_TIME: 'Need readings spanning at least {minutes} minutes.',
   NO_SERVE_TIME: 'Set a desired serve time to get timing recommendations.',

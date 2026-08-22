@@ -1,49 +1,47 @@
 <template>
-  <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-4">
-    <div class="flex items-center justify-between mb-3">
-      <h3 class="text-sm font-semibold text-gray-700 dark:text-gray-300">Temperature Progress</h3>
-      <div class="flex items-center gap-2">
-        <button
-          v-if="canToggleOvenOverlay"
-          @click="showOvenOverlay = !showOvenOverlay"
-          class="text-xs px-2 py-1 rounded border transition-colors"
-          :class="showOvenOverlay ? 'bg-amber-50 dark:bg-amber-900 dark:bg-opacity-30 border-amber-300 dark:border-amber-700 text-amber-700 dark:text-amber-300' : 'bg-gray-50 dark:bg-gray-700 border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-400'"
-        >
-          {{ showOvenOverlay ? 'Hide Oven' : 'Show Oven' }}
-        </button>
-      </div>
+  <section class="rule">
+    <!-- Full bleed. No card, no gutter, no header: the y ticks are drawn inside
+         the plot area, so the line runs from screen edge to screen edge. -->
+    <div v-if="hasData" class="band-flush relative" :style="{ height: chartHeight }">
+      <Line :data="chartData" :options="chartOptions" />
     </div>
-    
-    <div class="relative" :style="{ height: chartHeight }">
-      <Line
-        v-if="hasData"
-        :data="chartData"
-        :options="chartOptions"
-      />
-      <div v-else class="absolute inset-0 flex items-center justify-center text-gray-400 dark:text-gray-500">
-        <div class="text-center">
-          <svg class="w-12 h-12 mx-auto mb-2 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-          </svg>
-          <p>Add readings to see your progress</p>
-        </div>
-      </div>
+
+    <!-- Zero readings. An invitation at its natural size — not an empty axis
+         padded out to chart height. -->
+    <div v-else class="band py-7 text-center">
+      <p class="text-[15px] text-ink-dim">No curve yet</p>
+      <p class="mt-1 text-[13px] text-ink-mute">
+        Log a reading and the projection draws itself.
+      </p>
     </div>
-  </div>
+
+    <!-- The oven track has no axis of its own, so its current setting is spelled
+         out here. This is the only text allowed inside the gutter. -->
+    <p v-if="hasData && ovenFootnote" class="band pt-1 pb-3 text-[11px] text-ink-mute truncate">
+      {{ ovenFootnote }}
+    </p>
+  </section>
 </template>
 
 <script setup>
-import { computed, ref } from 'vue';
+import { computed } from 'vue';
 import { Line } from 'vue-chartjs';
 import { useWindowSize } from '@vueuse/core';
 import { useSession } from '../composables/useSession.js';
+import { hasReadingSince } from '../services/recommendationService.js';
 import { useCalculations } from '../composables/useCalculations.js';
 import { toDisplayUnit } from '../utils/temperatureUtils.js';
+import { formatTime } from '../utils/timeUtils.js';
 import {
   defaultChartOptions,
-  chartColors,
+  createOvenScale,
   createTargetAnnotation,
-  createServeTimeAnnotation
+  createServeTimeAnnotation,
+  createCrossingMarker,
+  createDataLabel,
+  createHeatStroke,
+  createHeatFill,
+  chartPalette
 } from '../config/chartConfig.js';
 
 const props = defineProps({
@@ -53,225 +51,327 @@ const props = defineProps({
 const { readings, ovenEvents, config, displayUnits } = useSession();
 const { predictedTargetTime, currentTemp, canPredict } = useCalculations();
 
-const showOvenOverlay = ref(true);
 const { width } = useWindowSize();
 
-const chartHeight = computed(() => {
-  if (props.height) return props.height;
-  
-  // Responsive height based on screen width
-  if (width.value < 640) return '200px';
-  if (width.value < 1024) return '240px';
-  return '280px';
-});
+/** A one-reading cook has no duration yet; give the time axis a real window. */
+const MIN_SPAN_MS = 45 * 60 * 1000;
+
+/**
+ * Rough rendered widths of the direct labels, in px. Only used to decide which
+ * side of its anchor a label hangs off — annotations are clipped to the plot, so
+ * a label that doesn't fit gets sliced rather than overflowing.
+ */
+const LABEL_WIDTHS = {
+  crossing: 70,
+  serve: 76,
+  reading: 36
+};
+
+/**
+ * The mirrored y ticks live in the left ~34px of the plot. A direct label placed
+ * over them is unreadable, so the series end label gives up when its point is
+ * that far left.
+ */
+const TICK_GUTTER_FRACTION = 0.18;
 
 const hasData = computed(() => readings.value.length > 0);
 
-const canToggleOvenOverlay = computed(() => ovenEvents.value.length > 0);
+const chartHeight = computed(() => {
+  if (props.height) return props.height;
 
-/**
- * Transform readings into chart data points
- */
-const internalTempData = computed(() => {
-  return readings.value.map(r => ({
-    x: new Date(r.timestamp),
-    y: toDisplayUnit(r.temp, displayUnits.value)
-  }));
+  let base = 300;
+  if (width.value < 640) base = 220;
+  else if (width.value < 1024) base = 260;
+
+  // The oven takes a fifth of the plot; pay for it rather than squeezing the
+  // meat's band.
+  return `${hasOvenTrack.value ? base + 36 : base}px`;
 });
 
 /**
- * Generate projection line from current point to predicted target
+ * Time domain. Also the data horizon: the right edge is the latest thing the
+ * chart knows about, and the oven track is extended to exactly this point.
+ *
+ * Deliberately clock-free. Nothing here reads `new Date()` for a session that
+ * has any data, so the domain can't freeze at first evaluation.
+ */
+const xDomain = computed(() => {
+  const starts = [];
+  const firstReading = readings.value[0];
+  const firstOven = ovenEvents.value[0];
+
+  if (firstReading) starts.push(new Date(firstReading.timestamp).getTime());
+  // The oven is normally set before the probe goes in, and the track should be
+  // visible from that moment. Oven events widen the *time* domain only — never
+  // the temperature range.
+  if (firstOven) starts.push(new Date(firstOven.timestamp).getTime());
+
+  const start = starts.length ? Math.min(...starts) : Date.now();
+
+  const ends = [start];
+  const lastReading = readings.value[readings.value.length - 1];
+  if (lastReading) ends.push(new Date(lastReading.timestamp).getTime());
+  if (predictedTargetTime.value) ends.push(new Date(predictedTargetTime.value).getTime());
+  if (config.value?.desiredServeTime) {
+    ends.push(new Date(config.value.desiredServeTime).getTime());
+  }
+
+  let end = Math.max(...ends);
+  if (end - start < MIN_SPAN_MS) {
+    end = start + MIN_SPAN_MS;
+  }
+
+  const pad = (end - start) * 0.04;
+  return { min: start - pad, max: end + pad };
+});
+
+/** Where a timestamp falls across the plot width, 0..1. */
+function xFraction(time) {
+  const { min, max } = xDomain.value;
+  if (max === min) return 0;
+  return (new Date(time).getTime() - min) / (max - min);
+}
+
+/**
+ * The plot is full bleed, so its width is the viewport less the small right
+ * inset from `layout.padding`.
+ */
+const plotWidth = computed(() => Math.max(width.value - 6, 280));
+
+/**
+ * Which side of its anchor a label should sit on: the preferred side while it
+ * fits, otherwise the other one. A measurement rather than a magic fraction, so
+ * it holds at 320px and at 430px.
+ *
+ * @param {Date|number} time - Anchor on the time axis
+ * @param {number} labelWidth - Approximate rendered width of the label
+ * @param {'left'|'right'} [prefer] - Side to use when both fit
+ * @returns {'left'|'right'}
+ */
+function labelSide(time, labelWidth, prefer = 'right') {
+  const gap = 9;
+  const x = xFraction(time) * plotWidth.value;
+
+  const fits = {
+    right: x + gap + labelWidth <= plotWidth.value,
+    left: x - gap - labelWidth >= 0
+  };
+
+  if (fits[prefer]) return prefer;
+
+  const other = prefer === 'right' ? 'left' : 'right';
+  return fits[other] ? other : prefer;
+}
+
+/**
+ * Time ticks a person reads without doing arithmetic. Left to itself Chart.js
+ * divides a pinned domain into equal parts and prints things like "2:37, 3:21,
+ * 4:05"; naming the unit and step keeps them on the quarter hour or the hour.
+ */
+const timeTicks = computed(() => {
+  const hours = (xDomain.value.max - xDomain.value.min) / 3600000;
+  const wanted = hours / (width.value < 640 ? 3.2 : 5);
+
+  const steps = [
+    { unit: 'minute', stepSize: 15, hours: 0.25 },
+    { unit: 'minute', stepSize: 30, hours: 0.5 },
+    { unit: 'hour', stepSize: 1, hours: 1 },
+    { unit: 'hour', stepSize: 2, hours: 2 },
+    { unit: 'hour', stepSize: 3, hours: 3 }
+  ];
+
+  const step = steps.find(s => s.hours >= wanted) ?? steps[steps.length - 1];
+  return { unit: step.unit, stepSize: step.stepSize };
+});
+
+/**
+ * The meat's own temperature range, derived from the readings and the target
+ * ONLY. Folding oven temperatures in here is what crushed a single 8° reading
+ * into the floor of a 0..110 plot.
+ */
+const meatRange = computed(() => {
+  const temps = readings.value.map(r => toDisplayUnit(r.temp, displayUnits.value));
+
+  if (config.value) {
+    temps.push(toDisplayUnit(config.value.targetTemp, displayUnits.value));
+  }
+
+  if (temps.length === 0) return { min: 0, max: 200 };
+
+  let lo = Math.min(...temps);
+  let hi = Math.max(...temps);
+
+  // A single reading, or a cook that has barely moved, would otherwise collapse
+  // to a zero-height window and magnify probe noise into a cliff.
+  const floor = displayUnits.value === 'C' ? 12 : 20;
+  if (hi - lo < floor) {
+    const mid = (hi + lo) / 2;
+    lo = mid - floor / 2;
+    hi = mid + floor / 2;
+  }
+
+  const span = hi - lo;
+  // Snap the window to a round step so the ticks read as temperatures rather
+  // than as padding arithmetic.
+  const step = displayUnits.value === 'C' ? 2 : 5;
+  // More air above than below: the target rule, its label and the crossing pill
+  // all live at the top of the range.
+  const min = Math.floor((lo - span * 0.08) / step) * step;
+
+  return {
+    // Don't invent below-zero temperatures for a cook that never went there.
+    min: lo >= 0 ? Math.max(0, min) : min,
+    max: Math.ceil((hi + span * 0.14) / step) * step
+  };
+});
+
+const internalTempData = computed(() =>
+  readings.value.map(r => ({
+    x: new Date(r.timestamp).getTime(),
+    y: toDisplayUnit(r.temp, displayUnits.value)
+  }))
+);
+
+/**
+ * Cooking is paused and no reading post-dates the pause. Shares the service's
+ * own predicate so the chart and the advice cannot disagree.
+ */
+const awaitingPostPauseReading = computed(() => {
+  const events = ovenEvents.value;
+  const last = events.length > 0 ? events[events.length - 1] : null;
+  if (!last || last.isOff !== true) return false;
+  return !hasReadingSince(readings.value, last.timestamp);
+});
+
+/**
+ * Dashed projection from the latest reading to the predicted crossing.
  */
 const projectionData = computed(() => {
-  if (!canPredict.value || !predictedTargetTime.value || !currentTemp.value) {
+  if (!canPredict.value || !predictedTargetTime.value || currentTemp.value === null) {
     return [];
   }
-  
+
+  // While cooking is paused with nothing logged since, the app deliberately
+  // refuses to estimate the meat - the advice band asks for a fresh reading.
+  // Projecting here would contradict it with the brightest mark on the screen,
+  // and it would be wrong in a known direction: the fit is the pre-pause
+  // heating rate, but the meat is cooling.
+  if (awaitingPostPauseReading.value) return [];
+
   const lastReading = readings.value[readings.value.length - 1];
   const currentTempDisplay = toDisplayUnit(currentTemp.value, displayUnits.value);
   const targetTempDisplay = toDisplayUnit(config.value.targetTemp, displayUnits.value);
-  
-  // Don't show projection if target is reached
-  if (currentTempDisplay >= targetTempDisplay) {
-    return [];
-  }
-  
+
+  // Nothing left to project once the target is reached.
+  if (currentTempDisplay >= targetTempDisplay) return [];
+
   return [
-    { x: new Date(lastReading.timestamp), y: currentTempDisplay },
-    { x: new Date(predictedTargetTime.value), y: targetTempDisplay }
+    { x: new Date(lastReading.timestamp).getTime(), y: currentTempDisplay },
+    { x: new Date(predictedTargetTime.value).getTime(), y: targetTempDisplay }
   ];
 });
 
 /**
- * Transform oven events into step chart data
- * Handles oven-off events by creating gaps in the line
+ * The oven as a staircase. `stepped: 'after'` holds each setting forward from
+ * the moment it was made; an oven-off event emits the outgoing value followed by
+ * a null so the run is drawn and then the line breaks.
  */
-const ovenTempData = computed(() => {
-  if (ovenEvents.value.length === 0) return [];
-  
+const ovenTrackData = computed(() => {
+  const events = ovenEvents.value;
+  if (events.length === 0) return [];
+
   const data = [];
-  
-  ovenEvents.value.forEach((event, index) => {
-    const time = new Date(event.timestamp);
-    
+
+  events.forEach((event, index) => {
+    const x = new Date(event.timestamp).getTime();
+
     if (event.isOff) {
-      // Oven turned off - end the line here
-      const prevTemp = index > 0 
-        ? toDisplayUnit(ovenEvents.value[index - 1].setTemp, displayUnits.value)
-        : 0;
-      
-      // Add point to step down
-      if (index > 0) {
-        data.push({ x: time, y: prevTemp });
+      const previous = events[index - 1];
+      // Carry the previous setting up to the instant the oven went off,
+      // otherwise the gap swallows that whole run.
+      if (previous && !previous.isOff) {
+        data.push({ x, y: toDisplayUnit(previous.setTemp, displayUnits.value) });
       }
-      
-      // Add null point to create gap in line
-      data.push({ x: time, y: null });
+      data.push({ x, y: null });
     } else {
-      const temp = toDisplayUnit(event.setTemp, displayUnits.value);
-      
-      // Check if previous event was oven-off
-      const prevWasOff = index > 0 && ovenEvents.value[index - 1].isOff;
-      
-      if (prevWasOff) {
-        // Resuming from off - start new line segment
-        data.push({ x: time, y: null });
-        data.push({ x: time, y: temp });
-      } else {
-        // Normal step change
-        if (index > 0) {
-          const prevTemp = toDisplayUnit(ovenEvents.value[index - 1].setTemp, displayUnits.value);
-          data.push({ x: time, y: prevTemp });
-        }
-        data.push({ x: time, y: temp });
-      }
+      data.push({ x, y: toDisplayUnit(event.setTemp, displayUnits.value) });
     }
   });
-  
-  // Extend last value to current time (only if oven is currently on)
-  const lastEvent = ovenEvents.value[ovenEvents.value.length - 1];
-  if (lastEvent && !lastEvent.isOff) {
-    const lastTemp = toDisplayUnit(lastEvent.setTemp, displayUnits.value);
-    data.push({ x: new Date(), y: lastTemp });
+
+  // The last setting holds to the end of the MEASURED period, not to the right
+  // edge of the plot. Two constraints meet here: reading `new Date()` inside a
+  // computed froze the track at its first evaluation (it stopped growing for
+  // the rest of the cook), but running it out to `xDomain.max` drew the
+  // saturated oven bar hours into the future, asserting the oven would still be
+  // at that setting at the predicted crossing. The latest thing actually
+  // observed satisfies both: no clock read, no claim about the future.
+  const last = events[events.length - 1];
+  if (last && !last.isOff) {
+    const lastReading = readings.value[readings.value.length - 1];
+    const measuredUntil = Math.max(
+      new Date(last.timestamp).getTime(),
+      lastReading ? new Date(lastReading.timestamp).getTime() : 0
+    );
+    data.push({
+      x: measuredUntil,
+      y: toDisplayUnit(last.setTemp, displayUnits.value)
+    });
   }
-  
+
   return data;
 });
 
-/**
- * Compute Y-axis bounds to include all relevant temperatures
- */
-const yAxisBounds = computed(() => {
-  const temps = [];
-  
-  // Include all internal readings
-  readings.value.forEach(r => {
-    temps.push(toDisplayUnit(r.temp, displayUnits.value));
-  });
-  
-  // Include target
-  if (config.value) {
-    temps.push(toDisplayUnit(config.value.targetTemp, displayUnits.value));
-  }
-  
-  // Include oven temps if overlay is shown
-  if (showOvenOverlay.value) {
-    ovenEvents.value.forEach(e => {
-      temps.push(toDisplayUnit(e.setTemp, displayUnits.value));
-    });
-  }
-  
-  if (temps.length === 0) {
-    return { min: 0, max: 200 };
-  }
-  
-  const min = Math.min(...temps);
-  const max = Math.max(...temps);
-  const padding = (max - min) * 0.1 || 10;
-  
-  return {
-    min: Math.floor(min - padding),
-    max: Math.ceil(max + padding)
-  };
+const hasOvenTrack = computed(() => ovenTrackData.value.length > 0);
+
+const ovenMaxTemp = computed(() => {
+  const temps = ovenEvents.value
+    .filter(e => !e.isOff)
+    .map(e => toDisplayUnit(e.setTemp, displayUnits.value));
+
+  return temps.length > 0 ? Math.max(...temps) : 0;
 });
 
-/**
- * Compute X-axis bounds to show appropriate time range
- */
-const xAxisBounds = computed(() => {
-  if (readings.value.length === 0) {
-    const now = new Date();
-    return {
-      min: now,
-      max: new Date(now.getTime() + 60 * 60 * 1000) // 1 hour from now
-    };
-  }
-  
-  const firstTime = new Date(readings.value[0].timestamp);
-  let lastTime = new Date(readings.value[readings.value.length - 1].timestamp);
-  
-  // Extend to predicted target time if available
-  if (predictedTargetTime.value) {
-    const predicted = new Date(predictedTargetTime.value);
-    if (predicted > lastTime) {
-      lastTime = predicted;
-    }
-  }
-  
-  // Extend to serve time if set and visible
-  if (config.value?.desiredServeTime) {
-    const serveTime = new Date(config.value.desiredServeTime);
-    if (serveTime > lastTime) {
-      lastTime = serveTime;
-    }
-  }
-  
-  // Add padding
-  const duration = lastTime.getTime() - firstTime.getTime();
-  const padding = duration * 0.05 || 5 * 60 * 1000;
-  
-  return {
-    min: new Date(firstTime.getTime() - padding),
-    max: new Date(lastTime.getTime() + padding)
-  };
+/** Stands in for the oven track's missing axis. */
+const ovenFootnote = computed(() => {
+  const last = ovenEvents.value[ovenEvents.value.length - 1];
+  if (!last) return null;
+  if (last.isOff) return 'Oven off';
+
+  const temp = toDisplayUnit(last.setTemp, displayUnits.value);
+  return `Oven ${Math.round(temp)}°${displayUnits.value}`;
 });
 
-/**
- * Responsive tick limits based on screen width
- */
-const maxXTicks = computed(() => {
-  if (width.value < 640) return 4;
-  if (width.value < 1024) return 6;
-  return 8;
-});
-
-/**
- * Build chart datasets
- */
 const chartData = computed(() => {
-  const datasets = [];
-  
-  // Internal temperature line
-  datasets.push({
-    label: `Internal Temp (°${displayUnits.value})`,
-    data: internalTempData.value,
-    borderColor: chartColors.internalTemp.line,
-    backgroundColor: chartColors.internalTemp.fill,
-    pointBackgroundColor: chartColors.internalTemp.point,
-    pointRadius: 4,
-    pointHoverRadius: 6,
-    tension: 0.1,
-    fill: false,
-    order: 1
-  });
-  
-  // Projection line
+  // Dataset 0 is always the internal temperature — the tooltip filter in
+  // chartConfig depends on that.
+  const datasets = [
+    {
+      label: 'Internal',
+      data: internalTempData.value,
+      borderColor: (ctx) => createHeatStroke(ctx.chart.ctx, ctx.chart.scales.y),
+      backgroundColor: (ctx) => createHeatFill(ctx.chart.ctx, ctx.chart.scales.y),
+      pointBackgroundColor: (ctx) => createHeatStroke(ctx.chart.ctx, ctx.chart.scales.y),
+      pointBorderWidth: 0,
+      // The latest reading is the one the eye is looking for.
+      pointRadius: (ctx) => (ctx.dataIndex === internalTempData.value.length - 1 ? 3.5 : 2),
+      pointHoverRadius: 5,
+      borderWidth: 2.5,
+      // Straight segments: a spline between sparse readings would invent
+      // temperatures the probe never saw.
+      tension: 0,
+      fill: 'start',
+      order: 1
+    }
+  ];
+
   if (projectionData.value.length > 0) {
     datasets.push({
       label: 'Projected',
       data: projectionData.value,
-      borderColor: chartColors.projection.line,
-      borderDash: chartColors.projection.dash,
+      // Interpretation, so it stays out of the heat ramp.
+      borderColor: 'rgba(167, 156, 145, 0.55)',
+      borderDash: [4, 4],
+      borderWidth: 1.5,
       pointRadius: 0,
       pointHoverRadius: 0,
       tension: 0,
@@ -279,108 +379,154 @@ const chartData = computed(() => {
       order: 2
     });
   }
-  
-  // Oven temperature overlay (step line)
-  if (showOvenOverlay.value && ovenTempData.value.length > 0) {
+
+  if (hasOvenTrack.value) {
     datasets.push({
-      label: `Oven Set (°${displayUnits.value})`,
-      data: ovenTempData.value,
-      borderColor: chartColors.ovenTemp.line,
-      backgroundColor: chartColors.ovenTemp.fill,
+      label: 'Oven',
+      data: ovenTrackData.value,
+      borderColor: chartPalette.heatWarm,
+      // Faint enough that the stepped edge, not the mass, is what reads.
+      backgroundColor: 'rgba(217, 131, 36, 0.10)',
+      borderWidth: 1.5,
       pointRadius: 0,
-      pointHoverRadius: 4,
-      stepped: 'before',
-      tension: 0,
-      fill: false,
-      spanGaps: false,  // Don't connect across null values (oven-off gaps)
+      pointHoverRadius: 0,
+      stepped: 'after',
+      // Don't bridge oven-off gaps.
+      spanGaps: false,
+      fill: 'start',
       order: 3,
       yAxisID: 'yOven'
     });
   }
-  
+
   return { datasets };
 });
 
 /**
- * Build chart options with annotations
+ * Annotations: the target rule, the serve rule, and the crossing marker whose
+ * distance from that rule is the early/late verdict.
  */
-const chartOptions = computed(() => {
-  const annotations = {};
-  
-  // Target temperature line
+const annotations = computed(() => {
+  const result = {};
+  const range = meatRange.value;
+
   if (config.value) {
-    annotations.targetLine = createTargetAnnotation(
+    result.targetRule = createTargetAnnotation(
       toDisplayUnit(config.value.targetTemp, displayUnits.value),
       displayUnits.value
     );
   }
-  
-  // Serve time vertical line
-  if (config.value?.desiredServeTime) {
-    annotations.serveTimeLine = createServeTimeAnnotation(
-      new Date(config.value.desiredServeTime)
-    );
+
+  // Label the internal series at its own end instead of in a legend. It hangs
+  // *below* the last point because the projection leaves upward from there.
+  // Suppressed early in the cook, when the point is still over the y ticks.
+  const lastPoint = internalTempData.value[internalTempData.value.length - 1];
+  if (lastPoint && xFraction(lastPoint.x) > TICK_GUTTER_FRACTION) {
+    result.internalLabel = createDataLabel({
+      x: lastPoint.x,
+      y: lastPoint.y,
+      content: `${Math.round(lastPoint.y)}°`,
+      side: labelSide(lastPoint.x, LABEL_WIDTHS.reading),
+      vertical: 'below',
+      tone: 'live'
+    });
   }
-  
+
+  if (config.value?.desiredServeTime) {
+    const serveTime = new Date(config.value.desiredServeTime);
+    result.serveRule = createServeTimeAnnotation(serveTime);
+
+    // Pinned to the floor of the meat's range, which keeps it a full band away
+    // from the crossing pill up on the target rule.
+    result.serveLabel = createDataLabel({
+      x: serveTime.getTime(),
+      y: range.min,
+      content: `SERVE ${formatTime(config.value.desiredServeTime)}`,
+      side: labelSide(serveTime, LABEL_WIDTHS.serve),
+      vertical: 'above',
+      tone: 'quiet'
+    });
+  }
+
+  // The signature. Only drawn when there is a projection to land.
+  if (projectionData.value.length > 0) {
+    const crossing = projectionData.value[1];
+    const fraction = xFraction(crossing.x);
+    const serve = config.value?.desiredServeTime
+      ? new Date(config.value.desiredServeTime).getTime()
+      : null;
+
+    // Hang the pill on the far side of the crossing from the serve rule. The
+    // gap between those two marks *is* the verdict, and a label parked inside
+    // it hides the thing the eye came to read.
+    const away = serve === null || crossing.x >= serve ? 'right' : 'left';
+
+    result.crossingMarker = createCrossingMarker(crossing.x, crossing.y);
+    result.crossingLabel = createDataLabel({
+      x: crossing.x,
+      y: crossing.y,
+      content: formatTime(predictedTargetTime.value),
+      side: labelSide(crossing.x, LABEL_WIDTHS.crossing, away),
+      // Centred on the target rule, except at the far left where the rule's own
+      // TARGET label already occupies that line.
+      vertical: fraction < 0.25 ? 'below' : 'middle',
+      tone: 'signature'
+    });
+  }
+
+  if (hasOvenTrack.value) {
+    // Hairline where the oven's band meets the meat's, so the two tracks read as
+    // two tracks rather than one crowded plot.
+    result.trackDivider = {
+      type: 'line',
+      yMin: range.min,
+      yMax: range.min,
+      borderColor: chartPalette.rule,
+      borderWidth: 1
+    };
+  }
+
+  return result;
+});
+
+const chartOptions = computed(() => {
   const options = {
     ...defaultChartOptions,
     scales: {
-      ...defaultChartOptions.scales,
       x: {
         ...defaultChartOptions.scales.x,
-        min: xAxisBounds.value.min,
-        max: xAxisBounds.value.max,
+        min: xDomain.value.min,
+        max: xDomain.value.max,
+        time: {
+          ...defaultChartOptions.scales.x.time,
+          ...timeTicks.value
+        },
         ticks: {
           ...defaultChartOptions.scales.x.ticks,
-          maxTicksLimit: maxXTicks.value
+          maxTicksLimit: width.value < 640 ? 4 : 6
         }
       },
       y: {
         ...defaultChartOptions.scales.y,
-        min: yAxisBounds.value.min,
-        max: yAxisBounds.value.max,
-        title: {
-          display: true,
-          text: `Internal Temp (°${displayUnits.value})`,
-          font: { size: 12, weight: 'bold' }
-        }
+        min: meatRange.value.min,
+        max: meatRange.value.max
       }
     },
     plugins: {
       ...defaultChartOptions.plugins,
-      annotation: {
-        annotations
-      }
+      annotation: { annotations: annotations.value }
     }
   };
-  
-  // Add secondary Y axis for oven temp if overlay is shown
-  if (showOvenOverlay.value && ovenTempData.value.length > 0) {
-    options.scales.yOven = {
-      type: 'linear',
-      position: 'right',
-      min: yAxisBounds.value.min,
-      max: yAxisBounds.value.max,
-      title: {
-        display: true,
-        text: `Oven Set (°${displayUnits.value})`,
-        font: { size: 12, weight: 'bold' }
-      },
-      grid: {
-        drawOnChartArea: false
-      },
-      ticks: {
-        callback: function(value) {
-          return value + '°';
-        }
-      }
-    };
+
+  // Stack the oven under the meat — same time axis, its own range, roughly the
+  // bottom fifth of the plot height. No second axis, no legend.
+  if (hasOvenTrack.value) {
+    options.scales.y.stack = 'roast';
+    options.scales.y.stackWeight = 4;
+    options.scales.y.weight = 1;
+    options.scales.yOven = createOvenScale(ovenMaxTemp.value);
   }
-  
+
   return options;
 });
 </script>
-
-
-
-

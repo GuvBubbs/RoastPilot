@@ -1,0 +1,121 @@
+<meta charset="utf-8"><title>audit</title>
+<style>body{margin:0;font:12px monospace;background:#111;color:#eee}iframe{border:0;display:block}</style>
+<div id="out">running…</div>
+<div id="stage"></div>
+<script type="module">
+const WIDTHS = [320, 375, 390, 430];
+const HEIGHT = 780;
+const APP = '/RoastPilot/index.html';
+const lines = [];
+
+// A session mid-cook, so the dashboard renders rather than the welcome screen.
+function seed() {
+  const t = (h, m = 0) => `2026-08-22T${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:00.000Z`;
+  localStorage.setItem('rstt_schema_version', '1');
+  localStorage.setItem('rstt_current_session', JSON.stringify({
+    config: {
+      id: 'audit', targetTemp: 125, units: 'F', startingTemp: 48,
+      desiredServeTime: t(23), desiredTimeRemaining: null, initialOvenTemp: 200,
+      meatType: 'beef', meatCut: 'standing rib roast', weight: 2.4,
+      notes: 'audit fixture', createdAt: t(18), updatedAt: t(21, 30)
+    },
+    readings: Array.from({ length: Number(new URLSearchParams(location.search).get('n') ?? 20) }, (_, i) => ({
+      id: 'r' + i, temp: 48 + i * 3.4, timestamp: t(18 + Math.floor(i / 4), (i % 4) * 15),
+      deltaFromStart: i * 3.4, deltaFromPrevious: i === 0 ? 0 : 3.4
+    })),
+    ovenEvents: [
+      { id: 'o1', setTemp: 200, timestamp: t(18), previousTemp: 200, isOff: false },
+      { id: 'o2', setTemp: 225, timestamp: t(19, 30), previousTemp: 200, isOff: false },
+      { id: 'o3', setTemp: 0, timestamp: t(20, 30), previousTemp: 225, isOff: true },
+      { id: 'o4', setTemp: 250, timestamp: t(21), previousTemp: 0, isOff: false }
+    ],
+    settings: {
+      smoothingWindowReadings: 3, smoothingWindowMinutes: 30, smoothingMode: 'readings',
+      onTrackThresholdMinutes: 10, recommendationStepF: 10, recommendationMaxStepF: 25,
+      ovenTempMinF: 150, ovenTempMaxF: 300, ovenTempPracticalMinF: 175,
+      enableLowTempRecommendations: true, minReadingsForRecommendation: 3,
+      minTimeSpanMinutes: 30, ovenTempStaleMinutes: 60
+    }
+  }));
+}
+
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+seed(); // same origin as the iframe, so the app picks this up on load
+
+function auditDoc(doc, win, label, width) {
+  const de = doc.documentElement;
+  const sw = de.scrollWidth, cw = de.clientWidth;
+  lines.push(`${sw === cw ? 'OK  ' : 'FAIL'} overflow ${label} w=${width} scrollWidth=${sw} clientWidth=${cw}`);
+
+  // Name the widest offenders so a failure is actionable.
+  if (sw > cw) {
+    const wide = [...doc.querySelectorAll('*')]
+      .map(el => ({ el, r: el.getBoundingClientRect() }))
+      .filter(({ r }) => r.right > cw + 1 || r.left < -1)
+      .slice(0, 6)
+      .map(({ el, r }) => `      ${el.tagName.toLowerCase()}.${(el.className || '').toString().slice(0, 60)} right=${Math.round(r.right)}`);
+    lines.push(...wide);
+  }
+
+  // Tap targets. Only visible, enabled, actually-interactive nodes.
+  const SEL = 'button,a[href],input:not([type=hidden]),select,textarea,[role=button],summary,[tabindex]:not([tabindex="-1"])';
+  const small = [];
+  for (const el of doc.querySelectorAll(SEL)) {
+    if (el.disabled) continue;
+    const cs = win.getComputedStyle(el);
+    if (cs.display === 'none' || cs.visibility === 'hidden' || Number(cs.opacity) === 0) continue;
+    const r = el.getBoundingClientRect();
+    if (r.width === 0 && r.height === 0) continue;
+    if (el.closest('[aria-hidden="true"]')) continue;
+
+    // A small control wrapped in a big label is a big target - clicking the
+    // label activates it. Measure the effective target, not the widget.
+    let box = r;
+    const wrapper = el.closest('label,button,[role=button]');
+    if (wrapper && wrapper !== el) {
+      const wr = wrapper.getBoundingClientRect();
+      if (wr.width >= box.width && wr.height >= box.height) box = wr;
+    }
+
+    if (box.width < 43.5 || box.height < 43.5) {
+      small.push(`      ${Math.round(box.width)}x${Math.round(box.height)} <${el.tagName.toLowerCase()}> ${(el.getAttribute('aria-label') || el.textContent || '').trim().slice(0, 40)}`);
+    }
+  }
+  lines.push(`${small.length === 0 ? 'OK  ' : 'FAIL'} taps     ${label} w=${width} under44=${small.length}`);
+  lines.push(...small);
+}
+
+for (const width of WIDTHS) {
+  const frame = document.createElement('iframe');
+  frame.width = width; frame.height = HEIGHT; frame.src = APP;
+  document.getElementById('stage').appendChild(frame);
+  await new Promise(r => frame.addEventListener('load', r, { once: true }));
+  await sleep(2200); // async chart chunk + fonts
+
+  const doc = frame.contentDocument, win = frame.contentWindow;
+  auditDoc(doc, win, 'dashboard', width);
+
+  // Now every sheet, opened by its real trigger.
+  const triggers = [
+    ['add-reading', () => [...doc.querySelectorAll('button')].find(b => /add reading/i.test(b.textContent))],
+    ['oven',        () => [...doc.querySelectorAll('button')].find(b => b.textContent.trim() === 'Oven')],
+    ['settings',    () => doc.querySelector('button[aria-label="Settings"]')]
+  ];
+  for (const [name, find] of triggers) {
+    const btn = find();
+    if (!btn) { lines.push(`SKIP sheet ${name} w=${width} (trigger not found)`); continue; }
+    btn.click();
+    await sleep(900);
+    auditDoc(doc, win, 'sheet:' + name, width);
+    const close = doc.querySelector('[role=dialog] button[aria-label=Close]')
+      || [...doc.querySelectorAll('[role=dialog] button')].find(b => /cancel/i.test(b.textContent));
+    if (close) close.click();
+    await sleep(500);
+  }
+  frame.remove();
+}
+
+document.getElementById('out').textContent = lines.join('\n');
+document.title = 'done';
+</script>

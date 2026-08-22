@@ -133,25 +133,5 @@ export function validateTemperature(temp, unit, type) {
   return { valid: true, error: null };
 }
 
-/**
- * Get common target temperatures for meat types
- * @returns {Array<{name: string, targetF: number, description: string}>}
- */
-export function getCommonTargets() {
-  return [
-    { name: 'Beef - Rare', targetF: 120, description: 'Cool red center' },
-    { name: 'Beef - Medium Rare', targetF: 130, description: 'Warm red center' },
-    { name: 'Beef - Medium', targetF: 140, description: 'Warm pink center' },
-    { name: 'Beef - Medium Well', targetF: 150, description: 'Slightly pink center' },
-    { name: 'Beef - Well Done', targetF: 160, description: 'No pink' },
-    { name: 'Pork', targetF: 145, description: 'USDA recommended' },
-    { name: 'Poultry', targetF: 165, description: 'USDA recommended' },
-    { name: 'Lamb - Medium Rare', targetF: 130, description: 'Warm red center' },
-    { name: 'Lamb - Medium', targetF: 140, description: 'Warm pink center' }
-  ];
-}
-
-
-
 
 

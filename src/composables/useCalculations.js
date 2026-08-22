@@ -2,10 +2,15 @@ import { computed } from 'vue';
 import { useSession } from './useSession.js';
 import { computeSessionCalculations } from '../services/calculationService.js';
 import { toDisplayUnit, convertRate, formatRate } from '../utils/temperatureUtils.js';
-import { formatDuration, formatTime } from '../utils/timeUtils.js';
+import { formatDuration, formatTime, minutesBetween } from '../utils/timeUtils.js';
+import { useRefreshTimer } from './useRefreshTimer.js';
 
 export function useCalculations() {
   const { readings, config, settings, displayUnits } = useSession();
+
+  // Anything derived from "now" needs a reactive clock. Without this the
+  // countdown is computed once and then frozen for the rest of the cook.
+  const { tick } = useRefreshTimer(30000);
   
   /**
    * Raw calculation results (internal units)
@@ -19,7 +24,14 @@ export function useCalculations() {
       readings: readings.value,
       targetTemp: config.value.targetTemp,
       desiredServeTime: config.value.desiredServeTime,
-      settings: settings.value
+      settings: settings.value,
+      // Pinned to the anchor, not the live clock: this computed deliberately has
+      // no tick dependency, so the countdown is derived separately below. Left
+      // implicit, the result object would carry a permanently stale
+      // predictedMinutesFromNow.
+      now: readings.value.length > 0
+        ? readings.value[readings.value.length - 1].timestamp
+        : undefined
     });
   });
   
@@ -58,17 +70,35 @@ export function useCalculations() {
   });
   
   /**
-   * Predicted minutes until target is reached
+   * Heating minutes still needed, measured from the last reading's timestamp.
+   * This is the projection's own length - NOT a countdown. The recommendation
+   * service consumes it in that sense.
    */
   const predictedMinutes = computed(() => {
     return rawCalculations.value?.predictedMinutesToTarget ?? null;
   });
   
   /**
+   * The same projection as a live countdown from now. Part of `predictedMinutes`
+   * has already elapsed since the last reading was taken, so the two differ by
+   * exactly the age of that reading. This is the one a display should show.
+   *
+   * Derived here rather than inside the calculation so `rawCalculations` stays
+   * clock-free: the predicted target *time* does not move as the clock advances,
+   * only the distance to it does.
+   */
+  const predictedMinutesFromNow = computed(() => {
+    tick.value; // re-read the clock on each tick
+    const targetTime = rawCalculations.value?.predictedTargetTime;
+    if (!targetTime) return null;
+    return Math.round(minutesBetween(new Date().toISOString(), targetTime));
+  });
+  
+  /**
    * Formatted time remaining string
    */
   const timeRemainingFormatted = computed(() => {
-    const minutes = predictedMinutes.value;
+    const minutes = predictedMinutesFromNow.value;
     if (minutes === null) return '--';
     if (minutes <= 0) return 'Target reached';
     return formatDuration(minutes);
@@ -192,6 +222,7 @@ export function useCalculations() {
     averageRate,
     predictedMinutes,
     predictedMinutesToTarget: predictedMinutes, // Alias for recommendation service
+    predictedMinutesFromNow,
     predictedTargetTime,
     scheduleVariance,
     scheduleStatus,

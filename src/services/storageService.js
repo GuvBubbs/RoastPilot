@@ -1,8 +1,9 @@
-import { createSession, createDefaultSettings } from '../models/dataModels.js';
+import { createDefaultSettings } from '../models/dataModels.js';
 
 const STORAGE_KEYS = {
   CURRENT_SESSION: 'rstt_current_session',
   SETTINGS: 'rstt_settings',
+  UNITS: 'rstt_units',
   SCHEMA_VERSION: 'rstt_schema_version'
 };
 
@@ -73,10 +74,15 @@ export const storageService = {
    */
   saveSession(session) {
     try {
-      // Update the updatedAt timestamp
-      session.config.updatedAt = new Date().toISOString();
+      // Stamp updatedAt onto a copy, never onto the caller's object. The
+      // autosave watcher in useSession watches the reactive session deeply, so
+      // writing to it from here would retrigger the watcher that called us.
+      const payload = {
+        ...session,
+        config: { ...session.config, updatedAt: new Date().toISOString() }
+      };
       
-      const serialized = JSON.stringify(session);
+      const serialized = JSON.stringify(payload);
       localStorage.setItem(STORAGE_KEYS.CURRENT_SESSION, serialized);
       return true;
     } catch (error) {
@@ -174,75 +180,64 @@ export const storageService = {
 
   /**
    * Load application settings
-   * @returns {AppSettings}
+   * Returns null when nothing usable is stored so callers can tell "never
+   * saved" from "saved the defaults" and avoid clobbering a session's own
+   * settings on first run.
+   * @returns {AppSettings|null}
    */
   loadSettings() {
     try {
       const serialized = localStorage.getItem(STORAGE_KEYS.SETTINGS);
       if (!serialized) {
-        return createDefaultSettings();
+        return null;
       }
       
       const stored = JSON.parse(serialized);
-      // Merge with defaults to handle new settings fields
+      if (!stored || typeof stored !== 'object' || Array.isArray(stored)) {
+        console.warn('Invalid settings structure, ignoring stored settings');
+        return null;
+      }
+      
+      // Merge over defaults: tolerates partial stored data and keys added in
+      // later versions.
       return { ...createDefaultSettings(), ...stored };
     } catch (error) {
       console.error('Failed to load settings:', error);
-      return createDefaultSettings();
+      return null;
     }
   },
 
   /**
-   * Export session data for download
-   * @param {Session} session
-   * @param {'json'|'csv'} format
-   * @returns {string}
+   * Save the preferred temperature units
+   *
+   * Units live in `session.config.units` for the active cook - that is the one
+   * field the UI reads. This slot exists only to seed the *next* cook, so a
+   * Celsius user does not start every session back on Fahrenheit.
+   * @param {'F'|'C'} units
+   * @returns {boolean} Success
    */
-  exportSession(session, format) {
-    if (format === 'json') {
-      return JSON.stringify(session, null, 2);
+  saveUnits(units) {
+    try {
+      localStorage.setItem(STORAGE_KEYS.UNITS, units);
+      return true;
+    } catch (error) {
+      console.error('Failed to save units:', error);
+      return false;
     }
-    
-    if (format === 'csv') {
-      return this.sessionToCSV(session);
-    }
-    
-    throw new Error(`Unsupported export format: ${format}`);
   },
 
   /**
-   * Convert session to CSV format
-   * @param {Session} session
-   * @returns {string}
+   * Load the preferred temperature units
+   * @returns {'F'|'C'|null} null when nothing valid is stored
    */
-  sessionToCSV(session) {
-    const lines = [];
-    
-    // Session metadata header
-    lines.push('# Session Configuration');
-    lines.push(`Target Temp,${session.config.targetTemp}`);
-    lines.push(`Units,${session.config.units}`);
-    lines.push(`Started,${session.config.createdAt}`);
-    if (session.config.meatType) lines.push(`Meat Type,${session.config.meatType}`);
-    if (session.config.weight) lines.push(`Weight,${session.config.weight}`);
-    lines.push('');
-    
-    // Internal readings
-    lines.push('# Internal Temperature Readings');
-    lines.push('Timestamp,Temperature,Delta From Start,Delta From Previous');
-    session.readings.forEach(r => {
-      lines.push(`${r.timestamp},${r.temp},${r.deltaFromStart ?? ''},${r.deltaFromPrevious ?? ''}`);
-    });
-    lines.push('');
-    
-    // Oven events
-    lines.push('# Oven Temperature Events');
-    lines.push('Timestamp,Set Temperature,Previous Temperature');
-    session.ovenEvents.forEach(e => {
-      lines.push(`${e.timestamp},${e.setTemp},${e.previousTemp ?? ''}`);
-    });
-    
-    return lines.join('\n');
+  loadUnits() {
+    try {
+      const stored = localStorage.getItem(STORAGE_KEYS.UNITS);
+      return stored === 'F' || stored === 'C' ? stored : null;
+    } catch (error) {
+      console.error('Failed to load units:', error);
+      return null;
+    }
   },
 
   /**
