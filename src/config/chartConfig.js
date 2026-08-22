@@ -127,11 +127,6 @@ export const chartColors = {
   serveTime: {
     line: 'rgb(59, 130, 246)',     // blue-500
     dash: [5, 5]
-  },
-  rate: {
-    line: 'rgb(168, 85, 247)',     // purple-500
-    point: 'rgb(147, 51, 234)',    // purple-600
-    fill: 'rgba(168, 85, 247, 0.1)'
   }
 };
 
@@ -185,32 +180,3 @@ export function createServeTimeAnnotation(serveTime) {
     }
   };
 }
-
-/**
- * Create segment annotations for oven temperature periods
- * @param {Array} segments - Array of segment objects with startTime, endTime, ovenTemp
- * @returns {Object} Annotations object
- */
-export function createSegmentAnnotations(segments) {
-  const annotations = {};
-  
-  segments.forEach((segment, index) => {
-    // Color based on oven temp (warmer = more red/orange, cooler = more blue)
-    const hue = Math.max(0, Math.min(60, (300 - segment.ovenTemp) * 0.5));
-    const color = `hsla(${hue}, 70%, 50%, 0.1)`;
-    
-    annotations[`segment_${index}`] = {
-      type: 'box',
-      xMin: segment.startTime,
-      xMax: segment.endTime,
-      backgroundColor: color,
-      borderWidth: 0
-    };
-  });
-  
-  return annotations;
-}
-
-
-
-
