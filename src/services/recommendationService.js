@@ -66,6 +66,7 @@ export function buildRecommendationResult(fields) {
     alternativeMessage: null,
     ovenOffMinutes: null,
     practicalMinF: null,
+    plannedTempF: null,
     latestReadingTemp: null,
     severity: 'normal',
     canRecommend: true,
@@ -649,15 +650,19 @@ export function reconcileWithOvenChange({
   const tolerance = Math.max(dialStepF(displayUnits) / 2, step / 2);
   const gap = implied - currentOvenTemp; // positive: the oven is still too cool
   
-  // Moving further than asked, in the direction that was asked for, is within
-  // the precision of a bucketed step - accept it rather than pulling them back.
+  // Moving FURTHER than asked, in the direction that was asked for, must never
+  // be answered by asking for the opposite move. The projection this target
+  // came from was measured at the old set point, so it cannot yet see - and
+  // cannot judge the size of - the change that has since been made. Reversing
+  // on it is how "running 42 min early" ended up being told to raise the oven.
+  // Hold, and let a reading decide.
   const overshot = recommendation.action === 'lower'
     ? gap > 0
     : recommendation.action === 'raise'
       ? gap < 0
       : false;
   
-  if (Math.abs(gap) <= tolerance || (overshot && Math.abs(gap) <= step)) {
+  if (Math.abs(gap) <= tolerance) {
     return {
       action: 'settling',
       suggestedTemp: currentOvenTemp,
@@ -666,6 +671,27 @@ export function reconcileWithOvenChange({
         ? RECOMMENDATION_MESSAGES.SETTLING_ON_PLAN
         : RECOMMENDATION_MESSAGES.SETTLING_ON_PLAN_READY,
       reasoning: `The oven was changed ${effect.minutesSinceChange} min ago and the readings so far still describe the previous setting. The setting you chose is what the projection calls for, so there is nothing to change until a reading shows the effect.`,
+      alternativeMessage: null,
+      ovenOffMinutes: null,
+      practicalMinF: null,
+      severity: 'normal',
+      ...settleFields
+    };
+  }
+  
+  if (overshot) {
+    const asked = recommendation.action === 'lower' ? 'a drop to' : 'a rise to';
+    return {
+      action: 'settling',
+      suggestedTemp: currentOvenTemp,
+      // The plan the dial has overshot, named so the message can say what was
+      // asked for without the button offering to undo it.
+      plannedTempF: Math.round(implied),
+      changeAmount: 0,
+      message: RECOMMENDATION_MESSAGES.SETTLING_BEYOND_PLAN,
+      // {plannedTemp} rather than a formatted number: only the composable
+      // knows which unit the cook is reading.
+      reasoning: `The oven was changed ${effect.minutesSinceChange} min ago, so the projection still describes the previous setting - it asked for ${asked} {plannedTemp} and you went further than that. Reversing now would be correcting a change no reading has measured yet.`,
       alternativeMessage: null,
       ovenOffMinutes: null,
       practicalMinF: null,

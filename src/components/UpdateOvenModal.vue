@@ -43,17 +43,32 @@
     </template>
 
     <template #actions>
-      <div class="flex gap-3">
-        <button @click="handleCancel" type="button" class="btn-ghost flex-1">
-          Cancel
-        </button>
+      <div class="space-y-3">
+        <div class="flex gap-3">
+          <button @click="handleCancel" type="button" class="btn-ghost flex-1">
+            Cancel
+          </button>
+          <button
+            @click="handleSubmit"
+            type="button"
+            :disabled="isNoChange || !newTemperature"
+            class="btn-primary flex-1"
+          >
+            Update oven
+          </button>
+        </div>
+
+        <!-- Off is not a dial setting, so it cannot be a value in the stepper -
+             but it is an oven action, and this sheet is the one oven affordance
+             that is always reachable. The next-action band only ever shows a
+             single control, so when it is busy asking for a temperature change
+             this is the cook's only route to stopping the heat. -->
         <button
-          @click="handleSubmit"
           type="button"
-          :disabled="isNoChange || !newTemperature"
-          class="btn-primary flex-1"
+          class="w-full min-h-[44px] text-[15px] text-ink-dim underline decoration-ink-mute underline-offset-4"
+          @click="handleOffRoute"
         >
-          Update oven
+          {{ isPaused ? 'Log oven restart instead' : 'Turn the oven off instead' }}
         </button>
       </div>
     </template>
@@ -75,9 +90,9 @@ const props = defineProps({
   modelValue: { type: Boolean, required: true }
 });
 
-const emit = defineEmits(['update:modelValue', 'updated']);
+const emit = defineEmits(['update:modelValue', 'updated', 'pause', 'restart']);
 
-const { addOvenEvent, currentOvenTemp, displayUnits, config } = useSession();
+const { addOvenEvent, currentOvenTemp, lastActiveOvenTemp, ovenEvents, displayUnits, config } = useSession();
 const { showToast } = useToast();
 
 const newTemperature = ref(null);
@@ -92,12 +107,25 @@ const sessionStartTime = computed(() => {
   return config.value?.createdAt ?? null;
 });
 
+/**
+ * Last oven event is an off event. The dial reads 0 in that state, which is why
+ * the sheet has to say "off" rather than render a temperature.
+ */
+const isPaused = computed(() => {
+  const events = ovenEvents.value;
+  return events.length > 0 && events[events.length - 1].isOff === true;
+});
+
 const currentDisplay = computed(() => {
+  if (isPaused.value) return 'Off';
   if (!currentOvenTemp.value) return '--';
   return formatTemperature(currentOvenTemp.value, displayUnits.value);
 });
 
 const changeAmount = computed(() => {
+  // A restart is never a "no change to record", however the number compares to
+  // the setting from before the pause.
+  if (isPaused.value) return null;
   if (!currentOvenTemp.value || !newTemperature.value) return null;
   const currentDisplay = toDisplayUnit(currentOvenTemp.value, displayUnits.value);
   return newTemperature.value - currentDisplay;
@@ -118,8 +146,11 @@ watch(() => props.modelValue, (newVal) => {
     maxTime.value = now();
     timestamp.value = maxTime.value;
 
-    if (currentOvenTemp.value) {
-      newTemperature.value = toDisplayUnit(currentOvenTemp.value, displayUnits.value);
+    // While paused, currentOvenTemp is 0 - seed the stepper from the last
+    // temperature actually set so a restart starts from something plausible.
+    const baseline = isPaused.value ? lastActiveOvenTemp.value : currentOvenTemp.value;
+    if (baseline) {
+      newTemperature.value = Math.round(toDisplayUnit(baseline, displayUnits.value));
     } else {
       // Default to a common oven temp
       newTemperature.value = displayUnits.value === 'F' ? 225 : 107;
@@ -148,6 +179,15 @@ function handleSubmit() {
   emit('update:modelValue', false);
 
   showToast('Oven temperature updated', 'success');
+}
+
+/**
+ * Hand off to the dedicated off / restart sheets. Those own the timestamps (and
+ * the optional restart pair), so this sheet closes rather than duplicating them.
+ */
+function handleOffRoute() {
+  emit('update:modelValue', false);
+  emit(isPaused.value ? 'restart' : 'pause');
 }
 
 function handleCancel() {

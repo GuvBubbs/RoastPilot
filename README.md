@@ -97,6 +97,37 @@ form, steppers, or unit conversion need to be checked in the browser.
 There is also a standalone harness for the foundation utilities at
 `http://<dev-server>/RoastPilot/test.html`.
 
+## Versioning and Deployment
+
+Pushing to `main` deploys to GitHub Pages and bumps the version. **One deploy is
+one version bump, however many commits it carries** — push five commits together
+and the app goes from `1.0.4` to `1.0.5`, not `1.0.9`.
+
+The version shown in the app is always the version that was deployed:
+
+1. `.github/workflows/deploy.yml` runs the tests, then bumps `package.json`
+   in the runner's working copy.
+2. `vite.config.js` reads `package.json` at build time and substitutes the
+   version, the commit SHA, and the build timestamp into the bundle via
+   `define`. `src/config/version.js` reads them back for Settings → About.
+3. Once Pages has accepted the build, a final `release` job commits the bump
+   as `chore: release vX.Y.Z [skip ci]` and pushes a matching `vX.Y.Z` tag.
+
+Because the commit and tag happen *after* the deploy succeeds, a failed build or
+publish burns no version number — the next attempt reuses it. The `[skip ci]` in
+the release commit (plus a guard on the `build` job) is what stops that commit
+from triggering another deploy.
+
+**Bumping minor or major.** The default is a patch bump. To get more, either put
+`[minor]` or `[major]` in the commit message you push, or start the workflow by
+hand from the Actions tab and pick the level from the dropdown. Don't edit the
+version in `package.json` yourself — the next deploy bumps from whatever is
+there, so a hand-written `1.1.0` would ship as `1.1.1` and `1.1.0` would never
+exist.
+
+To check what's live, open Settings → About in the app, or compare the tag list
+against `main`.
+
 ## Project Structure
 
 ```
@@ -123,6 +154,9 @@ There is also a standalone harness for the foundation utilities at
 │   └── validationUtils.js
 ├── /constants         # Application constants, meat presets, defaults
 │   └── defaults.js
+├── /config            # Static configuration
+│   ├── chartConfig.js
+│   └── version.js     # Build identity, injected by Vite at build time
 ├── App.vue            # Root component
 ├── main.js            # Application entry point
 └── style.css          # Global styles

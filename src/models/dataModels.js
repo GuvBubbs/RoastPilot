@@ -60,6 +60,9 @@
  *   {placeholders}; same substitution rule as `message`
  * @property {number|null} ovenOffMinutes - Suggested minutes to turn oven off
  * @property {number|null} practicalMinF - Practical minimum oven temp in Fahrenheit
+ * @property {number|null} plannedTempF - When the dial has been moved further than
+ *   the projection asked for, the target it asked for (°F). Distinct from
+ *   suggestedTemp, which in that state is the setting already in force.
  * @property {number|null} latestReadingTemp - Newest logged reading in Fahrenheit
  * @property {'normal'|'moderate'|'urgent'|'warning'|'info'|'unknown'} severity
  * @property {boolean} canRecommend - Whether conditions allow a recommendation

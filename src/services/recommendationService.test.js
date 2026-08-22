@@ -525,6 +525,7 @@ describe('generateRecommendation', () => {
         'alternativeMessage',
         'ovenOffMinutes',
         'practicalMinF',
+        'plannedTempF',
         'latestReadingTemp',
         'severity',
         'canRecommend',
@@ -873,15 +874,46 @@ describe('an oven change already made is not charged twice', () => {
   });
 
   it('does not re-apply the step from the new set point', () => {
-    // The regression: from a dial at 175°F the old code recommended 175 - 15 =
-    // 160°F, and would keep walking down a step per update. The target is the
-    // same 210°F the projection called for, reached from wherever the dial is.
+    // The original regression: from a dial at 175°F the old code recommended
+    // 175 - 15 = 160°F, and would keep walking down a step per update.
     const result = generateRecommendation(paramsWithDial(175));
 
-    expect(result.suggestedTemp).toBe(210);
-    expect(result.action).toBe('raise');
+    expect(result.changeAmount).toBe(0);
     expect(result.awaitingEffect).toBe(true);
-    expect(result.changeAmount).toBe(35);
+  });
+
+  it('accepts a dial taken well past the plan rather than pulling it back', () => {
+    // Running EARLY, so the projection asked for a drop. The cook dropped
+    // further than asked. Telling them to raise the oven would be advising the
+    // opposite of what the schedule needs, on a projection that has not yet
+    // measured either change.
+    const result = generateRecommendation(paramsWithDial(175));
+
+    expect(result.action).toBe('settling');
+    expect(result.suggestedTemp).toBe(175);   // the dial, unchanged
+    expect(result.plannedTempF).toBe(210);    // what the projection had asked for
+  });
+
+  it('still retargets when the dial moved the wrong way', () => {
+    // Running early and the oven went UP. Nothing about the unmeasured change
+    // excuses that, so the 210°F the projection called for is restated.
+    const result = generateRecommendation(paramsWithDial(250));
+
+    expect(result.action).toBe('lower');
+    expect(result.suggestedTemp).toBe(210);
+    expect(result.awaitingEffect).toBe(true);
+  });
+
+  it('never answers running early with a raise', () => {
+    // The reported failure, in the shape it was seen: 42 min early, the dial
+    // already stepped down twice, and the band asked for a raise.
+    for (const dial of [215, 205, 195, 185, 175, 150, 120]) {
+      const result = generateRecommendation(paramsWithDial(dial, {
+        scheduleVarianceMinutes: -42
+      }));
+
+      expect(result.action).not.toBe('raise');
+    }
   });
 
   it('never chases the dial downward across a run of unmeasured changes', () => {

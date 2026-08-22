@@ -127,7 +127,11 @@
 
     <!-- Sheets and dialogs -->
     <AddReadingModal v-model="state.showReadingModal" />
-    <UpdateOvenModal v-model="state.showOvenModal" />
+    <UpdateOvenModal
+      v-model="state.showOvenModal"
+      @pause="state.showPauseCookingModal = true"
+      @restart="state.showRestartOvenModal = true"
+    />
 
     <SessionSetupModal
       v-model="state.showSessionSetup"

@@ -227,7 +227,8 @@
 
       <SettingsSection title="About">
         <p class="text-[14px] text-ink">RoastPilot</p>
-        <p class="text-[13px] text-ink-mute">Version 1.0.0</p>
+        <p class="text-[13px] text-ink-mute num">Version {{ appVersion }}</p>
+        <p class="text-[12px] text-ink-mute">{{ appBuildLabel }}</p>
       </SettingsSection>
     </template>
 
@@ -262,6 +263,7 @@ import { createDefaultSettings } from '../models/dataModels.js';
 import { toDisplayUnit, toStorageUnit, formatTemperature } from '../utils/temperatureUtils.js';
 import { formatDateTime } from '../utils/timeUtils.js';
 import { exportToJSON, exportToCSV, downloadFile, generateFilename } from '../services/exportService.js';
+import { APP_VERSION, buildLabel } from '../config/version.js';
 
 import Sheet from './Sheet.vue';
 import SettingsSection from './SettingsSection.vue';
@@ -290,6 +292,10 @@ const {
 const { showToast } = useToast();
 
 const showClearConfirm = ref(false);
+
+// Fixed for the life of the bundle — no need for reactivity.
+const appVersion = APP_VERSION;
+const appBuildLabel = buildLabel();
 
 // Local copy of settings for editing
 const localSettings = reactive({ ...settings.value });

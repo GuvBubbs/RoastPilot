@@ -4,9 +4,16 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      bump:
+        description: "Version bump for this deploy"
+        type: choice
+        options: [patch, minor, major]
+        default: patch
 
 permissions:
-  contents: read
+  # contents: write so the release job can push the version bump and its tag.
+  contents: write
   pages: write
   id-token: write
 
@@ -17,7 +24,13 @@ concurrency:
 
 jobs:
   build:
+    # The release job's own commit is tagged [skip ci], which already stops it
+    # starting a second deploy. This is the belt to that braces — without one
+    # of the two, every deploy would trigger another deploy forever.
+    if: github.event_name != 'push' || !startsWith(github.event.head_commit.message, 'chore: release v')
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.bump.outputs.version }}
     steps:
       - uses: actions/checkout@v4
 
@@ -30,6 +43,31 @@ jobs:
 
       - run: npm run test:run
 
+      # One deploy is one version bump, however many commits it carries.
+      # Patch by default; put [minor] or [major] in the pushed commit message
+      # (or pick it from the Run workflow menu) when a release deserves more.
+      - name: Bump version
+        id: bump
+        env:
+          DISPATCH_BUMP: ${{ inputs.bump }}
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+        run: |
+          if [ -n "$DISPATCH_BUMP" ]; then
+            LEVEL="$DISPATCH_BUMP"
+          elif printf '%s' "$COMMIT_MESSAGE" | grep -qF '[major]'; then
+            LEVEL=major
+          elif printf '%s' "$COMMIT_MESSAGE" | grep -qF '[minor]'; then
+            LEVEL=minor
+          else
+            LEVEL=patch
+          fi
+          npm version "$LEVEL" --no-git-tag-version
+          VERSION="$(node -p "require('./package.json').version")"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "$LEVEL bump -> v$VERSION" >> "$GITHUB_STEP_SUMMARY"
+
+      # The bump above is working-copy only. It reaches the bundle here, and
+      # only reaches the repo in the release job, after Pages has accepted it.
       - run: npm run build
 
       # Pages has no SPA rewrite, so serve the app shell for unknown paths.
@@ -48,3 +86,37 @@ jobs:
     steps:
       - id: deployment
         uses: actions/deploy-pages@v4
+
+  # Records the version that just went live. Runs after deploy, so a build or
+  # publish that fails burns no version number — the next attempt reuses it.
+  release:
+    needs: [build, deploy]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Commit and tag v${{ needs.build.outputs.version }}
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          npm version "$VERSION" --no-git-tag-version --allow-same-version
+          git add package.json package-lock.json
+          git commit -m "chore: release v$VERSION [skip ci]"
+
+          # main may have moved while the deploy ran. Rebase before tagging:
+          # a rebase rewrites this commit, and a tag made first would be left
+          # pointing at the discarded one.
+          git pull --rebase origin main
+          git tag -a "v$VERSION" -m "v$VERSION"
+
+          git push origin main
+          git push origin "v$VERSION"

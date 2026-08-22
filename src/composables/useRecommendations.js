@@ -123,6 +123,13 @@ export function useRecommendations() {
       out = out.replace(/{suggestedTemp}/g, formatTemperature(raw.suggestedTemp, displayUnits.value));
     }
     
+    // The target the dial has overshot, named by SETTLING_BEYOND_PLAN. Kept
+    // separate from {suggestedTemp} - in that state the suggestion IS the
+    // current setting, so the two must not collapse into one number.
+    if (out.includes('{plannedTemp}') && raw.plannedTempF !== null && raw.plannedTempF !== undefined) {
+      out = out.replace(/{plannedTemp}/g, formatTemperature(raw.plannedTempF, displayUnits.value));
+    }
+    
     // Used by LOW_TEMP_DISABLED and the at-minimum hold
     if (out.includes('{minTemp}')) {
       const minTempF = raw.practicalMinF || raw.minTempF;

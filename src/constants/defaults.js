@@ -48,7 +48,11 @@ export const RECOMMENDATION_MESSAGES = {
   // one that was suggested - saying it back to them is the confirmation.
   SETTLING_ON_PLAN: 'Oven at {ovenTemp} is where it needs to be. Hold there - a reading in about {waitMinutes} min will confirm it.',
   SETTLING_ON_PLAN_READY: 'Oven at {ovenTemp} is where it needs to be. Log a reading now to confirm it is working.',
-  SETTLING_RETARGET: 'Oven is at {ovenTemp}. Aim for {suggestedTemp} - that target already allows for the change you just made.'
+  SETTLING_RETARGET: 'Oven is at {ovenTemp}. Aim for {suggestedTemp} - that target already allows for the change you just made.',
+  // The dial has gone further than the projection asked, in the direction it
+  // asked for. Never answered with the opposite move - the projection cannot
+  // see the change yet, so it cannot judge whether it went too far.
+  SETTLING_BEYOND_PLAN: 'Oven is at {ovenTemp} - further than the {plannedTemp} the projection asked for. Hold there; a reading will show what it did.'
 };
 
 /**
