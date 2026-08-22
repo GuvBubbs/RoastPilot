@@ -142,3 +142,52 @@ export function validateTemperature(temp, unit, type) {
 
 
 
+
+
+/**
+ * Weight conversion.
+ *
+ * Stored canonically in POUNDS, because that is the unit the thermal prior's
+ * reference constant is expressed in and the unit the one real exported cook is
+ * assumed to be. The display unit is a separate, standing preference: weight is
+ * independent of the °C/°F choice, and a cook who thinks in Celsius may still buy
+ * meat in pounds.
+ */
+export const LB_PER_KG = 2.20462262;
+
+/** @param {number} kg @returns {number} pounds */
+export function kgToLb(kg) {
+  return kg * LB_PER_KG;
+}
+
+/** @param {number} lb @returns {number} kilograms */
+export function lbToKg(lb) {
+  return lb / LB_PER_KG;
+}
+
+/**
+ * A stored pound weight in the unit being displayed.
+ *
+ * Rounded per unit rather than uniformly: 0.1 kg is 0.22 lb, so a shared
+ * precision would either lose resolution in kilograms or invent it in pounds.
+ *
+ * @param {number|null} lb
+ * @param {'lb'|'kg'} unit
+ * @returns {number|null}
+ */
+export function weightToDisplay(lb, unit) {
+  if (!Number.isFinite(lb)) return null;
+  return unit === 'kg' ? Math.round(lbToKg(lb) * 10) / 10 : Math.round(lb * 10) / 10;
+}
+
+/**
+ * A displayed weight back to canonical pounds.
+ *
+ * @param {number|null} value
+ * @param {'lb'|'kg'} unit
+ * @returns {number|null}
+ */
+export function weightToStorage(value, unit) {
+  if (!Number.isFinite(value)) return null;
+  return unit === 'kg' ? Math.round(kgToLb(value) * 100) / 100 : value;
+}

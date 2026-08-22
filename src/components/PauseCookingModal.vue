@@ -43,7 +43,7 @@
           :suffix="`°${displayUnits}`"
           :step="displayUnits === 'F' ? 25 : 10"
           :min="displayUnits === 'F' ? 100 : 38"
-          :max="displayUnits === 'F' ? 550 : 288"
+          :max="displayUnits === 'F' ? 550 : 287"
           :error="tempValidationError"
         />
       </div>
@@ -123,6 +123,9 @@ watch(() => props.modelValue, (isOpening) => {
     hasRestartTime.value = false;
 
     if (lastOvenTemp.value) {
+      // Rounded because the stepper can only hold a settable value. The submit
+      // path has to know that this is a round trip and not a new setting - see
+      // the note on phantom oven events in UpdateOvenModal.
       restartTemperature.value = Math.round(toDisplayUnit(lastOvenTemp.value, displayUnits.value));
     } else {
       restartTemperature.value = displayUnits.value === 'F' ? 350 : 177;

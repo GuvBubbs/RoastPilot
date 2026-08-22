@@ -474,7 +474,6 @@ export function calculateRecommendation({
   const {
     recommendationStepF,
     recommendationMaxStepF,
-    ovenTempMinF,
     ovenTempMaxF,
     onTrackThresholdMinutes
   } = settings;
@@ -733,27 +732,20 @@ export function calculateRecommendation({
       };
     }
     
-    // Apply food safety lower bound guardrail
-    if (suggestedTemp < ovenTempMinF) {
-      suggestedTemp = snapToDial(ovenTempMinF, displayUnits, 'up');
-      changeAmount = ovenBaseTemp - suggestedTemp;
-      
-      // If already at min, can't recommend lower
-      if (changeAmount <= 0) {
-        return {
-          action: 'hold',
-          suggestedTemp: ovenBaseTemp,
-          changeAmount: 0,
-          message: `Already at minimum recommended temperature ({minTemp}). You may finish early.`,
-          reasoning: `Running ${Math.round(absVariance)} minutes early, but oven is already at the lower limit for food safety.`,
-          alternativeMessage: null,
-          ovenOffMinutes: null,
-          practicalMinF: null,
-          minTempF: ovenTempMinF, // For formatting in composable
-          severity: 'info'
-        };
-      }
-    }
+    /*
+     * The food-safety lower bound (`ovenTempMinF`, 150 °F) was checked here, with
+     * an "already at minimum recommended temperature" hold behind it.
+     *
+     * Both were unreachable. This line is only reached when suggestedTemp is at or
+     * above the PRACTICAL minimum, which defaults to 175 °F - so it is already
+     * above the 150 °F food-safety floor, always. The practical minimum shadows
+     * the safety minimum completely, and the branch could never fire.
+     *
+     * Deleted rather than repaired: the guardrail that actually binds is the
+     * practical-minimum clamp above, and now the target-headroom clamp with it.
+     * Two floors where one is always higher is one floor and a piece of
+     * decoration that reads like a safety feature.
+     */
     
     const messageTemplate = absVariance > 30 
       ? RECOMMENDATION_MESSAGES.LOWER_LARGE 
@@ -998,7 +990,21 @@ export function reconcileWithOvenChange({
     ...recommendation,
     action: gap > 0 ? 'raise' : 'lower',
     suggestedTemp: Math.round(implied),
-    changeAmount: Math.round(Math.abs(gap)),
+    /**
+     * NO CHANGE AMOUNT, deliberately.
+     *
+     * This branch restates the projection's target as an ABSOLUTE temperature -
+     * that is precisely how it avoids stacking one change on another. The distance
+     * from wherever the cook has just put the dial to that target is not a step,
+     * is not bounded by recommendationMaxStepF, and reached the screen as a
+     * "-50°F" chip that looked like a step the app was asking for and exceeded its
+     * own limit.
+     *
+     * Capping the number would have been worse: a chip reading "-25°F" beside a
+     * suggestion to go from 250 to 200 is simply false. The honest answer is that
+     * there is no step to show here, so the chip does not render.
+     */
+    changeAmount: null,
     message: RECOMMENDATION_MESSAGES.SETTLING_RETARGET,
     reasoning: `The oven was changed ${effect.minutesSinceChange} min ago, so the projection still reflects the previous setting. This target comes from that projection - it is not stacked on top of the change you already made.`,
     ...settleFields

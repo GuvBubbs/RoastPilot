@@ -222,9 +222,15 @@
           The app will not suggest oven temperatures outside these bounds.
         </p>
 
+        <!-- This is a floor on the floor, not on the suggestion. The app will
+             not suggest below the PRACTICAL minimum below, which is higher - so
+             describing this one as "the lowest temperature the app will suggest"
+             was false, and the code that made it true was an unreachable branch
+             in calculateRecommendation that has been deleted. What it does do is
+             stop the practical minimum being set into unsafe territory. -->
         <SettingsRow
-          label="Minimum oven temp"
-          description="Lowest temperature the app will suggest, for food safety"
+          label="Absolute floor"
+          description="The practical minimum below cannot be set under this"
         >
           <NumberStepper
             v-model="ovenMinDisplay"
@@ -238,8 +244,8 @@
         </SettingsRow>
 
         <SettingsRow
-          label="Practical minimum oven temp"
-          description="Most ovens can't go below ~80°C / 175°F"
+          label="Lowest oven temp to suggest"
+          description="The floor that actually binds. Most ovens can't go below ~80°C / 175°F"
         >
           <NumberStepper
             v-model="ovenPracticalMinDisplay"
@@ -351,9 +357,10 @@ import { useToast } from '../composables/useToast.js';
 import { createDefaultSettings } from '../models/dataModels.js';
 import {
   toDisplayUnit, toStorageUnit, formatTemperature,
-  fahrenheitToCelsius, celsiusToFahrenheit
+  fahrenheitToCelsius, celsiusToFahrenheit, weightToDisplay
 } from '../utils/temperatureUtils.js';
 import { estimateCarryoverF, pullTempFor } from '../services/carryoverService.js';
+import { storageService as weightStore } from '../services/storageService.js';
 import { formatDateTime } from '../utils/timeUtils.js';
 import { exportToJSON, exportToCSV, downloadFile, generateFilename } from '../services/exportService.js';
 import { APP_VERSION, buildLabel } from '../config/version.js';
@@ -517,6 +524,7 @@ watch(localUnits, (units, previous) => {
 const sessionFacts = computed(() => {
   const cfg = config.value;
   if (!cfg) return [];
+  const weightUnit = weightStore.loadWeightUnit() ?? 'lb';
 
   const meat = [cfg.meatType, cfg.meatCut].filter(Boolean).join(' - ');
 
@@ -526,7 +534,15 @@ const sessionFacts = computed(() => {
   return [
     { label: 'Started', value: cfg.createdAt ? formatDateTime(cfg.createdAt) : null, numeric: true },
     { label: 'Meat', value: meat || null, numeric: false },
-    { label: 'Weight', value: cfg.weight ? `${cfg.weight} lb` : null, numeric: true },
+    {
+      label: 'Weight',
+      // Shown in the cook's own unit. Stored canonically in pounds; the display
+      // preference is standing and independent of the temperature scale.
+      value: cfg.weight
+        ? `${weightToDisplay(cfg.weight, weightUnit)} ${weightUnit}`
+        : null,
+      numeric: true
+    },
     {
       label: 'Started at',
       value: Number.isFinite(cfg.startingTemp)

@@ -4,6 +4,9 @@ const STORAGE_KEYS = {
   CURRENT_SESSION: 'rstt_current_session',
   SETTINGS: 'rstt_settings',
   UNITS: 'rstt_units',
+  // Separate from UNITS: weight has nothing to do with the temperature scale, and
+  // a cook may well want pounds alongside Celsius.
+  WEIGHT_UNIT: 'rstt_weight_unit',
   SCHEMA_VERSION: 'rstt_schema_version'
 };
 
@@ -274,6 +277,35 @@ export const storageService = {
       return stored === 'F' || stored === 'C' ? stored : null;
     } catch (error) {
       console.error('Failed to load units:', error);
+      return null;
+    }
+  },
+
+  /**
+   * Save the preferred weight unit
+   * @param {'lb'|'kg'} unit
+   * @returns {boolean} Success
+   */
+  saveWeightUnit(unit) {
+    try {
+      localStorage.setItem(STORAGE_KEYS.WEIGHT_UNIT, unit);
+      return true;
+    } catch (error) {
+      console.error('Failed to save weight unit:', error);
+      return false;
+    }
+  },
+
+  /**
+   * Load the preferred weight unit
+   * @returns {'lb'|'kg'|null} null when nothing valid is stored
+   */
+  loadWeightUnit() {
+    try {
+      const stored = localStorage.getItem(STORAGE_KEYS.WEIGHT_UNIT);
+      return stored === 'lb' || stored === 'kg' ? stored : null;
+    } catch (error) {
+      console.error('Failed to load weight unit:', error);
       return null;
     }
   },

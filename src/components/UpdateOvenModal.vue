@@ -24,7 +24,7 @@
           :suffix="`°${displayUnits}`"
           :step="displayUnits === 'F' ? 25 : 10"
           :min="displayUnits === 'F' ? 100 : 38"
-          :max="displayUnits === 'F' ? 550 : 288"
+          :max="displayUnits === 'F' ? 550 : 287"
           :error="validationError"
         />
 
@@ -122,15 +122,40 @@ const currentDisplay = computed(() => {
   return formatTemperature(currentOvenTemp.value, displayUnits.value);
 });
 
+/**
+ * The current setting as the stepper would express it.
+ *
+ * Rounded, because that is the only thing the stepper CAN hold, and the
+ * comparison below has to be between two numbers a cook could actually have
+ * typed.
+ */
+const currentAsSteppable = computed(() => {
+  if (!currentOvenTemp.value) return null;
+  return Math.round(toDisplayUnit(currentOvenTemp.value, displayUnits.value));
+});
+
 const changeAmount = computed(() => {
   // A restart is never a "no change to record", however the number compares to
   // the setting from before the pause.
   if (isPaused.value) return null;
-  if (!currentOvenTemp.value || !newTemperature.value) return null;
-  const currentDisplay = toDisplayUnit(currentOvenTemp.value, displayUnits.value);
-  return newTemperature.value - currentDisplay;
+  if (currentAsSteppable.value === null || !newTemperature.value) return null;
+  return newTemperature.value - currentAsSteppable.value;
 });
 
+/**
+ * PHANTOM OVEN EVENTS.
+ *
+ * Compared against the ROUNDED current setting, not the raw one. On a Celsius
+ * session an oven at 225 °F is 107.22 °C, the stepper is seeded with 107, and
+ * comparing 107 against 107.22 gave a change of -0.22 - so a cook who opened this
+ * sheet, changed nothing, and pressed save logged an oven event moving the dial
+ * four tenths of a degree.
+ *
+ * That was not a cosmetic wrong number. A new oven event is an UNMEASURED change
+ * as far as assessOvenChangeEffect is concerned, so the app went into `settling`
+ * and withheld advice for a lag window plus two readings - on the strength of a
+ * change that never happened.
+ */
 const isNoChange = computed(() => {
   return changeAmount.value === 0;
 });
@@ -171,6 +196,21 @@ function handleSubmit() {
     if (isNoChange.value) {
       showToast('No change to record', 'info');
     }
+    return;
+  }
+
+  /**
+   * Submitted in DISPLAY units, which round-trip through toStorageUnit. On a
+   * Celsius session that is lossy - 107 °C stores as 224.6 °F where the oven is
+   * on 225 - so an unchanged value is written back as the setting it already was
+   * rather than as its own round trip.
+   */
+  const unchangedInGrid = !isPaused.value &&
+    currentAsSteppable.value !== null &&
+    newTemperature.value === currentAsSteppable.value;
+  if (unchangedInGrid) {
+    showToast('No change to record', 'info');
+    emit('update:modelValue', false);
     return;
   }
 

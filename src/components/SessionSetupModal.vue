@@ -198,7 +198,89 @@
           </p>
         </section>
 
-        <!-- Meat details (folded away — nothing here changes the maths) --- -->
+        <!-- The roast ---------------------------------------------------
+             Weight used to live inside the fold below, under a comment reading
+             "nothing here changes the maths". That is no longer true: the
+             projection's prior on how fast this particular roast heats scales as
+             weight^(-2/3), and the meat type sets the shape factor on top of it.
+             A field that feeds the model does not belong behind a disclosure
+             triangle labelled optional.
+
+             Its influence is honest, though, and stated as such below: once three
+             readings exist the prior is about a tenth of a percent of the fit.
+             What it buys is a projection on the very first eligible reading
+             instead of none. -->
+        <section class="rule-t pt-5">
+          <span class="section-label">The roast</span>
+
+          <div class="mt-3 space-y-4">
+            <div>
+              <label for="meatTypeMain" class="label">Type</label>
+              <select
+                id="meatTypeMain"
+                v-model="form.meatType.value"
+                class="field-select"
+                @change="handleMeatTypeChange"
+              >
+                <option value="">Not specified</option>
+                <option v-for="preset in MEAT_PRESETS" :key="preset.type" :value="preset.type">
+                  {{ preset.type }}
+                </option>
+              </select>
+            </div>
+
+            <div v-if="selectedMeatPreset">
+              <label for="meatCutMain" class="label">Cut</label>
+              <select id="meatCutMain" v-model="form.meatCut.value" class="field-select">
+                <option value="">Not specified</option>
+                <option v-for="cut in selectedMeatPreset.cuts" :key="cut" :value="cut">
+                  {{ cut }}
+                </option>
+              </select>
+            </div>
+
+            <div>
+              <div class="flex items-center justify-between gap-3">
+                <span class="label mb-0">Weight</span>
+                <!-- Weight is independent of the temperature unit: a cook who
+                     thinks in °C may well buy meat in pounds, and one who thinks
+                     in °F may not. Its own toggle, its own preference. -->
+                <div class="flex gap-1 p-0.5 rounded-lg bg-raised border border-rule" role="group" aria-label="Weight unit">
+                  <button
+                    v-for="unit in ['lb', 'kg']"
+                    :key="unit"
+                    type="button"
+                    class="tap px-3 rounded-md text-[13px] font-medium transition-colors duration-150"
+                    :class="form.weightUnit.value === unit ? 'bg-rule text-ink' : 'text-ink-dim'"
+                    :aria-pressed="form.weightUnit.value === unit"
+                    @click="setWeightUnit(unit)"
+                  >
+                    {{ unit }}
+                  </button>
+                </div>
+              </div>
+              <div class="mt-2">
+                <NumberStepper
+                  v-model="form.weight.value"
+                  :label="form.weightUnit.value"
+                  :suffix="form.weightUnit.value"
+                  :step="form.weightUnit.value === 'kg' ? 0.1 : 0.5"
+                  :min="0"
+                  :max="form.weightUnit.value === 'kg' ? 45 : 100"
+                  :error="form.weight.touched ? form.weight.error : ''"
+                  @blur="form.weight.touched = true"
+                />
+              </div>
+              <p class="mt-1.5 text-[12px] leading-snug text-ink-mute">
+                Sets the app's opening guess at how fast this roast heats — bigger
+                takes longer, and not in proportion. The readings take over from
+                it within the first hour.
+              </p>
+            </div>
+          </div>
+        </section>
+
+        <!-- Everything else, folded away ------------------------------------ -->
         <section class="rule-t pt-5">
           <button
             type="button"
@@ -206,7 +288,7 @@
             :aria-expanded="showMeatDetails"
             @click="showMeatDetails = !showMeatDetails"
           >
-            <span class="section-label">Meat details — optional</span>
+            <span class="section-label">Notes — optional</span>
             <svg
               class="w-4 h-4 shrink-0 text-ink-dim transition-transform duration-150"
               :class="{ 'rotate-180': showMeatDetails }"
@@ -220,42 +302,6 @@
           </button>
 
           <div v-show="showMeatDetails" class="mt-3 space-y-4">
-            <div>
-              <label for="meatType" class="label">Type</label>
-              <select
-                id="meatType"
-                v-model="form.meatType.value"
-                class="field-select"
-                @change="handleMeatTypeChange"
-              >
-                <option value="">Not specified</option>
-                <option v-for="preset in MEAT_PRESETS" :key="preset.type" :value="preset.type">
-                  {{ preset.type }}
-                </option>
-              </select>
-            </div>
-
-            <div v-if="selectedMeatPreset">
-              <label for="meatCut" class="label">Cut</label>
-              <select id="meatCut" v-model="form.meatCut.value" class="field-select">
-                <option value="">Not specified</option>
-                <option v-for="cut in selectedMeatPreset.cuts" :key="cut" :value="cut">
-                  {{ cut }}
-                </option>
-              </select>
-            </div>
-
-            <NumberStepper
-              v-model="form.weight.value"
-              label="Weight"
-              suffix="lbs"
-              :step="0.5"
-              :min="0"
-              :max="100"
-              :error="form.weight.touched ? form.weight.error : ''"
-              @blur="form.weight.touched = true"
-            />
-
             <div>
               <label for="notes" class="label">Notes</label>
               <textarea
@@ -307,6 +353,8 @@ import { toStorageUnit, formatTemperature, fahrenheitToCelsius, celsiusToFahrenh
 import { addMinutes } from '../utils/timeUtils.js';
 import { MEAT_PRESETS, SESSION_DEFAULTS } from '../constants/defaults.js';
 import { estimateCarryoverF, pullTempFor } from '../services/carryoverService.js';
+import { storageService } from '../services/storageService.js';
+import { weightToDisplay, weightToStorage } from '../utils/temperatureUtils.js';
 import { validateSessionConfig } from '../utils/validationUtils.js';
 
 const props = defineProps({
@@ -344,6 +392,20 @@ const getInitialOvenTemp = (units) => {
   return SESSION_DEFAULTS.INITIAL_OVEN_TEMP_F;
 };
 
+/**
+ * Switch the weight unit, converting the value with it and recording the choice.
+ *
+ * The value is converted rather than reinterpreted: a cook who typed 6 lb and
+ * then taps kg means 2.7 kg, not 6 kg.
+ */
+function setWeightUnit(unit) {
+  if (unit === form.weightUnit.value) return;
+  const asLb = weightToStorage(form.weight.value, form.weightUnit.value);
+  form.weightUnit.value = unit;
+  form.weight.value = weightToDisplay(asLb, unit);
+  storageService.saveWeightUnit(unit);
+}
+
 /** `datetime-local` wants a local-time string, not an ISO instant. */
 function toLocalInputValue(date) {
   const pad = (n) => String(n).padStart(2, '0');
@@ -364,6 +426,7 @@ const form = reactive({
   meatType: { value: '', error: '', touched: false },
   meatCut: { value: '', error: '', touched: false },
   weight: { value: null, error: '', touched: false },
+  weightUnit: { value: storageService.loadWeightUnit() ?? 'lb', error: '', touched: false },
   notes: { value: '', error: '', touched: false }
 });
 
@@ -434,7 +497,10 @@ const ovenTempRanges = computed(() => {
   if (form.units.value === 'F') {
     return { min: 100, max: 550 };
   } else {
-    return { min: 38, max: 288 };
+    // 287, not 288. The validator's ceiling is 550 °F and 288 °C is 550.4 - so a
+    // Celsius cook could reach a value the app then refuses, with no way to see
+    // why. 287 °C is 548.6 °F, the highest whole degree that clears it.
+    return { min: 38, max: 287 };
   }
 });
 
@@ -581,6 +647,7 @@ function resetForm() {
   form.meatType.value = '';
   form.meatCut.value = '';
   form.weight.value = null;
+  form.weightUnit.value = storageService.loadWeightUnit() ?? 'lb';
   form.notes.value = '';
 
   Object.values(form).forEach((field) => {
@@ -655,7 +722,10 @@ function handleSubmit() {
     initialOvenTemp: ovenTempF,
     meatType: sanitizeString(form.meatType.value) || null,
     meatCut: sanitizeString(form.meatCut.value) || null,
-    weight: form.weight.value || null,
+    // Canonical POUNDS. The display unit is a standing preference and is not
+    // part of the session: a cook who switches to kilograms next month must not
+    // find this roast's weight reinterpreted.
+    weight: weightToStorage(form.weight.value, form.weightUnit.value) || null,
     notes: sanitizeString(form.notes.value) || null
   };
   
