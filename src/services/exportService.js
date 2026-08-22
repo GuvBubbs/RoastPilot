@@ -1,5 +1,73 @@
-import { formatDateTime, formatDuration } from '../utils/timeUtils.js';
+import { formatDateTime } from '../utils/timeUtils.js';
 import { toDisplayUnit } from '../utils/temperatureUtils.js';
+
+/**
+ * Escape a single value for use as one CSV field (RFC 4180).
+ *
+ * Every value written into the CSV must go through this. Free text (meat type,
+ * cut, notes) can contain delimiters, and so can generated text:
+ * `formatDateTime` emits "Aug 22, 2:31 PM", which without quoting splits one
+ * timestamp across two columns and shifts every field after it.
+ *
+ * @param {*} value - Value to render; null/undefined become an empty field
+ * @returns {string} The field, quoted only when it needs to be
+ */
+function csvField(value) {
+  if (value === null || value === undefined) {
+    return '';
+  }
+
+  // String() on a number is locale-independent (no thousands separators);
+  // non-finite numbers have no useful CSV representation.
+  const str = typeof value === 'number'
+    ? (Number.isFinite(value) ? String(value) : '')
+    : String(value);
+
+  if (/[",\r\n]/.test(str)) {
+    return `"${str.replace(/"/g, '""')}"`;
+  }
+
+  return str;
+}
+
+/**
+ * Build one CSV row from a list of values, escaping each one
+ * @param {Array<*>} values
+ * @returns {string} A single CSV line
+ */
+function csvRow(values) {
+  return values.map(csvField).join(',');
+}
+
+/**
+ * Format a temperature for CSV output, in display units
+ * @param {number} tempF - Temperature in Fahrenheit (internal storage unit)
+ * @param {'F'|'C'} units
+ * @param {number} decimals
+ * @returns {string|null} Fixed-decimal string, or null if not a number
+ */
+function csvTemp(tempF, units, decimals) {
+  if (typeof tempF !== 'number' || !Number.isFinite(tempF)) {
+    return null;
+  }
+  return toDisplayUnit(tempF, units).toFixed(decimals);
+}
+
+/**
+ * Format a temperature difference for CSV output. Deltas convert without the
+ * 32° offset, so they can't go through toDisplayUnit.
+ * @param {number} deltaF - Temperature change in Fahrenheit
+ * @param {'F'|'C'} units
+ * @param {number} decimals
+ * @returns {string|null} Fixed-decimal string, or null if not a number
+ */
+function csvDelta(deltaF, units, decimals) {
+  if (typeof deltaF !== 'number' || !Number.isFinite(deltaF)) {
+    return null;
+  }
+  const converted = units === 'C' ? deltaF * 5 / 9 : deltaF;
+  return converted.toFixed(decimals);
+}
 
 /**
  * Generate a comprehensive JSON export of the session
@@ -18,7 +86,7 @@ export function exportToJSON(session) {
     },
     summary: generateSessionSummary(session)
   };
-  
+
   return JSON.stringify(exportData, null, 2);
 }
 
@@ -29,79 +97,92 @@ export function exportToJSON(session) {
  */
 export function exportToCSV(session) {
   const units = session.config.units;
+  const readings = session.readings || [];
+  const ovenEvents = session.ovenEvents || [];
   const lines = [];
-  
-  // Metadata section
-  lines.push('# Reverse Sear Tracker - Session Export');
-  lines.push(`# Exported: ${formatDateTime(new Date().toISOString())}`);
+
+  // Metadata section — single-field rows, so a comma in the timestamp does not
+  // spill into a second column
+  lines.push(csvRow(['# Reverse Sear Tracker - Session Export']));
+  lines.push(csvRow([`# Exported: ${formatDateTime(new Date().toISOString())}`]));
   lines.push('');
-  
-  // Configuration
-  lines.push('## Session Configuration');
-  lines.push(`Target Temperature,${toDisplayUnit(session.config.targetTemp, units)},°${units}`);
-  lines.push(`Initial Oven Temp,${toDisplayUnit(session.config.initialOvenTemp, units)},°${units}`);
-  lines.push(`Started,${formatDateTime(session.config.createdAt)}`);
+
+  // Configuration: Setting,Value,Unit for every row, so the section is a table
+  lines.push(csvRow(['## Session Configuration']));
+  lines.push(csvRow(['Setting', 'Value', 'Unit']));
+  lines.push(csvRow(['Target Temperature', csvTemp(session.config.targetTemp, units, 1), `°${units}`]));
+  lines.push(csvRow(['Initial Oven Temp', csvTemp(session.config.initialOvenTemp, units, 1), `°${units}`]));
+  lines.push(csvRow(['Started', formatDateTime(session.config.createdAt), '']));
   if (session.config.desiredServeTime) {
-    lines.push(`Target Serve Time,${formatDateTime(session.config.desiredServeTime)}`);
+    lines.push(csvRow(['Target Serve Time', formatDateTime(session.config.desiredServeTime), '']));
   }
   if (session.config.meatType) {
-    lines.push(`Meat Type,${session.config.meatType}`);
+    lines.push(csvRow(['Meat Type', session.config.meatType, '']));
   }
   if (session.config.meatCut) {
-    lines.push(`Cut,${session.config.meatCut}`);
+    lines.push(csvRow(['Cut', session.config.meatCut, '']));
   }
   if (session.config.weight) {
-    lines.push(`Weight,${session.config.weight},lbs`);
+    lines.push(csvRow(['Weight', session.config.weight, 'lbs']));
   }
   if (session.config.notes) {
-    // Escape quotes in notes
-    const escapedNotes = session.config.notes.replace(/"/g, '""');
-    lines.push(`Notes,"${escapedNotes}"`);
+    lines.push(csvRow(['Notes', session.config.notes, '']));
   }
   lines.push('');
-  
+
   // Internal readings table
-  lines.push('## Internal Temperature Readings');
-  lines.push(`Timestamp,Time,Temperature (°${units}),Delta From Start (°${units}),Delta From Previous (°${units}),Minutes Elapsed`);
-  
-  const startTime = session.readings.length > 0 
-    ? new Date(session.readings[0].timestamp).getTime()
+  lines.push(csvRow(['## Internal Temperature Readings']));
+  lines.push(csvRow([
+    'Timestamp',
+    'Time',
+    `Temperature (°${units})`,
+    `Delta From Start (°${units})`,
+    `Delta From Previous (°${units})`,
+    'Minutes Elapsed'
+  ]));
+
+  const startTime = readings.length > 0
+    ? new Date(readings[0].timestamp).getTime()
     : 0;
-  
-  session.readings.forEach(r => {
-    const time = formatDateTime(r.timestamp);
-    const temp = toDisplayUnit(r.temp, units).toFixed(1);
-    
-    // Delta calculations need to convert the delta itself (which is a temperature difference)
-    const deltaStart = r.deltaFromStart !== null 
-      ? (units === 'C' ? (r.deltaFromStart * 5 / 9).toFixed(1) : r.deltaFromStart.toFixed(1))
-      : '';
-    const deltaPrev = r.deltaFromPrevious !== null
-      ? (units === 'C' ? (r.deltaFromPrevious * 5 / 9).toFixed(1) : r.deltaFromPrevious.toFixed(1))
-      : '';
+
+  readings.forEach(r => {
     const elapsed = Math.round((new Date(r.timestamp).getTime() - startTime) / 60000);
-    
-    lines.push(`${r.timestamp},${time},${temp},${deltaStart},${deltaPrev},${elapsed}`);
+
+    lines.push(csvRow([
+      r.timestamp,
+      formatDateTime(r.timestamp),
+      csvTemp(r.temp, units, 1),
+      csvDelta(r.deltaFromStart, units, 1),
+      csvDelta(r.deltaFromPrevious, units, 1),
+      elapsed
+    ]));
   });
   lines.push('');
-  
+
   // Oven events table
-  lines.push('## Oven Temperature Events');
-  lines.push(`Timestamp,Time,Set Temperature (°${units}),Previous Temperature (°${units}),Change (°${units})`);
-  
-  session.ovenEvents.forEach(e => {
-    const time = formatDateTime(e.timestamp);
-    const setTemp = toDisplayUnit(e.setTemp, units).toFixed(0);
-    const prevTemp = e.previousTemp !== null ? toDisplayUnit(e.previousTemp, units).toFixed(0) : '';
-    const change = e.previousTemp !== null 
-      ? (units === 'C' 
-        ? ((e.setTemp - e.previousTemp) * 5 / 9).toFixed(0)
-        : (e.setTemp - e.previousTemp).toFixed(0))
-      : '';
-    
-    lines.push(`${e.timestamp},${time},${setTemp},${prevTemp},${change}`);
+  lines.push(csvRow(['## Oven Temperature Events']));
+  lines.push(csvRow([
+    'Timestamp',
+    'Time',
+    `Set Temperature (°${units})`,
+    `Previous Temperature (°${units})`,
+    `Change (°${units})`
+  ]));
+
+  ovenEvents.forEach(e => {
+    const change = typeof e.previousTemp === 'number' && typeof e.setTemp === 'number'
+      ? csvDelta(e.setTemp - e.previousTemp, units, 0)
+      : null;
+
+    lines.push(csvRow([
+      e.timestamp,
+      formatDateTime(e.timestamp),
+      csvTemp(e.setTemp, units, 0),
+      csvTemp(e.previousTemp, units, 0),
+      change
+    ]));
   });
-  
+
   return lines.join('\n');
 }
 
@@ -109,21 +190,26 @@ export function exportToCSV(session) {
  * Generate a summary of the session for export metadata
  */
 function generateSessionSummary(session) {
-  const readings = session.readings;
-  const events = session.ovenEvents;
-  
+  const readings = session.readings || [];
+  const events = session.ovenEvents || [];
+
   if (readings.length === 0) {
+    // Same keys as the populated case, so consumers see a stable shape
     return {
       totalReadings: 0,
       totalOvenChanges: events.length,
-      sessionDuration: null
+      sessionDurationMinutes: null,
+      startingTemp: null,
+      endingTemp: null,
+      totalTempChange: null,
+      averageReadingInterval: null
     };
   }
-  
+
   const firstReading = readings[0];
   const lastReading = readings[readings.length - 1];
   const durationMs = new Date(lastReading.timestamp) - new Date(firstReading.timestamp);
-  
+
   return {
     totalReadings: readings.length,
     totalOvenChanges: events.length,
@@ -131,7 +217,7 @@ function generateSessionSummary(session) {
     startingTemp: firstReading.temp,
     endingTemp: lastReading.temp,
     totalTempChange: lastReading.temp - firstReading.temp,
-    averageReadingInterval: readings.length > 1 
+    averageReadingInterval: readings.length > 1
       ? Math.round(durationMs / (readings.length - 1) / 60000)
       : null
   };
@@ -146,16 +232,16 @@ function generateSessionSummary(session) {
 export function downloadFile(content, filename, mimeType) {
   const blob = new Blob([content], { type: mimeType });
   const url = URL.createObjectURL(blob);
-  
+
   const link = document.createElement('a');
   link.href = url;
   link.download = filename;
   link.style.display = 'none';
-  
+
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
-  
+
   // Clean up the URL object
   setTimeout(() => URL.revokeObjectURL(url), 100);
 }

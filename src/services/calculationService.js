@@ -103,62 +103,46 @@ export function calculateReadingSpanMinutes(readings) {
 /**
  * Predict time to reach target temperature
  * 
- * @param {number} currentTemp - Current internal temperature (°F)
+ * The projection is anchored to the moment `currentTemp` was observed - the last
+ * reading - not to "now". Anchoring to "now" would re-charge the projection for
+ * the minutes the meat has already been climbing since that reading was taken.
+ * 
+ * @param {number} currentTemp - Internal temperature at the anchor (°F)
  * @param {number} targetTemp - Target temperature (°F)
  * @param {number} rate - Heating rate (°F/hour)
- * @returns {{minutes: number|null, targetTime: string|null}}
+ * @param {string} [anchorTime] - ISO timestamp `currentTemp` was observed at
+ * @param {string} [now] - ISO timestamp to measure the countdown from
+ * @returns {{minutes: number|null, minutesFromNow: number|null, targetTime: string|null}}
  */
-export function predictTimeToTarget(currentTemp, targetTemp, rate) {
+export function predictTimeToTarget(
+  currentTemp,
+  targetTemp,
+  rate,
+  anchorTime = new Date().toISOString(),
+  now = anchorTime
+) {
   if (rate === null || rate <= CALCULATION_THRESHOLDS.MIN_RATE_FOR_PREDICTION) {
-    return { minutes: null, targetTime: null };
+    return { minutes: null, minutesFromNow: null, targetTime: null };
   }
   
   const tempRemaining = targetTemp - currentTemp;
   
   if (tempRemaining <= 0) {
-    // Already at or past target
-    return { minutes: 0, targetTime: new Date().toISOString() };
+    // Already at or past target as of the anchor reading
+    return { minutes: 0, minutesFromNow: 0, targetTime: anchorTime };
   }
   
   const hoursRemaining = tempRemaining / rate;
   const minutesRemaining = Math.round(hoursRemaining * 60);
-  const targetTime = addMinutes(new Date().toISOString(), minutesRemaining);
+  const targetTime = addMinutes(anchorTime, minutesRemaining);
   
   return {
+    // Heating still needed measured from the anchor reading
     minutes: minutesRemaining,
+    // The same projection as a countdown from `now`, which is what a display
+    // should show: part of `minutes` has already elapsed since the anchor.
+    minutesFromNow: Math.round(minutesBetween(now, targetTime)),
     targetTime
-  };
-}
-
-/**
- * Calculate schedule variance (how early or late vs desired serve time)
- * 
- * @param {string} predictedTargetTime - ISO timestamp of predicted completion
- * @param {string} desiredServeTime - ISO timestamp of desired completion
- * @returns {{varianceMinutes: number, status: 'early'|'late'|'on-track'}}
- */
-export function calculateScheduleVariance(predictedTargetTime, desiredServeTime) {
-  if (!predictedTargetTime || !desiredServeTime) {
-    return { varianceMinutes: null, status: 'unknown' };
-  }
-  
-  const variance = minutesBetween(desiredServeTime, predictedTargetTime);
-  
-  // Default threshold is 10 minutes
-  const threshold = 10;
-  
-  let status;
-  if (variance < -threshold) {
-    status = 'early';
-  } else if (variance > threshold) {
-    status = 'late';
-  } else {
-    status = 'on-track';
-  }
-  
-  return {
-    varianceMinutes: Math.round(variance),
-    status
   };
 }
 
@@ -195,9 +179,11 @@ export function calculateScheduleVarianceWithThreshold(predictedTargetTime, desi
  * @param {number} params.timeSpanMinutes - Time span of readings
  * @param {number} params.r2 - R² value from rate calculation
  * @param {number} params.rate - Calculated heating rate
+ * @param {number} [params.fitReadings] - Readings the rate fit actually used; the
+ *   smoothing window can be narrower than the full reading list
  * @returns {{level: 'high'|'medium'|'low'|'insufficient', reason: string}}
  */
-export function assessConfidence({ readingCount, timeSpanMinutes, r2, rate }) {
+export function assessConfidence({ readingCount, timeSpanMinutes, r2, rate, fitReadings = readingCount }) {
   // Insufficient data
   if (readingCount < 2) {
     return {
@@ -244,6 +230,16 @@ export function assessConfidence({ readingCount, timeSpanMinutes, r2, rate }) {
     };
   }
   
+  // A fit over fewer than 3 points can't be told apart from noise - two points
+  // always fit a line perfectly, so a perfect R² there means nothing - and so it
+  // never earns high confidence however good the rest of the data looks.
+  if (fitReadings < 3) {
+    return {
+      level: 'medium',
+      reason: `Rate is fitted from only ${fitReadings} readings; treat the projection as approximate`
+    };
+  }
+  
   // High confidence conditions
   if (readingCount >= 4 && timeSpanMinutes >= 30 && r2 >= 0.9) {
     return {
@@ -267,15 +263,17 @@ export function assessConfidence({ readingCount, timeSpanMinutes, r2, rate }) {
  * @param {number} params.targetTemp
  * @param {string|null} params.desiredServeTime
  * @param {AppSettings} params.settings
+ * @param {string} [params.now] - ISO timestamp to measure countdowns from
  * @returns {CalculationResult}
  */
-export function computeSessionCalculations({ readings, targetTemp, desiredServeTime, settings }) {
+export function computeSessionCalculations({ readings, targetTemp, desiredServeTime, settings, now = new Date().toISOString() }) {
   // Handle empty or insufficient readings
   if (readings.length === 0) {
     return {
       currentRate: null,
       averageRate: null,
       predictedMinutesToTarget: null,
+      predictedMinutesFromNow: null,
       predictedTargetTime: null,
       scheduleVarianceMinutes: null,
       scheduleStatus: 'unknown',
@@ -283,7 +281,8 @@ export function computeSessionCalculations({ readings, targetTemp, desiredServeT
     };
   }
   
-  const currentTemp = readings[readings.length - 1].temp;
+  const lastReading = readings[readings.length - 1];
+  const currentTemp = lastReading.temp;
   const timeSpan = calculateReadingSpanMinutes(readings);
   
   // Calculate rates
@@ -295,11 +294,18 @@ export function computeSessionCalculations({ readings, targetTemp, desiredServeT
     readingCount: readings.length,
     timeSpanMinutes: timeSpan,
     r2: rateResult.r2,
-    rate: rateResult.rate
+    rate: rateResult.rate,
+    fitReadings: rateResult.readings
   });
   
-  // Predict time to target
-  const prediction = predictTimeToTarget(currentTemp, targetTemp, rateResult.rate);
+  // Predict time to target, anchored to when the last reading was taken
+  const prediction = predictTimeToTarget(
+    currentTemp,
+    targetTemp,
+    rateResult.rate,
+    lastReading.timestamp,
+    now
+  );
   
   // Calculate schedule variance if serve time is set
   let scheduleVariance = { varianceMinutes: null, status: 'unknown' };
@@ -315,6 +321,7 @@ export function computeSessionCalculations({ readings, targetTemp, desiredServeT
     currentRate: rateResult.rate,
     averageRate,
     predictedMinutesToTarget: prediction.minutes,
+    predictedMinutesFromNow: prediction.minutesFromNow,
     predictedTargetTime: prediction.targetTime,
     scheduleVarianceMinutes: scheduleVariance.varianceMinutes,
     scheduleStatus: scheduleVariance.status,

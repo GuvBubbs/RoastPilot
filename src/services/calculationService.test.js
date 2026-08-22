@@ -1,14 +1,19 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import {
   calculateHeatingRate,
   calculateAverageRate,
   calculateReadingSpanMinutes,
   predictTimeToTarget,
-  calculateScheduleVariance,
   calculateScheduleVarianceWithThreshold,
   assessConfidence,
   computeSessionCalculations
 } from './calculationService.js';
+
+// Several suites pin the clock so that "now"-relative results are exact rather
+// than a moving target; this keeps a pinned clock from leaking between tests.
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe('calculateHeatingRate', () => {
   it('returns null when fewer than 2 readings provided', () => {
@@ -140,9 +145,48 @@ describe('predictTimeToTarget', () => {
   });
   
   it('calculates correct time for positive rate', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2024-01-01T12:00:00.000Z'));
+    
     const result = predictTimeToTarget(100, 125, 5); // 25°F to go at 5°F/hr
     expect(result.minutes).toBe(300); // 5 hours = 300 minutes
-    expect(result.targetTime).toBeTruthy();
+    expect(result.targetTime).toBe('2024-01-01T17:00:00.000Z');
+  });
+  
+  it('projects from the supplied anchor time rather than from now', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2024-01-01T12:00:00.000Z'));
+    
+    // Anchor is 30 minutes stale: the meat has already been climbing for those
+    // 30 minutes, so the target lands 30 minutes earlier than a now-anchored
+    // projection would claim.
+    const result = predictTimeToTarget(100, 125, 5, '2024-01-01T11:30:00.000Z');
+    expect(result.minutes).toBe(300);
+    expect(result.targetTime).toBe('2024-01-01T16:30:00.000Z');
+  });
+  
+  it('reports the countdown from now separately from the heating time needed', () => {
+    const result = predictTimeToTarget(
+      100,
+      125,
+      5,
+      '2024-01-01T11:30:00.000Z', // anchor
+      '2024-01-01T12:00:00.000Z'  // now
+    );
+    expect(result.minutes).toBe(300); // heating still needed from the anchor
+    expect(result.minutesFromNow).toBe(270); // 30 of those minutes already elapsed
+  });
+  
+  it('returns the anchor as the target time when already past target', () => {
+    const result = predictTimeToTarget(130, 125, 5, '2024-01-01T11:30:00.000Z');
+    expect(result.minutes).toBe(0);
+    expect(result.minutesFromNow).toBe(0);
+    expect(result.targetTime).toBe('2024-01-01T11:30:00.000Z');
+  });
+  
+  it('returns a null countdown alongside a null prediction', () => {
+    const result = predictTimeToTarget(100, 125, 0);
+    expect(result.minutesFromNow).toBeNull();
   });
   
   it('rounds minutes to nearest integer', () => {
@@ -151,42 +195,43 @@ describe('predictTimeToTarget', () => {
   });
 });
 
-describe('calculateScheduleVariance', () => {
+describe('calculateScheduleVarianceWithThreshold', () => {
   it('returns unknown status when times are null', () => {
-    const result = calculateScheduleVariance(null, '2024-01-01T15:00:00Z');
+    const result = calculateScheduleVarianceWithThreshold(null, '2024-01-01T15:00:00Z', 10);
     expect(result.status).toBe('unknown');
     expect(result.varianceMinutes).toBeNull();
   });
   
   it('identifies early status correctly', () => {
-    const result = calculateScheduleVariance(
+    const result = calculateScheduleVarianceWithThreshold(
       '2024-01-01T14:30:00Z', // Predicted: 2:30 PM
-      '2024-01-01T15:00:00Z'  // Desired: 3:00 PM (30 min late)
+      '2024-01-01T15:00:00Z', // Desired: 3:00 PM (30 min early)
+      10
     );
     expect(result.status).toBe('early');
     expect(result.varianceMinutes).toBe(-30);
   });
   
   it('identifies late status correctly', () => {
-    const result = calculateScheduleVariance(
+    const result = calculateScheduleVarianceWithThreshold(
       '2024-01-01T15:30:00Z', // Predicted: 3:30 PM
-      '2024-01-01T15:00:00Z'  // Desired: 3:00 PM (30 min late)
+      '2024-01-01T15:00:00Z', // Desired: 3:00 PM (30 min late)
+      10
     );
     expect(result.status).toBe('late');
     expect(result.varianceMinutes).toBe(30);
   });
   
   it('identifies on-track status within threshold', () => {
-    const result = calculateScheduleVariance(
+    const result = calculateScheduleVarianceWithThreshold(
       '2024-01-01T15:05:00Z', // Predicted: 3:05 PM
-      '2024-01-01T15:00:00Z'  // Desired: 3:00 PM (5 min late, within 10 min threshold)
+      '2024-01-01T15:00:00Z', // Desired: 3:00 PM (5 min late, within threshold)
+      10
     );
     expect(result.status).toBe('on-track');
     expect(result.varianceMinutes).toBe(5);
   });
-});
-
-describe('calculateScheduleVarianceWithThreshold', () => {
+  
   it('uses custom threshold correctly', () => {
     const predicted = '2024-01-01T15:20:00Z';
     const desired = '2024-01-01T15:00:00Z';
@@ -278,6 +323,29 @@ describe('assessConfidence', () => {
     expect(result.reason).toContain('Strong data quality');
   });
   
+  it('caps confidence at medium when the fit spans fewer than 3 readings', () => {
+    const result = assessConfidence({
+      readingCount: 6,
+      timeSpanMinutes: 120,
+      r2: 1, // A 2-point fit is perfect by construction, so R² proves nothing
+      rate: 5,
+      fitReadings: 2
+    });
+    expect(result.level).toBe('medium');
+    expect(result.reason).toContain('only 2 readings');
+  });
+  
+  it('still reports low confidence for a thin fit over poor data', () => {
+    const result = assessConfidence({
+      readingCount: 6,
+      timeSpanMinutes: 5,
+      r2: 1,
+      rate: 5,
+      fitReadings: 2
+    });
+    expect(result.level).toBe('low');
+  });
+  
   it('requires both count and time for high confidence', () => {
     // Good R² but not enough readings
     const result1 = assessConfidence({ 
@@ -363,6 +431,74 @@ describe('computeSessionCalculations', () => {
     // Desired: 16:00, Predicted: 17:00 -> Running late by 1 hour
     expect(result.scheduleStatus).toBe('late');
     expect(result.scheduleVarianceMinutes).toBeGreaterThan(0); // Positive variance = running late
+  });
+  
+  it('anchors the ETA to the last reading rather than to now', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2024-06-01T12:00:00.000Z'));
+    
+    // 100/105/110°F at 90/60/30 minutes ago fits 10°F/hr. The remaining 15°F is
+    // 90 more minutes of heating measured from the last reading, which was 30
+    // minutes ago - so the target lands 60 minutes from now, not 90.
+    const readings = [
+      { temp: 100, timestamp: '2024-06-01T10:30:00.000Z' },
+      { temp: 105, timestamp: '2024-06-01T11:00:00.000Z' },
+      { temp: 110, timestamp: '2024-06-01T11:30:00.000Z' }
+    ];
+    
+    const result = computeSessionCalculations({
+      readings,
+      targetTemp: 125,
+      desiredServeTime: '2024-06-01T14:30:00.000Z', // now + 150 minutes
+      settings: defaultSettings
+    });
+    
+    expect(result.currentRate).toBe(10);
+    expect(result.predictedMinutesToTarget).toBe(90);
+    expect(result.predictedMinutesFromNow).toBe(60);
+    expect(result.predictedTargetTime).toBe('2024-06-01T13:00:00.000Z');
+    expect(result.scheduleStatus).toBe('early');
+    expect(result.scheduleVarianceMinutes).toBe(-90);
+  });
+  
+  it('accepts an explicit now so the countdown is not read from the clock', () => {
+    const readings = [
+      { temp: 100, timestamp: '2024-06-01T10:30:00.000Z' },
+      { temp: 105, timestamp: '2024-06-01T11:00:00.000Z' },
+      { temp: 110, timestamp: '2024-06-01T11:30:00.000Z' }
+    ];
+    
+    const result = computeSessionCalculations({
+      readings,
+      targetTemp: 125,
+      desiredServeTime: null,
+      settings: defaultSettings,
+      now: '2024-06-01T12:45:00.000Z'
+    });
+    
+    expect(result.predictedTargetTime).toBe('2024-06-01T13:00:00.000Z');
+    expect(result.predictedMinutesFromNow).toBe(15);
+  });
+  
+  it('does not report high confidence when the window fits only 2 readings', () => {
+    const readings = [
+      { temp: 100, timestamp: '2024-01-01T12:00:00Z' },
+      { temp: 105, timestamp: '2024-01-01T13:00:00Z' },
+      { temp: 110, timestamp: '2024-01-01T14:00:00Z' },
+      { temp: 115, timestamp: '2024-01-01T15:00:00Z' },
+      { temp: 120, timestamp: '2024-01-01T16:00:00Z' }
+    ];
+    
+    const result = computeSessionCalculations({
+      readings,
+      targetTemp: 125,
+      desiredServeTime: null,
+      settings: { ...defaultSettings, smoothingWindowReadings: 2 },
+      now: '2024-01-01T16:00:00Z'
+    });
+    
+    // Plenty of readings and a flawless fit, but only 2 points went into it
+    expect(result.confidence.level).toBe('medium');
   });
   
   it('uses configured smoothing window', () => {
