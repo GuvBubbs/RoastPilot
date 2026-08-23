@@ -33,7 +33,13 @@ reference cook is missing:**
 
 Enter the weight to **0.1 lb**. It is one number and it retires a guess.
 
-## 2. The oven-thermometer sheet — **the app cannot store this**
+> **Check `Docs/Development Plan/PHASE_8_MEASURED_INPUTS.md` before you cook.** It
+> specifies app fields for items 2, 3 and 4 below — an optional oven-temperature
+> input on the reading modal, and thickness/length at setup. If it has been built by
+> then, enter them in the app and skip the paper. If not, the paper fallback below
+> still works and is what the calibration code expects.
+
+## 2. The oven-thermometer sheet — **the app cannot store this yet**
 
 `tools/sim/calibrate.js` reads an `ovenActualF` field off each reading and will
 fit the oven's own behaviour against it. **Nothing in the app ever writes that
@@ -67,14 +73,22 @@ constants currently resting on nothing.
 
 A tape measure across the thickest part before it goes in. Ten seconds.
 
-## 4. Fridge-out time
+## 4. The starting reading — already an app field, so use it
 
-The model starts from `Ts(0) = Tc(0)` — the roast went in uniformly cold. A roast
-that sat on the counter for an hour did not. Note the time it left the fridge and
-the time it went in the oven.
+Enter the core temperature in **Starting reading** at setup. It becomes
+`readings[0]`, so the projection starts from a measured state instead of an assumed
+one.
 
-The `Notes` field in session setup is a fine place for this, the dimensions, and
-anything else in this list — it comes through in the export.
+This replaces the "fridge-out time" an earlier draft of the protocol asked for. A
+measured core is strictly better than a time from which a core would have to be
+guessed. The one thing it does not capture is the *gradient* — a roast that sat out
+for two hours has a warm surface over a cool core, and a single core reading cannot
+tell that apart from one straight out of the fridge. That is second-order, the
+residuals will show it, and it is not worth a field.
+
+The `Notes` field is a fine place for the dimensions and anything else in this list
+until Phase 8 gives them somewhere structured to live — it comes through in the
+export, it is just not machine-readable.
 
 ## 5. The rest block — the one measurement nothing else can give
 
@@ -289,3 +303,5 @@ remove that separation.
 - `Docs/sim-harness-findings.md` — what the simulator found
 - `tools/oracle/fixtures/README.md` — why the cylinder is the primary geometry
 - `tools/rollback/README.md` — why a pinned copy of the old build is committed
+- `Docs/Development Plan/PHASE_8_MEASURED_INPUTS.md` — the app fields that would
+  replace most of Part 1's paperwork

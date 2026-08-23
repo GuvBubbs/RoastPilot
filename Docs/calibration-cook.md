@@ -86,9 +86,11 @@ it a tangle. 45 minutes is the thermal lag plus enough readings to see past it.
 - **Shortest cross-section in cm.** Heat travels along the shortest path, so this
   is the length the constants actually scale with — more informative than the
   weight, and nothing in the app records it yet.
-- **Fridge-out time**, so the starting state is known rather than assumed. The
-  projection's `Ts(0) = Tc(0)` assumption is that the roast went in uniformly
-  cold; a roast that sat out for an hour did not.
+- **The starting core temperature**, entered in the app's **Starting reading**
+  field rather than written down — it becomes the first reading, so the projection
+  starts from a measured state rather than an assumed one. This supersedes the
+  fridge-out time an earlier version of this protocol asked for: a measured core
+  beats a time you would have to infer one from.
 - **Cut, bone-in or out, and whether it was tied.**
 
 ## Then
@@ -128,6 +130,10 @@ thermometer readings have to be recorded on paper and added to the JSON by hand
 afterwards.
 
 ## Before the day, and after it
+
+`Docs/Development Plan/PHASE_8_MEASURED_INPUTS.md` specifies app fields for the
+oven thermometer and the dimensions, so that most of the paperwork here becomes
+typing. Check whether it has been built before you cook.
 
 `next-cook-handover.md` is the companion to this file: a checklist of what to bring
 back (including the three things the app cannot store), and a briefing for the chat
