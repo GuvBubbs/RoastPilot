@@ -559,37 +559,60 @@ export function projectToTarget({ state, k, setPointF, targetF }) {
 
   if (state.coreF >= targetF) return { minutes: 0, reason: null, steadyStateF };
 
-  /**
-   * The oven cannot deliver this.
-   *
-   * The straight-line model always got there eventually, however low the oven was
-   * set - it had no notion of a temperature the roast asymptotes to. Saying
-   * "unreachable" is a genuinely new signal, and the one a cook most needs: no
-   * amount of waiting fixes an oven set below the target.
-   */
-  if (steadyStateF <= targetF) {
-    return { minutes: null, reason: 'unreachable', steadyStateF };
-  }
-
   const coreAt = (minutes) => advance(state, { minutes, setPointF }, k).coreF;
 
-  // Expand a bracket rather than assuming one. The horizon is generous here and
-  // narrowed by the caller: this function's job is the physics.
-  let hi = 10;
-  while (hi <= PROJECTION_HORIZON_MINUTES && coreAt(hi) < targetF) hi *= 2;
-  if (coreAt(Math.min(hi, PROJECTION_HORIZON_MINUTES)) < targetF) {
-    return { minutes: null, reason: 'beyond-horizon', steadyStateF };
+  /**
+   * SCAN FORWARD FOR THE FIRST CROSSING. Two things went wrong when this did not.
+   *
+   * (1) It used to shortcut on the asymptote - `if (steadyStateF <= targetF)
+   *     return 'unreachable'` - BEFORE integrating anything. The asymptote is
+   *     where the core ends up, not the most it reaches: heat already stored in
+   *     the surface node carries the core past it. Drop the dial to 190 °F on a
+   *     roast whose surface is at 320 and the core crosses a 195 °F target in 24
+   *     minutes and peaks at 236 - while the app said "the oven is not hot enough
+   *     to reach your target, raise it". Advice to add heat to a roast about to
+   *     overshoot by 40 °F.
+   *
+   * (2) The bracket was found by doubling `hi` until the core exceeded the
+   *     target, which assumes the core rises monotonically. It does not: after the
+   *     dial comes down the core rises, crosses, and then falls back toward the
+   *     new steady state. Doubling can step straight over that window and report
+   *     `beyond-horizon`, and the bisection that follows would find the wrong root
+   *     if it did not.
+   *
+   * A grid scan has neither problem. The step is fine enough for the fastest
+   * roast the app's k range allows (the smallest time constant is about 17
+   * minutes) and the whole scan is a few hundred exponentials - this runs a couple
+   * of times per recompute, not inside the optimiser.
+   */
+  const STEP_MINUTES = 5;
+  let previousT = 0;
+  for (let t = STEP_MINUTES; t <= PROJECTION_HORIZON_MINUTES; t += STEP_MINUTES) {
+    if (coreAt(t) >= targetF) {
+      // Bisect inside the bracket the scan found.
+      let lo = previousT;
+      let hi = t;
+      for (let i = 0; i < 40; i++) {
+        const mid = (lo + hi) / 2;
+        if (coreAt(mid) < targetF) lo = mid;
+        else hi = mid;
+      }
+      return { minutes: (lo + hi) / 2, reason: null, steadyStateF };
+    }
+    previousT = t;
   }
 
-  let lo = 0;
-  hi = Math.min(hi, PROJECTION_HORIZON_MINUTES);
-  for (let i = 0; i < 40; i++) {
-    const mid = (lo + hi) / 2;
-    if (coreAt(mid) < targetF) lo = mid;
-    else hi = mid;
-  }
-
-  return { minutes: (lo + hi) / 2, reason: null, steadyStateF };
+  /**
+   * No crossing anywhere in the horizon. Now the asymptote decides WHICH refusal,
+   * and the distinction matters because the UI says opposite things about them:
+   * `unreachable` tells the cook to raise the oven, and no amount of waiting is an
+   * alternative. `beyond-horizon` tells them to wait.
+   */
+  return {
+    minutes: null,
+    reason: steadyStateF <= targetF ? 'unreachable' : 'beyond-horizon',
+    steadyStateF
+  };
 }
 
 /**

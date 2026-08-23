@@ -769,8 +769,29 @@ describe('computeSessionCalculations', () => {
       now: at(120)
     });
 
-    it('refuses a finish time, because there is not one', () => {
+    it('still finishes on stored heat, because a switched-off oven is not a cold one', () => {
+      /**
+       * This test used to assert `unreachable`, and that was the bug, not the
+       * behaviour. At the moment the oven goes off this roast has a 172 °F surface
+       * around a 108 °F core - 64 °F of stored heat with nowhere to go but inward.
+       * It reaches its 125 °F pull target half an hour later and peaks near 135.
+       * That is carryover, the single most important thing to tell a cook who has
+       * just switched the oven off, and refusing to project it hid exactly the
+       * overshoot the pause was supposed to control.
+       */
       const result = computeSessionCalculations(paused());
+      expect(result.projectionRefusedReason).toBeNull();
+      const minutesOut =
+        (Date.parse(result.predictedTargetTime) - Date.parse(at(120))) / 60000;
+      expect(minutesOut).toBeGreaterThan(20);
+      expect(minutesOut).toBeLessThan(45);
+    });
+
+    it('refuses once the stored heat cannot get there', () => {
+      // The same pause, but a pull target above anything the coasting roast will
+      // reach. Now `unreachable` is the honest answer, and it has been established
+      // by integrating rather than by comparing the target against the dial.
+      const result = computeSessionCalculations({ ...paused(), pullTempF: 165 });
       expect(result.predictedTargetTime).toBeNull();
       expect(result.projectionRefusedReason).toBe('unreachable');
     });
