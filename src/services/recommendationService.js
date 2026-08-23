@@ -355,49 +355,171 @@ export function checkRecommendationEligibility({
 }
 
 /**
- * Coldest core, in Fahrenheit, at which pausing the cook is offered outright.
+ * Coldest core, in Fahrenheit, at which the app will suggest switching the oven
+ * off.
  *
- * 140 °F is 60 °C - the top of the food-safety danger zone. Below it the meat is
- * in the range where switching the oven off and leaving it there extends the
- * time it spends there, and the app cannot police how long the cook will
- * actually leave it.
+ * 140 °F is 60 °C, the top of the food-safety danger zone. Below it, switching
+ * the oven off does two things the app cannot see the consequences of: it extends
+ * the time the meat spends in the zone, and it lets the SURFACE - where the
+ * bacteria are, and the only part the oven has actually been pasteurising - cool
+ * back toward it.
+ *
+ * ---
+ * THIS GUARD WAS WEAKENED ONCE AND HAS BEEN PUT BACK.
+ *
+ * A `FINAL_APPROACH_BAND_F = 25` exemption was added here, permitting a pause at
+ * `pullTempF - 25`, on the reasoning that every red-meat target is below 140 °F
+ * so a flat rule deletes the pause feature for the majority of cooks - and that
+ * inside that band the roast is "about to leave the zone for good".
+ *
+ * The second half of that is false, and it was the half doing the work. For a
+ * 121 °F pull the finished core never leaves the danger zone at all, so there is
+ * no "leaving" for a pause to be safely adjacent to; the exemption simply opened
+ * pausing at a 96 °F core, which is the middle of the zone. Measured across the
+ * app's own presets it moved the threshold to:
+ *
+ *     pull 121 °F  ->  pause allowed from  96 °F core
+ *     pull 125 °F  ->                     100 °F
+ *     pull 130 °F  ->                     105 °F
+ *
+ * The first observation stands: this does remove the pause path for red meat.
+ * That is the correct outcome and not a bug to design around. What remains for a
+ * cook running early is the lower-the-dial ladder, which is most of the effect
+ * and carries none of the risk; the pause is worth about twenty minutes. Pork and
+ * poultry, whose targets are above 140 °F and whose cooks are long enough for a
+ * hold to matter, keep it.
  */
 export const MIN_CORE_FOR_OVEN_OFF_F = 140;
 
 /**
- * ...with one exemption, without which the pause path would not exist.
+ * Total oven-off minutes the app will suggest across one whole cook.
  *
- * Every red-meat target is BELOW 140 °F - the app's own default is 125 °F for
- * medium-rare beef - so a flat "no pausing under 140 °F core" rule deletes the
- * feature for the majority of cooks it was built for, along with the whole
- * lower-then-pause ladder. That cannot be the intent of a food-safety guard.
+ * MAX_OVEN_OFF_MINUTES bounds ONE suggestion; nothing bounded how many. The app
+ * re-evaluates after every reading, so a cook who is hours early and does as they
+ * are told gets a fresh 20-minute pause each time they restart - an unbounded
+ * string of them, with the core sitting wherever it was. Four in a row was
+ * reproducible on a single scenario.
  *
- * What actually makes a pause hazardous is TIME accumulated in the danger zone.
- * Within this band of the target the roast is in its final approach - minutes to
- * an hour from done - and a pause now cannot strand it, because it is about to
- * leave the zone for good. Further out it has hours to run and a pause is a real
- * extension.
- *
- * So: 140 °F core, OR inside the final approach. Both, with the pause itself
- * capped at MAX_OVEN_OFF_MINUTES.
+ * An hour in total is generous for a timing tool and finite, which is the point.
  */
-export const FINAL_APPROACH_BAND_F = 25;
+export const MAX_CUMULATIVE_OVEN_OFF_MINUTES = 60;
+
+/**
+ * Minutes the oven has spent off across this cook, including any pause that is
+ * still open.
+ *
+ * @param {OvenTempEvent[]} ovenEvents - Chronological
+ * @param {string} now - ISO
+ * @returns {number}
+ */
+export function totalOvenOffMinutes(ovenEvents, now) {
+  if (!ovenEvents || ovenEvents.length === 0) return 0;
+  let total = 0;
+  let offSince = null;
+  for (const event of ovenEvents) {
+    if (event.isOff === true) {
+      // Consecutive off events are one pause, not two.
+      if (offSince === null) offSince = event.timestamp;
+    } else if (offSince !== null) {
+      total += Math.max(0, minutesBetween(offSince, event.timestamp));
+      offSince = null;
+    }
+  }
+  // A pause that has not ended yet still counts, and grows.
+  if (offSince !== null) total += Math.max(0, minutesBetween(offSince, now));
+  return total;
+}
+
+/**
+ * Has a reading been logged since the oven last came back on?
+ *
+ * This is the pause's equivalent of assessOvenChangeEffect, and it exists because
+ * that function deliberately does NOT cover pauses: it filters off events out
+ * (`ovenEvents.filter(e => e.isOff !== true)`) on the grounds that an off event
+ * suspends the set point rather than changing it. True as far as it goes, and it
+ * left a hole - a pause never counted as an unmeasured change, so the instant the
+ * cook restarted, the app re-evaluated against the same pre-pause readings,
+ * concluded it was still early, and offered another pause.
+ *
+ * Measured on the deck: three pauses in eighty minutes on the overnight shoulder,
+ * six trips to the oven, none of them informed by anything the previous one did.
+ *
+ * @param {InternalReading[]} readings - Chronological
+ * @param {OvenTempEvent[]} ovenEvents - Chronological
+ * @returns {boolean} true when there has been no pause, or a reading since it
+ */
+export function hasReadingSinceLastRestart(readings, ovenEvents) {
+  if (!ovenEvents || ovenEvents.length === 0) return true;
+
+  // The most recent restart: the first non-off event after the last off event.
+  let lastOffIndex = -1;
+  for (let i = ovenEvents.length - 1; i >= 0; i--) {
+    if (ovenEvents[i].isOff === true) { lastOffIndex = i; break; }
+  }
+  if (lastOffIndex === -1) return true;                    // never paused
+  const restart = ovenEvents.slice(lastOffIndex + 1).find((e) => e.isOff !== true);
+  if (!restart) return true;                               // still paused now
+
+  return (readings ?? []).some((r) => r.timestamp >= restart.timestamp);
+}
 
 /**
  * Is pausing the cook a timing tool here, or a food-safety problem?
  *
  * @param {number|null} latestCoreTempF
- * @param {number|null} targetTempF
- * @returns {boolean}
+ * @param {Object} [options]
+ * @param {number} [options.pausedMinutesSoFar] - From totalOvenOffMinutes
+ * @param {boolean} [options.pauseEffectMeasured] - From hasReadingSinceLastRestart
+ * @param {number} [options.minutesEarly] - How early the cook is running. A pause
+ *   buys ~8-10 min, so past the whole budget it cannot help and should not be
+ *   offered as though it could.
+ * @returns {{allowed: boolean, reason: string|null}}
  */
-export function mayPauseCooking(latestCoreTempF, targetTempF) {
-  // No reading: this is the caller's problem, not something to guess at. Left
-  // permissive so an unrelated caller is not silently changed; every path in
-  // this file passes the reading.
-  if (latestCoreTempF === null || latestCoreTempF === undefined) return true;
-  if (latestCoreTempF >= MIN_CORE_FOR_OVEN_OFF_F) return true;
-  if (typeof targetTempF !== 'number') return false;
-  return latestCoreTempF >= targetTempF - FINAL_APPROACH_BAND_F;
+export function mayPauseCooking(
+  latestCoreTempF,
+  { pausedMinutesSoFar = 0, pauseEffectMeasured = true, minutesEarly = null } = {}
+) {
+  // No reading: nothing to reason from, and guessing about food safety is not
+  // the thing to do. Every path in this file passes the newest reading.
+  if (!Number.isFinite(latestCoreTempF)) {
+    return { allowed: false, reason: 'no-reading' };
+  }
+  if (latestCoreTempF < MIN_CORE_FOR_OVEN_OFF_F) {
+    return { allowed: false, reason: 'danger-zone' };
+  }
+  if (pausedMinutesSoFar >= MAX_CUMULATIVE_OVEN_OFF_MINUTES) {
+    return { allowed: false, reason: 'pause-budget-spent' };
+  }
+  /**
+   * Checked LAST of the three, so the message a cook sees names the durable
+   * reason rather than the transient one: "the core is too cool for this" and
+   * "you have paused enough today" both outrank "wait for a reading".
+   */
+  if (!pauseEffectMeasured) {
+    return { allowed: false, reason: 'pause-unmeasured' };
+  }
+  /**
+   * Is a pause big enough to be worth suggesting?
+   *
+   * Measured oven-off efficiency is 0.4-0.53 - a closed oven gives up its heat
+   * slowly, so the meat keeps climbing through most of the pause. One 20-minute
+   * pause therefore buys about 8-10 minutes, and the whole
+   * MAX_CUMULATIVE_OVEN_OFF_MINUTES budget buys around half an hour.
+   *
+   * So offering a pause to a cook who is four hours early is not conservative
+   * advice, it is ineffective advice dressed as a remedy. On the overnight
+   * shoulder it produced three pauses and six trips to the oven against a
+   * 229-minute gap it could not begin to close - and, because that gap came from
+   * a projection the unmodelled stall had made too fast, the pauses made a roast
+   * that was really going to be LATE later still.
+   *
+   * Past this, the honest answer is that the roast will be early and the oven is
+   * already as low as it goes.
+   */
+  if (Number.isFinite(minutesEarly) && minutesEarly > MAX_CUMULATIVE_OVEN_OFF_MINUTES) {
+    return { allowed: false, reason: 'pause-cannot-help' };
+  }
+  return { allowed: true, reason: null };
 }
 
 /** Longest pause the app will ever suggest, in minutes. */
@@ -455,7 +577,12 @@ function calculateOvenOffDuration(scheduleVarianceMinutes) {
  *   the cook is refused in the danger zone, and without this the function had no
  *   way to know - it was advising oven-off at any core temperature at all.
  * @param {number|null} [params.targetTempF] - Pull target (°F), for the
- *   final-approach exemption in mayPauseCooking
+ *   oven-headroom floor
+ * @param {number} [params.pausedMinutesSoFar] - Oven-off minutes already spent
+ *   this cook, from totalOvenOffMinutes. Bounds the TOTAL, where
+ *   MAX_OVEN_OFF_MINUTES only bounds one suggestion.
+ * @param {boolean} [params.pauseEffectMeasured] - Whether a reading has been
+ *   logged since the oven last came back on; see hasReadingSinceLastRestart
  * @param {'F'|'C'} [params.displayUnits] - Unit the user's dial is marked in;
  *   suggestions are snapped to a settable increment in that unit
  * @returns {Object} Recommendation details
@@ -469,6 +596,8 @@ export function calculateRecommendation({
   currentRate,
   latestCoreTempF = null,
   targetTempF = null,
+  pausedMinutesSoFar = 0,
+  pauseEffectMeasured = true,
   displayUnits = 'F'
 }) {
   const {
@@ -597,113 +726,110 @@ export function calculateRecommendation({
     
     // Snap to something the dial can actually be set to (see the raise branch)
     let suggestedTemp = snapToDial(ovenBaseTemp - changeAmount, displayUnits);
-    
-    /**
-     * Never suggest an oven the roast cannot finish in.
-     *
-     * The core asymptotes to the surface and the surface to the oven, so an oven
-     * set at or near the pull temperature means the roast approaches it and never
-     * arrives. Lowering into that region does not slow a roast down, it stops it.
-     *
-     * Found by the harness, and it cost a whole cook: a 9 lb shoulder heading for
-     * 195 °F, four hours in and running 254 minutes early, was told to lower the
-     * oven to 200 °F. It then spent seven more hours creeping toward 195 and
-     * finished 38 °F short.
-     *
-     * The margin matters as much as the bound. At exactly pull + 0 the finish time
-     * is infinite; the roast needs real headroom for the last few degrees to take
-     * minutes rather than hours.
-     */
-    if (Number.isFinite(targetTempF)) {
-      const floorForTarget = snapToDial(targetTempF + MIN_OVEN_HEADROOM_F, displayUnits, 'up');
-      if (suggestedTemp < floorForTarget) {
-        // Only if the dial is above that floor is there anything to lower TO.
-        if (ovenBaseTemp <= floorForTarget) {
-          return {
-            action: 'hold',
-            suggestedTemp: ovenBaseTemp,
-            changeAmount: 0,
-            message: RECOMMENDATION_MESSAGES.EARLY_AT_TARGET_FLOOR,
-            reasoning: `Running ${Math.round(absVariance)} minutes early, but the oven cannot go lower without stalling the roast: it needs to stay at least ${MIN_OVEN_HEADROOM_F}°F above your ${Math.round(targetTempF)}°F pull temperature to finish at all.`,
-            alternativeMessage: null,
-            ovenOffMinutes: null,
-            practicalMinF: null,
-            minTempF: floorForTarget,
-            severity: 'info'
-          };
-        }
-        suggestedTemp = floorForTarget;
-      }
-    }
     if (ovenBaseTemp - suggestedTemp > recommendationMaxStepF) {
       suggestedTemp = snapToDial(ovenBaseTemp - recommendationMaxStepF, displayUnits, 'up');
     }
     if (suggestedTemp >= ovenBaseTemp) {
       suggestedTemp = snapToDial(ovenBaseTemp - dialStepF(displayUnits), displayUnits, 'down');
     }
-    changeAmount = ovenBaseTemp - suggestedTemp;
-    
-    // Check practical minimum first (most ovens can't go below ~175°F/80°C).
-    // Compared against the lowest *settable* value, not the raw limit: on a
-    // Celsius dial 175°F falls between marks, and treating the unreachable
-    // value as the floor left a "lower by 0°" recommendation behind.
+
+    /**
+     * ONE FLOOR ON LOWERING, not two competing ones.
+     *
+     * Two separate reasons the dial cannot go lower, and they used to be checked
+     * in sequence with the first one returning - which meant the second was
+     * unreachable whenever the first bound, and the pause path below was
+     * unreachable whenever either did.
+     *
+     *  - the PRACTICAL minimum: most ovens will not hold below ~175 °F.
+     *  - the TARGET HEADROOM: the core asymptotes to the oven, so an oven within
+     *    MIN_OVEN_HEADROOM_F of the target means the roast approaches it and
+     *    never arrives. Found by the harness costing a whole cook - a shoulder
+     *    told to lower to 200 °F for a 195 °F target crept for seven hours and
+     *    finished 38 °F short.
+     *
+     * The binding floor is whichever is higher.
+     */
     const practicalMinF = settings.ovenTempPracticalMinF || 175;
     const practicalMinSetting = snapToDial(practicalMinF, displayUnits, 'up');
+    const headroomFloor = Number.isFinite(targetTempF)
+      ? snapToDial(targetTempF + MIN_OVEN_HEADROOM_F, displayUnits, 'up')
+      : -Infinity;
+    const loweringFloor = Math.max(practicalMinSetting, headroomFloor);
+    const headroomBinds = headroomFloor > practicalMinSetting;
     const enableLowTemp = settings.enableLowTempRecommendations !== false;
-    
-    if (suggestedTemp < practicalMinSetting) {
-      // ORDER MATTERS HERE, and it used to be wrong.
-      //
-      // The clamp to the practical minimum comes FIRST, ahead of the
-      // enableLowTempRecommendations test. That setting means "may I suggest a
-      // temperature below the practical minimum" - lowering the dial TO the
-      // practical minimum is not such a suggestion. Testing it first meant a
-      // cook with the setting off, whose oven was at 250, was told to switch the
-      // oven OFF when "lower the dial to 175" was available, legal, and the
-      // obviously better answer.
-      if (ovenBaseTemp > practicalMinSetting) {
-        suggestedTemp = practicalMinSetting;
-        changeAmount = ovenBaseTemp - suggestedTemp;
-        
-        const messageTemplate = absVariance > 30 
-          ? RECOMMENDATION_MESSAGES.LOWER_LARGE 
-          : RECOMMENDATION_MESSAGES.LOWER_SMALL;
-        
+
+    if (suggestedTemp < loweringFloor) {
+      // There is still room to come down - just not as far as asked.
+      if (ovenBaseTemp > loweringFloor) {
+        suggestedTemp = loweringFloor;
+        const changeToFloor = ovenBaseTemp - suggestedTemp;
         return {
           action: 'lower',
           suggestedTemp: Math.round(suggestedTemp),
-          changeAmount: Math.round(changeAmount),
-          message: messageTemplate,
-          reasoning: `Running approximately ${Math.round(absVariance)} minutes early. This is the practical minimum for most ovens.`,
+          changeAmount: Math.round(changeToFloor),
+          message: absVariance > 30
+            ? RECOMMENDATION_MESSAGES.LOWER_LARGE
+            : RECOMMENDATION_MESSAGES.LOWER_SMALL,
+          reasoning: headroomBinds
+            ? `Running approximately ${Math.round(absVariance)} minutes early. This is as low as the oven can go and still finish the roast - it has to stay at least ${MIN_OVEN_HEADROOM_F}°F above your ${Math.round(targetTempF)}°F pull temperature.`
+            : `Running approximately ${Math.round(absVariance)} minutes early. This is the practical minimum for most ovens.`,
           alternativeMessage: null,
           ovenOffMinutes: null,
           practicalMinF: null,
           severity
         };
       }
-      
-      // The dial is already at or below the practical minimum, so the only
-      // remaining lever is time: pause the cook.
-      //
-      // Except below 140 °F core, where it is not a lever at all. Switching the
-      // oven off with the meat in the danger zone, for a duration the app cannot
-      // enforce, is not a timing decision. Hold and say so.
-      if (!mayPauseCooking(latestCoreTempF, targetTempF)) {
+
+      /**
+       * The dial is already at or below the floor, so lowering is finished as a
+       * lever. A PAUSE still is not: it is temporary, and it does not change the
+       * oven's steady state - which is the only thing the headroom floor is
+       * about. Gating the pause on that floor was wrong, and it made the pause
+       * feature unreachable for every cook whose target was within 25 °F of its
+       * oven.
+       */
+      const pauseCheck = mayPauseCooking(latestCoreTempF, {
+        pausedMinutesSoFar,
+        pauseEffectMeasured,
+        minutesEarly: absVariance
+      });
+
+      if (!pauseCheck.allowed) {
+        /**
+         * Nothing left to do but let it run. The message has to name the dial the
+         * cook is ACTUALLY on: the earlier version reported the floor
+         * ("220°F is as low as the oven can go") while the dial sat at 200, which
+         * is simply false.
+         */
+        const reasons = {
+          'danger-zone': `Running ${Math.round(absVariance)} minutes early, and the oven is as low as it can usefully go. Pausing is not offered below ${MIN_CORE_FOR_OVEN_OFF_F}°F core: switching the oven off lets the surface - the part the heat has actually been pasteurising - cool back toward the food-safety danger zone, for a stretch the app cannot police.`,
+          'pause-budget-spent': `Running ${Math.round(absVariance)} minutes early, but the oven has already been off for about ${Math.round(pausedMinutesSoFar)} minutes this cook. Each further pause keeps the meat cool for longer in total, so there are no more to offer.`,
+          'no-reading': `Running ${Math.round(absVariance)} minutes early. A fresh reading is needed before pausing can be considered.`,
+          'pause-unmeasured': `Running ${Math.round(absVariance)} minutes early, but nothing has been measured since the oven came back on - so how much the last pause bought is unknown. Log a reading before pausing again.`,
+          'pause-cannot-help': `Running ${Math.round(absVariance)} minutes early with the oven already as low as it can usefully go. Switching it off would not close a gap that size - a pause buys eight or ten minutes, not hours - so there is nothing further to do but serve a little early or find something to hold the meat in.`
+        };
         return {
           action: 'hold',
           suggestedTemp: ovenBaseTemp,
           changeAmount: 0,
-          message: RECOMMENDATION_MESSAGES.EARLY_NO_PAUSE_YET,
-          reasoning: `Running ${Math.round(absVariance)} minutes early with the oven already at its practical minimum. Pausing is not offered this far from target below ${MIN_CORE_FOR_OVEN_OFF_F}°F core: the meat would spend the pause in the food-safety danger zone with hours still to run.`,
+          message: {
+            'pause-budget-spent': RECOMMENDATION_MESSAGES.EARLY_PAUSE_BUDGET_SPENT,
+            'pause-unmeasured': RECOMMENDATION_MESSAGES.EARLY_PAUSE_UNMEASURED,
+            'pause-cannot-help': RECOMMENDATION_MESSAGES.EARLY_BEYOND_HELP
+          }[pauseCheck.reason] ?? RECOMMENDATION_MESSAGES.EARLY_NO_PAUSE_YET,
+          reasoning: reasons[pauseCheck.reason] ?? reasons['danger-zone'],
           alternativeMessage: null,
           ovenOffMinutes: null,
-          practicalMinF: practicalMinSetting,
+          // The dial the cook is on, so {minTemp} names something true.
+          minTempF: Math.round(ovenBaseTemp),
+          practicalMinF: null,
           severity: 'info'
         };
       }
-      
+
       const ovenOffMinutes = calculateOvenOffDuration(absVariance);
-      
+
       if (!enableLowTemp) {
         return {
           action: 'oven-off',
@@ -713,40 +839,24 @@ export function calculateRecommendation({
           reasoning: `Running ${Math.round(absVariance)} minutes early. Low temperature recommendations are disabled, but you can pause cooking temporarily.`,
           alternativeMessage: RECOMMENDATION_MESSAGES.OVEN_OFF_ALTERNATIVE,
           ovenOffMinutes,
-          // The settable value, so the message names a temperature the dial has
-          practicalMinF: practicalMinSetting,
+          practicalMinF: Math.round(ovenBaseTemp),
           severity: 'moderate'
         };
       }
-      
+
       return {
         action: 'oven-off',
         suggestedTemp: ovenBaseTemp,
         changeAmount: 0,
         message: RECOMMENDATION_MESSAGES.OVEN_OFF_SUGGESTED,
-        reasoning: `Running ${Math.round(absVariance)} minutes early. Your oven is already at the practical minimum temperature.`,
+        reasoning: `Running ${Math.round(absVariance)} minutes early. Your oven is already as low as it can usefully go.`,
         alternativeMessage: RECOMMENDATION_MESSAGES.OVEN_OFF_ALTERNATIVE,
         ovenOffMinutes,
         practicalMinF: null,
         severity: 'moderate'
       };
     }
-    
-    /*
-     * The food-safety lower bound (`ovenTempMinF`, 150 °F) was checked here, with
-     * an "already at minimum recommended temperature" hold behind it.
-     *
-     * Both were unreachable. This line is only reached when suggestedTemp is at or
-     * above the PRACTICAL minimum, which defaults to 175 °F - so it is already
-     * above the 150 °F food-safety floor, always. The practical minimum shadows
-     * the safety minimum completely, and the branch could never fire.
-     *
-     * Deleted rather than repaired: the guardrail that actually binds is the
-     * practical-minimum clamp above, and now the target-headroom clamp with it.
-     * Two floors where one is always higher is one floor and a piece of
-     * decoration that reads like a safety feature.
-     */
-    
+
     const messageTemplate = absVariance > 30 
       ? RECOMMENDATION_MESSAGES.LOWER_LARGE 
       : RECOMMENDATION_MESSAGES.LOWER_SMALL;
@@ -1149,6 +1259,8 @@ export function generateRecommendation({
       currentRate,
       latestCoreTempF: latestReading ? latestReading.temp : null,
       targetTempF: pullTempF,
+      pausedMinutesSoFar: totalOvenOffMinutes(ovenEvents, now),
+      pauseEffectMeasured: hasReadingSinceLastRestart(readings, ovenEvents),
       displayUnits
     });
     
@@ -1174,6 +1286,8 @@ export function generateRecommendation({
     currentRate,
     latestCoreTempF: latestReading ? latestReading.temp : null,
     targetTempF: pullTempF,
+    pausedMinutesSoFar: totalOvenOffMinutes(ovenEvents, now),
+    pauseEffectMeasured: hasReadingSinceLastRestart(readings, ovenEvents),
     displayUnits
   });
   

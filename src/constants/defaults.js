@@ -88,6 +88,15 @@ export const RECOMMENDATION_MESSAGES = {
   // the core is still under 140 F - so pausing is not offered. There is nothing
   // to do but let it run.
   EARLY_NO_PAUSE_YET: 'Running early with the oven already at {minTemp}. Let it run - pausing the oven is not safe until the core is above 140°F.',
+  // The oven has already been off long enough this cook. Each further pause adds
+  // danger-zone time, and nothing bounded the count before this.
+  EARLY_PAUSE_BUDGET_SPENT: 'Running early, but the oven has already been off long enough this cook. Let it run - more pauses would keep the meat cool for too long in total.',
+  // A pause is an oven change, and its effect has to be measured before another
+  // one is offered - otherwise the app re-pauses the instant the cook restarts.
+  EARLY_PAUSE_UNMEASURED: 'Running early. Log a reading before pausing again - nothing has measured what the last pause did.',
+  // So far ahead that the app's remaining lever - a pause worth eight or ten
+  // minutes - cannot close the gap. Saying so beats offering it anyway.
+  EARLY_BEYOND_HELP: 'You\'re a long way ahead and the oven is already as low as it usefully goes. Nothing the app can suggest will close that much - plan to serve early, or hold the meat once it\'s done.',
   // Lowering further would put the oven so close to the target that the roast
   // approaches it and never arrives.
   EARLY_AT_TARGET_FLOOR: 'Running early, but {minTemp} is as low as the oven can go and still finish this roast. Hold there.',
