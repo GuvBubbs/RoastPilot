@@ -201,12 +201,17 @@ export function guardProjection(minutesFromAnchor, anchorTime, now, refusal = nu
 
   const minutes = Math.round(minutesFromAnchor);
 
-  // The horizon. Even an exact model of the wrong roast produces a number, and a
-  // number on a clock face is indistinguishable from one the app stands behind.
-  if (minutes > CALCULATION_THRESHOLDS.MAX_PREDICTION_MINUTES) {
-    return refuse('beyond-horizon');
-  }
-
+  /**
+   * NO HORIZON CHECK HERE, on purpose.
+   *
+   * There used to be one, against CALCULATION_THRESHOLDS.MAX_PREDICTION_MINUTES,
+   * and it could never fire: every caller passes the output of `projectToTarget`,
+   * which refuses anything past PROJECTION_HORIZON_MINUTES itself, and the two
+   * constants are the same 1440 - so `Math.round(1440) > 1440` was the whole test.
+   * Two constants for one bound, one of them unreachable, is how a limit comes to
+   * be believed in without being enforced. The horizon is enforced where the
+   * projection is made, and `beyond-horizon` still arrives here as a `refusal`.
+   */
   const targetTime = addMinutes(anchorTime, minutes);
   return {
     minutes,
@@ -260,9 +265,17 @@ export function predictTimeToTarget(
   const hoursRemaining = tempRemaining / rate;
   const minutesRemaining = Math.round(hoursRemaining * 60);
   
-  // The horizon. A straight line fitted to three readings does not know it has
-  // left the range of everything it has seen, and the app has no way to say
-  // "this is a guess" once the number is a time on a clock.
+  /**
+   * The horizon. A straight line fitted to three readings does not know it has left
+   * the range of everything it has seen, and the app has no way to say "this is a
+   * guess" once the number is a time on a clock.
+   *
+   * This is the only surviving use of MAX_PREDICTION_MINUTES, and it is load-bearing
+   * here in a way it was not in guardProjection: the line has no horizon of its own.
+   * `predictTimeToTarget` is the linear baseline the oracle scores the real
+   * projection against and has no production callers, so this cap now guards a
+   * measuring instrument rather than the app.
+   */
   if (minutesRemaining > CALCULATION_THRESHOLDS.MAX_PREDICTION_MINUTES) {
     return refuse('beyond-horizon');
   }

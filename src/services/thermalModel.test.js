@@ -556,3 +556,84 @@ describe('the anchor is re-seated on the measurement', () => {
     expect(projection.minutes).toBeGreaterThan(0);
   });
 });
+
+describe('the fit search bracket', () => {
+  const BASE = Date.parse('2026-08-22T12:00:00.000Z');
+  const at = (minutes) => new Date(BASE + minutes * 60_000).toISOString();
+  const ovenEvents = [{ setTemp: 250, timestamp: at(-5), isOff: false }];
+
+  /** A cook generated from a known k, so the answer is not in question. */
+  function cookAt(trueK, count = 6) {
+    let state = { ovenF: 250, surfaceF: 45, coreF: 45 };
+    const temps = [45];
+    for (let i = 1; i < count; i++) {
+      state = advance(state, { minutes: 40, setPointF: 250 }, trueK);
+      temps.push(Math.round(state.coreF * 10) / 10);
+    }
+    return temps.map((temp, i) => ({ temp, timestamp: at(i * 40) }));
+  }
+
+  it('recovers the true rate whatever the weight claims', () => {
+    /**
+     * The bracket is prior/20 to prior*20, and the point of making it that wide was
+     * that a badly wrong weight should still contain the truth. At the extremes it
+     * did not: `1 lb + Beef Tenderloin` gives a prior of 0.058 and a floor of
+     * 0.0029, and against readings whose true k is 0.0020 the search stopped at the
+     * floor and reported it as a fitted value - 306 minutes against a true 482,
+     * with a residual just loose enough to still speak.
+     */
+    const trueK = 0.002049;
+    const readings = cookAt(trueK);
+    const priors = [
+      { weightLb: 1, meatType: 'Beef Tenderloin' },
+      { weightLb: 1, meatType: 'Prime Rib' },
+      { weightLb: 6, meatType: 'Prime Rib' },
+      { weightLb: 40, meatType: 'Pork Shoulder' }
+    ];
+
+    for (const claim of priors) {
+      clearFitCache();
+      const fit = fitThermalModel({ readings, ovenEvents, prior: kPrior(claim) });
+      const label = `${claim.weightLb} lb ${claim.meatType}`;
+      expect(fit.pinnedAtEdge, label).toBe(false);
+      expect(fit.k, label).toBeCloseTo(trueK, 3);
+      expect(fit.rmsResidual, label).toBeLessThan(1);
+    }
+  });
+
+  it('has enough room for anything a roast can do', () => {
+    /**
+     * Two expansions span 8000x the prior on the side that needed it. Across the
+     * whole 1-40 lb weight range that covers time constants from a couple of
+     * seconds to several weeks, so no physically representable cook lands on an
+     * edge - which is why nothing branches on `pinnedAtEdge`. A refusal for it
+     * would be unreachable code dressed as a safety net, and this repository has
+     * already had one of those.
+     *
+     * The extremes are checked here rather than asserted in a comment.
+     */
+    const extremes = [
+      { trueK: 1e-5, claim: { weightLb: 1, meatType: 'Beef Tenderloin' } },
+      { trueK: 0.2, claim: { weightLb: 40, meatType: 'Pork Shoulder' } },
+      { trueK: 1e-4, claim: { weightLb: 3, meatType: 'Pork Loin' } }
+    ];
+    for (const { trueK, claim } of extremes) {
+      clearFitCache();
+      const fit = fitThermalModel({
+        readings: cookAt(trueK), ovenEvents, prior: kPrior(claim)
+      });
+      expect(fit.pinnedAtEdge, `k ${trueK} against ${claim.weightLb} lb`).toBe(false);
+    }
+  });
+
+  it('does not widen on an ordinary cook', () => {
+    // The expansion costs a whole extra sweep, so it must not be the normal path.
+    const readings = cookAt(kPrior({ weightLb: 6, meatType: 'Prime Rib' }));
+    clearFitCache();
+    const fit = fitThermalModel({
+      readings, ovenEvents, prior: kPrior({ weightLb: 6, meatType: 'Prime Rib' })
+    });
+    expect(fit.pinnedAtEdge).toBe(false);
+    expect(fit.k).toBeCloseTo(kPrior({ weightLb: 6, meatType: 'Prime Rib' }), 3);
+  });
+});

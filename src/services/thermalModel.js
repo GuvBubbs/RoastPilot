@@ -433,6 +433,10 @@ export function evaluateCandidate(k, timeline, initial, openingSetPointF, actual
 
 /** Grid points in the coarse sweep. */
 const GRID_POINTS = 48;
+/** How much wider the bracket gets each time the optimum lands on its edge. */
+const BRACKET_EXPANSION = 20;
+/** How many times. Two takes the 40x span to 16000x, which is every roast there is. */
+const MAX_BRACKET_EXPANSIONS = 2;
 /** Golden-section iterations after it. */
 const GOLDEN_ITERATIONS = 20;
 const INV_PHI = (Math.sqrt(5) - 1) / 2;
@@ -576,26 +580,62 @@ function computeFit({ readings, ovenEvents = [], prior, nowISO = null }) {
     evaluateCandidate(k, timeline, initial, openingSetPointF, actual, prior);
 
   // ---- Coarse sweep ------------------------------------------------------
-  // A 40x span about the prior. Wide because the prior is a weight-scaled guess
-  // and a badly wrong weight - kilograms typed into a pounds field, say - must
-  // still leave the true k inside the bracket.
-  const lo = prior / 20;
-  const hi = prior * 20;
-  const logLo = Math.log(lo);
-  const logHi = Math.log(hi);
+  /**
+   * A 40x span about the prior, WIDENED IF THE BEST POINT LANDS ON AN EDGE.
+   *
+   * The span is wide because the prior is a weight-scaled guess and a badly wrong
+   * weight - kilograms typed into a pounds field, say - has to leave the true k
+   * inside the bracket. That was the stated intent, and at the extremes it did not
+   * hold: `1 lb + Beef Tenderloin` gives a prior of 0.058 and a floor of 0.0029,
+   * and against readings whose true k is 0.0020 the search simply stopped at the
+   * floor. It reported 0.0029 as a fitted value - 306 minutes against a true 482 -
+   * with a residual just loose enough to still speak.
+   *
+   * An optimum sitting on an edge is not an answer, it is the search saying the
+   * answer is outside the range it was allowed to look at. So when that happens the
+   * range is extended on that side and the sweep runs again. Every other prior
+   * across the full 1-40 lb range recovers the true k first time, so this costs
+   * nothing on an ordinary cook; the extremes get one or two more passes.
+   */
+  let lo = prior / 20;
+  let hi = prior * 20;
+  let logLo = Math.log(lo);
+  let logHi = Math.log(hi);
   let best = null;
   let bestIndex = 0;
-  const grid = [];
+  let grid = [];
+  let expansions = 0;
+  let pinnedAtEdge = false;
 
-  for (let i = 0; i < GRID_POINTS; i++) {
-    const k = Math.exp(logLo + ((logHi - logLo) * i) / (GRID_POINTS - 1));
-    const result = evaluate(k);
-    grid.push({ k, objective: result.objective });
-    if (best === null || result.objective < best.objective) {
-      best = { k, ...result };
-      bestIndex = i;
+  for (;;) {
+    best = null;
+    bestIndex = 0;
+    grid = [];
+    for (let i = 0; i < GRID_POINTS; i++) {
+      const k = Math.exp(logLo + ((logHi - logLo) * i) / (GRID_POINTS - 1));
+      const result = evaluate(k);
+      grid.push({ k, objective: result.objective });
+      if (best === null || result.objective < best.objective) {
+        best = { k, ...result };
+        bestIndex = i;
+      }
     }
+
+    const onLowEdge = bestIndex === 0;
+    const onHighEdge = bestIndex === GRID_POINTS - 1;
+    if (!onLowEdge && !onHighEdge) break;
+    if (expansions >= MAX_BRACKET_EXPANSIONS) {
+      // Still on an edge after widening: report it rather than passing a boundary
+      // off as a fit.
+      pinnedAtEdge = true;
+      break;
+    }
+    expansions++;
+    if (onLowEdge) logLo -= Math.log(BRACKET_EXPANSION);
+    else logHi += Math.log(BRACKET_EXPANSION);
   }
+  lo = Math.exp(logLo);
+  hi = Math.exp(logHi);
 
   // ---- Golden section on the bracketing interval -------------------------
   let leftLog = Math.log(grid[Math.max(0, bestIndex - 1)].k);
@@ -662,6 +702,19 @@ function computeFit({ readings, ovenEvents = [], prior, nowISO = null }) {
   return {
     k: chosen.k,
     prior,
+    /**
+     * Whether the search finished on the edge of its range even after widening.
+     *
+     * NOTHING BRANCHES ON THIS, deliberately. Two expansions span 8000x the prior
+     * in the direction that needed it, which at the extremes of the weight range
+     * covers time constants from a couple of seconds to several weeks - so there is
+     * no physically representable set of readings that still lands on an edge, and a
+     * refusal branch for it would be unreachable code dressed as a safety net. It
+     * is reported because a search that ran out of room is worth being able to see
+     * in a test, and because if the expansion limit is ever lowered this is the
+     * thing that would need a branch again.
+     */
+    pinnedAtEdge,
     sse: chosen.sse,
     residuals: chosen.residuals,
     rmsResidual: Math.sqrt(chosen.sse / Math.max(1, residualCount)),
