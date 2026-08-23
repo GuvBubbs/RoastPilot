@@ -12,6 +12,10 @@ import {
   confidenceFromFit,
   instantaneousRate,
   CONFIDENCE_BANDS,
+  SHAPE_FACTORS,
+  TAU_OVEN_HEAT_MIN,
+  TAU_OVEN_COOL_MIN,
+  REFERENCE_WEIGHT_LB,
   PROJECTION_HORIZON_MINUTES,
   AMBIENT_F
 } from './thermalModel.js';
@@ -404,5 +408,151 @@ describe('the fit, against a bad first reading', () => {
     expect(later.recentRmsResidual).toBeLessThan(early.recentRmsResidual);
     expect(later.recentRmsResidual).toBeLessThan(CONFIDENCE_BANDS.low);
     expect(later.rmsResidual).toBeGreaterThan(CONFIDENCE_BANDS.low);
+  });
+});
+
+/**
+ * THE CONSTANTS, PINNED THROUGH BEHAVIOUR.
+ *
+ * Every one of these could be changed without a single test noticing. Doubling
+ * `K_REFERENCE` was silent in both suites; quadrupling `TAU_OVEN_HEAT_MIN` and
+ * deleting the measured-core anchor were caught only by the simulated deck, which
+ * means they were caught by a baseline number moving rather than by anything
+ * saying what the constant is for.
+ *
+ * These assert the PHYSICS the constants encode, not the literals - a test reading
+ * `expect(TAU_OVEN_HEAT_MIN).toBe(10)` is a copy of the source, and would pass
+ * happily while the value it names had stopped meaning anything.
+ */
+describe('the constants mean what they say', () => {
+  it('brings the oven 1 - 1/e of the way to its dial in one time constant', () => {
+    // That fraction is what makes a number a first-order time constant at all.
+    const cold = { ovenF: 70, surfaceF: 70, coreF: 70 };
+    const after = advance(cold, { minutes: TAU_OVEN_HEAT_MIN, setPointF: 220 }, 0.011);
+    expect((after.ovenF - 70) / (220 - 70)).toBeCloseTo(1 - Math.exp(-1), 3);
+  });
+
+  it('cools far more slowly than it heats', () => {
+    // A closed oven with the element off gives up heat through its walls; it does
+    // not have a fan and an element driving it. Same fraction, longer clock.
+    const hot = { ovenF: 220, surfaceF: 220, coreF: 220 };
+    const after = advance(hot, { minutes: TAU_OVEN_COOL_MIN, setPointF: null }, 0.011);
+    expect((220 - after.ovenF) / (220 - AMBIENT_F)).toBeCloseTo(1 - Math.exp(-1), 3);
+    expect(TAU_OVEN_COOL_MIN).toBeGreaterThan(TAU_OVEN_HEAT_MIN * 2);
+  });
+
+  it('puts the reference roast where the real cook actually landed', () => {
+    /**
+     * This is where K_REFERENCE comes from, and the only reason the number is not
+     * arbitrary: the repo's one real instrumented cook is a 6 lb bone-in prime rib
+     * that reached 125 F at about 145 minutes in a 212 F oven. The prior for that
+     * roast has to reproduce it. Doubling K_REFERENCE was silent in every test;
+     * here it puts the roast 60 minutes early.
+     */
+    const k = kPrior({ weightLb: REFERENCE_WEIGHT_LB, meatType: 'Prime Rib' });
+    let state = { ovenF: 212, surfaceF: 48, coreF: 48 };
+    let reached = null;
+    for (let minutes = 1; minutes <= 900 && reached === null; minutes++) {
+      state = advance(state, { minutes: 1, setPointF: 212 }, k);
+      if (state.coreF >= 125) reached = minutes;
+    }
+    expect(reached).toBeGreaterThan(130);
+    expect(reached).toBeLessThan(160);
+  });
+
+  it('scales the prior as weight to the minus two thirds', () => {
+    /**
+     * The exponent is the whole physical content of the prior: conduction time
+     * goes as the square of a length and mass as its cube, so the rate constant
+     * goes as weight^(-2/3). Changing it to -1/3 was silent, and it is the
+     * difference between a 3 lb tenderloin and a 24 lb shoulder being told the same
+     * thing.
+     */
+    const ratio = kPrior({ weightLb: 6 }) / kPrior({ weightLb: 12 });
+    expect(ratio).toBeCloseTo(Math.pow(2, 2 / 3), 3);
+    // And across the full range the app allows, not just one doubling.
+    expect(kPrior({ weightLb: 3 }) / kPrior({ weightLb: 24 }))
+      .toBeCloseTo(Math.pow(8, 2 / 3), 2);
+  });
+
+  it('makes a long thin cut heat faster than a compact one of the same weight', () => {
+    // The shape factor, which was also silent. A tenderloin is thin, so its heat
+    // has less distance to travel than a shoulder's at equal weight.
+    const tenderloin = kPrior({ weightLb: 6, meatType: 'Beef Tenderloin' });
+    const shoulder = kPrior({ weightLb: 6, meatType: 'Pork Shoulder' });
+    expect(tenderloin).toBeGreaterThan(shoulder);
+    // The keys are lower-cased; the lookup has to be case-insensitive or every
+    // meat type the UI offers falls through to the neutral factor.
+    expect(SHAPE_FACTORS['beef tenderloin']).toBeGreaterThan(1);
+    expect(SHAPE_FACTORS['pork shoulder']).toBeLessThan(1);
+  });
+
+  it('clamps an implausible weight rather than believing it', () => {
+    // The field says pounds and nothing stops a cook typing kilograms, or 0.
+    const clamped = kPrior({ weightLb: 900 });
+    expect(clamped).toBe(kPrior({ weightLb: 40 }));
+    expect(kPrior({ weightLb: 0 })).toBe(kPrior({ weightLb: 1 }));
+  });
+});
+
+describe('the anchor is re-seated on the measurement', () => {
+  const BASE = Date.parse('2026-08-22T12:00:00.000Z');
+  const at = (minutes) => new Date(BASE + minutes * 60_000).toISOString();
+
+  it('starts the projection from the probe, not from where the curve passes', () => {
+    /**
+     * The headline fix of this whole change, and it had no test - it could be
+     * deleted with every unit test still green.
+     *
+     * The fit gives k and the surface state; the core is the one node anybody
+     * actually measured, so the projection starts from the reading. Without it a
+     * loose fit claims the roast is done while the probe disagrees: caught in a
+     * browser with readings ending at 114 F against a 121 F pull, a fit whose curve
+     * ran above them at the end, and a panel reading "PULL 11:57 PM / Target
+     * reached". A projection is entitled to be wrong about the future; it is not
+     * entitled to disagree with a thermometer about the present.
+     *
+     * The readings here deliberately do not sit on one curve, so the fitted value
+     * at the last reading is NOT the last reading - which is what makes the
+     * assertion meaningful rather than incidental.
+     */
+    const ovenEvents = [{ setTemp: 225, timestamp: at(-5), isOff: false }];
+    const readings = [
+      { temp: 48, timestamp: at(0) },
+      { temp: 90, timestamp: at(30) },
+      { temp: 100, timestamp: at(60) },
+      { temp: 104, timestamp: at(90) }
+    ];
+    clearFitCache();
+    const fit = fitThermalModel({
+      readings, ovenEvents, prior: kPrior({ weightLb: 6, meatType: 'Prime Rib' })
+    });
+
+    // The fit genuinely disagrees with the last reading, or this proves nothing.
+    expect(Math.abs(fit.fittedAnchorState.coreF - 104)).toBeGreaterThan(1);
+    // And the anchor the projection uses is the measurement.
+    expect(fit.anchorState.coreF).toBe(104);
+    // The surface keeps its fitted value - nobody measures the outside of a roast.
+    expect(fit.anchorState.surfaceF).toBe(fit.fittedAnchorState.surfaceF);
+  });
+
+  it('never reports the target reached while the probe says otherwise', () => {
+    // The browser bug, as an assertion: a curve running above the readings must
+    // not carry the projection over the line on its own.
+    const ovenEvents = [{ setTemp: 225, timestamp: at(-5), isOff: false }];
+    const readings = [
+      { temp: 48, timestamp: at(0) },
+      { temp: 95, timestamp: at(30) },
+      { temp: 108, timestamp: at(60) },
+      { temp: 114, timestamp: at(90) }
+    ];
+    clearFitCache();
+    const fit = fitThermalModel({
+      readings, ovenEvents, prior: kPrior({ weightLb: 6, meatType: 'Prime Rib' })
+    });
+    const projection = projectToTarget({
+      state: fit.anchorState, k: fit.k, setPointF: 225, targetF: 121
+    });
+    expect(projection.minutes).toBeGreaterThan(0);
   });
 });

@@ -22,6 +22,8 @@ import {
   radiusForWeightCm,
   ALPHA_CM2_PER_MIN,
   AMBIENT_F,
+  TAU_OVEN_HEAT_MIN,
+  TAU_OVEN_COOL_MIN,
   GEOMETRY
 } from './conductionModel.js';
 
@@ -225,5 +227,58 @@ describe('the Crank-Nicolson conduction solver', () => {
     const ratio = timeTo(48) / timeTo(6);
     expect(ratio).toBeGreaterThan(3.6);
     expect(ratio).toBeLessThan(4.4);
+  });
+});
+
+describe('the two engines agree about the oven', () => {
+  /**
+   * The independence that matters here is in the MEAT: Crank-Nicolson on a radial
+   * grid against a two-lag cascade, one with an infinite spectrum of decay modes
+   * and one with a single repeated pole. That is the thing being cross-checked and
+   * it stays independent.
+   *
+   * The oven is not that. It is the shared boundary condition both engines heat
+   * the meat with, and if the two disagree the oracle is simulating a different
+   * kitchen - every documented per-case error then measures the projection against
+   * the wrong truth, in a direction nobody can reason about. Both files declare
+   * these constants separately, which is fine as code and was silent as a defect:
+   * quadrupling the app's heating time constant left the oracle on the old value
+   * and nothing anywhere noticed.
+   *
+   * So the values stay duplicated - the oracle does not import the model it is
+   * judging - and the agreement is asserted instead.
+   */
+  it('uses the same oven lag and ambient temperature as the model', async () => {
+    const model = await import('../../src/services/thermalModel.js');
+
+    expect(TAU_OVEN_HEAT_MIN).toBe(model.TAU_OVEN_HEAT_MIN);
+    expect(TAU_OVEN_COOL_MIN).toBe(model.TAU_OVEN_COOL_MIN);
+    expect(AMBIENT_F).toBe(model.AMBIENT_F);
+  });
+
+  it('drives its oven to the dial on the same curve', () => {
+    /**
+     * Not just the same number: the same behaviour from it. Both engines must close
+     * 1 - 1/e of the gap in one time constant, or the constant means something
+     * different in each even while the two literals match.
+     *
+     * Measured across a DIAL CHANGE, because both engines start the oven already at
+     * its set point - the cook preheated - so there is no gap to close at t=0.
+     */
+    const oven = createConductionModel({ weightLb: 6, startCoreF: 70, ovenSetF: 175 });
+    const from = oven.ovenEffectiveF;
+    expect(from).toBeCloseTo(175, 6);
+
+    oven.setOven(275);
+    oven.step(TAU_OVEN_HEAT_MIN);
+    expect((oven.ovenEffectiveF - from) / (275 - from)).toBeCloseTo(1 - Math.exp(-1), 2);
+  });
+
+  it('cools on the same curve too', () => {
+    const oven = createConductionModel({ weightLb: 6, startCoreF: 70, ovenSetF: 220 });
+    oven.setOvenOff();
+    oven.step(TAU_OVEN_COOL_MIN);
+    expect((220 - oven.ovenEffectiveF) / (220 - AMBIENT_F))
+      .toBeCloseTo(1 - Math.exp(-1), 2);
   });
 });
