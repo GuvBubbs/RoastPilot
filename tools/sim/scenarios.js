@@ -453,7 +453,15 @@ export const SCENARIOS = [
     },
     readingsAt: cadence({ seed: 1212, everyMin: 45, jitterMin: 10, untilMin: 800 }),
     maxMinutes: 900,
-    excludeFromAcceptance: true
+    /**
+     * IN the acceptance aggregate, unlike the other three long cooks. It was out,
+     * with no reason recorded anywhere - and the plan excluded exactly one cook, not
+     * four. Putting it back moves aggregate reversals from 1 to 3, which is the
+     * point: an exclusion nobody could justify was keeping two real reversals out
+     * of the headline. Its stall is switched off and its thresholds are the ordinary
+     * ones, so there is nothing to exclude it for.
+     */
+    excludeFromAcceptance: false
   },
 
   {
@@ -492,6 +500,11 @@ export const SCENARIOS = [
     readingsAt: cadence({ seed: 1313, everyMin: 30, jitterMin: 6, untilMin: 500 }),
     maxMinutes: 560,
     advisoryConvergence: true,
+    // THE OTHER CONTROL. This cook is 6-7 hours early on purpose, so its
+    // convergence is the scenario's premise rather than the app's performance -
+    // the number to read here is whether the app refuses to pause a cold roast,
+    // which checkFoodSafety now asserts directly. Kept out of the aggregate for
+    // the same reason as 10, and asserted against its own baseline.
     excludeFromAcceptance: true
   },
 
