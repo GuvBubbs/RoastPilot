@@ -6,6 +6,7 @@ import {
   formatDuration, formatTime, formatTimeCompact, minutesBetween, addMinutes
 } from '../utils/timeUtils.js';
 import { useRefreshTimer } from './useRefreshTimer.js';
+import { advanceThroughOven, projectToTarget } from '../services/thermalModel.js';
 
 export function useCalculations() {
   const { readings, ovenEvents, config, settings, displayUnits } = useSession();
@@ -112,13 +113,24 @@ export function useCalculations() {
   });
   
   /**
-   * Formatted time remaining string
+   * The countdown as a string.
+   *
+   * When it runs out this used to say "Target reached", and that was a claim the
+   * app was in no position to make. Whether the target IS reached is a
+   * MEASUREMENT - `targetReached`, off the latest reading - and callers render
+   * that first. So the only way this branch ever appeared on screen was when the
+   * measurement said the target had NOT been reached: the projection's moment had
+   * arrived and nothing had confirmed it. That is precisely the moment to ask for
+   * a reading, not to announce a result. A cook could leave the roast in on the
+   * strength of a wall clock ticking past a prediction made an hour earlier.
    */
   const timeRemainingFormatted = computed(() => {
     const minutes = predictedMinutesFromNow.value;
     if (minutes === null) return '--';
-    if (minutes <= 0) return 'Target reached';
-    return formatDuration(minutes);
+    if (minutes > 0) return formatDuration(minutes);
+    // Within the rounding of a minute, "now" is the honest word.
+    if (minutes > -2) return 'Due now';
+    return `Due ${formatDuration(-minutes)} ago`;
   });
   
   /**
@@ -207,9 +219,49 @@ export function useCalculations() {
    * The ETA correctly disappears while the oven is off - there is no finish time
    * for a cooling roast - but that is a visible regression, so the pause UI can
    * say "about 2 h 10 m once the oven is back on" rather than a dash.
+   *
+   * RECOMPUTED HERE, AGAINST THE CLOCK, rather than taken from the service.
+   * `rawCalculations` pins `now` to the newest reading so that it has no tick
+   * dependency, which is the right call for the finish TIME but makes this figure
+   * a constant: nobody logs readings during a pause, so the anchor never moves
+   * and the service's answer was identical after three minutes of pause and after
+   * three hours. Observed as a flat "5m" across 208 minutes of a switched-off
+   * oven, while the real roast shed heat the entire time - the one number the
+   * pause UI exists to show, and it was the one number that could not change.
+   *
+   * So the anchor is carried forward through the pause to now, and the restart is
+   * projected from there. The answer grows the longer the oven stays off, which is
+   * both correct and the thing a cook needs to see.
    */
   const projectionIfRestarted = computed(() => {
-    return rawCalculations.value?.projectionIfRestarted ?? null;
+    tick.value; // this one genuinely does move with the clock
+    const base = rawCalculations.value?.projectionIfRestarted ?? null;
+    if (!base) return null;
+
+    const currentFit = rawCalculations.value?.fit;
+    const anchorISO = readings.value.length > 0
+      ? readings.value[readings.value.length - 1].timestamp
+      : null;
+    if (!currentFit?.anchorState || !anchorISO) return base;
+
+    const nowISO = new Date().toISOString();
+    const stateNow = advanceThroughOven(
+      currentFit.anchorState,
+      { ovenEvents: ovenEvents.value, fromISO: anchorISO, toISO: nowISO },
+      currentFit.k
+    );
+    const restarted = projectToTarget({
+      state: stateNow,
+      k: currentFit.k,
+      setPointF: base.atOvenTempF,
+      targetF: config.value?.pullTempF
+    });
+
+    return {
+      minutes: restarted.minutes === null ? null : Math.round(restarted.minutes),
+      reason: restarted.reason,
+      atOvenTempF: base.atOvenTempF
+    };
   });
   
   /** The fit itself, for the chart and the harness. Not for the UI to interpret. */

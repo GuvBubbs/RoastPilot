@@ -52,13 +52,13 @@ describe('useCalculations', () => {
   });
 
   /** A curved cook ending at `now`, generated from the model. */
-  function startCook({ units = 'F', ovenF = 200, startF = 48, k = 0.011, restMinutes = 0 } = {}) {
+  function startCook({ units = 'F', ovenF = 200, startF = 48, k = 0.011, restMinutes = 0, pullTempF = 125 } = {}) {
     // Wind back so startSession's opening oven event is the oldest.
     vi.setSystemTime(new Date(Date.parse(at(0)) - 60_000));
     probe.session.startSession({
       units,
-      pullTempF: 125,
-      servingTempF: 129,
+      pullTempF,
+      servingTempF: pullTempF + 4,
       carryoverF: 4,
       restMinutes,
       initialOvenTemp: ovenF,
@@ -108,6 +108,59 @@ describe('useCalculations', () => {
       await vi.advanceTimersByTimeAsync(20 * 60_000);
       await nextTick();
       expect(probe.calc.predictedMinutesFromNow.value).toBe(before - 20);
+    });
+  });
+
+  describe('the restart estimate while the oven is off', () => {
+    /**
+     * The pause UI's only number. It used to be frozen for the whole pause,
+     * because `rawCalculations` pins `now` to the newest reading and nobody logs a
+     * reading while the oven is off - so the anchor never moved and neither did
+     * the answer. Observed as a flat "5m" across 208 minutes of a switched-off
+     * oven.
+     */
+    it('grows the longer the oven stays off', async () => {
+      // A pull temperature the roast is nowhere near, so the pause is pure loss.
+      // With a target only a few degrees away the honest answer moves the other
+      // way - the stored heat carries the core over the line during the pause -
+      // which is the case below.
+      await startCook({ ovenF: 250, pullTempF: 175 });
+      probe.session.logOvenOff();
+      await nextTick();
+
+      const early = probe.calc.projectionIfRestarted.value;
+      expect(early).not.toBeNull();
+      expect(early.atOvenTempF).toBe(250);
+      expect(early.minutes).toBeGreaterThan(0);
+
+      await vi.advanceTimersByTimeAsync(120 * 60_000);
+      await nextTick();
+
+      const late = probe.calc.projectionIfRestarted.value;
+      // Two hours of cooling has to cost something: the roast is colder than it
+      // was, so bringing it to the pull temperature takes longer.
+      expect(late.minutes).toBeGreaterThan(early.minutes);
+      expect(late.atOvenTempF).toBe(250);
+    });
+
+    it('falls to nothing when the stored heat gets there during the pause', async () => {
+      // The other direction, and the reason this cannot simply be asserted as
+      // "increasing": four degrees short of the pull temperature, a roast with a
+      // 200 °F surface reaches it while the oven sits off. That is carryover, and
+      // a frozen estimate hid it.
+      await startCook();
+      probe.session.logOvenOff();
+      await nextTick();
+      expect(probe.calc.projectionIfRestarted.value.minutes).toBeGreaterThan(0);
+
+      await vi.advanceTimersByTimeAsync(120 * 60_000);
+      await nextTick();
+      expect(probe.calc.projectionIfRestarted.value.minutes).toBe(0);
+    });
+
+    it('is null while the oven is on', async () => {
+      await startCook();
+      expect(probe.calc.projectionIfRestarted.value).toBeNull();
     });
   });
 
@@ -204,6 +257,50 @@ describe('useCalculations', () => {
       await nextTick();
       expect(probe.calc.pullProgress.value.state).toBe('approaching');
       expect(probe.calc.isApproachingPull.value).toBe(true);
+    });
+  });
+
+  describe('the countdown running out is not a result', () => {
+    /**
+     * `timeRemainingFormatted` used to say "Target reached" the moment the clock
+     * passed the predicted time. But whether the target is reached is a
+     * MEASUREMENT, and callers render that first - so this branch could only ever
+     * appear on screen when the measurement said the target had NOT been reached.
+     * The app announced a result on the strength of a wall clock ticking past a
+     * prediction, with nothing having looked at the roast since.
+     */
+    it('asks rather than announces when the predicted moment arrives', async () => {
+      await startCook();
+      const minutesOut = probe.calc.predictedMinutesFromNow.value;
+      expect(minutesOut).toBeGreaterThan(0);
+
+      // Let the clock run past the prediction without logging a reading.
+      vi.advanceTimersByTime((minutesOut + 1) * 60_000);
+      await nextTick();
+
+      expect(probe.calc.predictedMinutesFromNow.value).toBeLessThanOrEqual(0);
+      // The measurement still says no - which is exactly why the old wording was
+      // never anything but a contradiction of it.
+      expect(probe.calc.targetReached.value).toBe(false);
+      expect(probe.calc.timeRemainingFormatted.value).not.toMatch(/reached/i);
+      expect(probe.calc.timeRemainingFormatted.value).toBe('Due now');
+    });
+
+    it('says how far past the predicted moment it is', async () => {
+      await startCook();
+      const minutesOut = probe.calc.predictedMinutesFromNow.value;
+      vi.advanceTimersByTime((minutesOut + 40) * 60_000);
+      await nextTick();
+
+      expect(probe.calc.targetReached.value).toBe(false);
+      expect(probe.calc.timeRemainingFormatted.value).toBe('Due 40m ago');
+    });
+
+    it('defers to the measurement once a reading confirms it', async () => {
+      await startCook();
+      probe.session.addReading(130, at(150));
+      await nextTick();
+      expect(probe.calc.targetReached.value).toBe(true);
     });
   });
 

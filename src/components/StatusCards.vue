@@ -259,8 +259,10 @@ const lastReadingAgo = computed(() => {
 
 const hasServeTime = computed(() => Boolean(config.value?.desiredServeTime));
 
-// "Target reached" is 14 characters at 22px — it will not survive a 96px cell,
-// and the composable has no reason to know the cell width.
+// The measurement wins over the countdown, and it is shortened here because the
+// composable has no reason to know the cell is 96px wide. When the measurement
+// says the target is NOT reached, the countdown says "Due now" rather than
+// claiming the result - see `timeRemainingFormatted`.
 const remainingText = computed(() =>
   targetReached.value ? 'Reached' : timeRemainingFormatted.value
 );

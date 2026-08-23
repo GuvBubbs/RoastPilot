@@ -312,6 +312,60 @@ export function replay(k, timeline, initial, openingSetPointF) {
   return { predicted, endState: state, stateAtLastReading, setPointF };
 }
 
+/** The dial setting in force at a given instant, or null if the oven is off. */
+export function setPointAt(ovenEvents, iso) {
+  const t = Date.parse(iso);
+  let setPointF = null;
+  for (const event of ovenEvents ?? []) {
+    if (Date.parse(event.timestamp) > t) break;
+    setPointF = event.isOff === true ? null : event.setTemp;
+  }
+  return setPointF;
+}
+
+/**
+ * Carry a state forward from one instant to another through the real oven
+ * history, honouring every dial change in between.
+ *
+ * This is what the fit cannot do for you. The fit is anchored at the newest
+ * reading and is deliberately clock-free, so anything that needs to know where
+ * the roast is NOW - rather than where it was when it was last measured - has to
+ * integrate the gap itself.
+ *
+ * The case that made this necessary: while the oven is off the app offers an
+ * estimate of what would happen once it is back on, and that estimate was
+ * computed from the anchor. With no new readings during a pause the anchor does
+ * not move, so the figure was identical after three minutes of pause and after
+ * three hours - the same "5m" either way, while the real roast had been shedding
+ * heat the whole time. The estimate has to be taken from where the roast is now.
+ *
+ * @param {Object} state - { ovenF, surfaceF, coreF }
+ * @param {Object} span
+ * @param {Array} span.ovenEvents - Chronological
+ * @param {string} span.fromISO
+ * @param {string} span.toISO
+ * @param {number} k
+ */
+export function advanceThroughOven(state, { ovenEvents = [], fromISO, toISO }, k) {
+  const from = Date.parse(fromISO);
+  const to = Date.parse(toISO);
+  if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from) return { ...state };
+
+  let cursor = from;
+  let setPointF = setPointAt(ovenEvents, fromISO);
+  let current = { ...state };
+
+  for (const event of ovenEvents) {
+    const t = Date.parse(event.timestamp);
+    if (t <= from || t >= to) continue;
+    current = advance(current, { minutes: (t - cursor) / 60_000, setPointF }, k);
+    cursor = t;
+    setPointF = event.isOff === true ? null : event.setTemp;
+  }
+
+  return advance(current, { minutes: (to - cursor) / 60_000, setPointF }, k);
+}
+
 /**
  * Sum of squared residuals plus the prior penalty.
  *
@@ -532,9 +586,15 @@ function computeFit({ readings, ovenEvents = [], prior, nowISO = null }) {
     // The state at the newest reading is the anchor every projection starts from.
     anchorState,
     fittedAnchorState: chosen.replayed.stateAtLastReading,
-    // ...and the state right now, which differs from it by however long ago that
-    // reading was taken.
-    nowState: chosen.replayed.endState,
+    /**
+     * There is deliberately NO `nowState` here. It used to be exported, and it
+     * was a trap: the cache key excludes `nowISO` (see fitCacheKey, and that
+     * exclusion is correct), so "the state right now" was frozen at whatever the
+     * clock said the first time this reading set was fitted. Nothing consumed it,
+     * which is the only reason it never produced a visible bug. Anything wanting
+     * the state at a particular moment must ask for that moment explicitly:
+     * `advanceThroughOven(fit.anchorState, {...}, fit.k)`.
+     */
     currentSetPointF: chosen.replayed.setPointF,
     integrations: GRID_POINTS + GOLDEN_ITERATIONS
   };
