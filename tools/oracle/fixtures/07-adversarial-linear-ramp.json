@@ -1,0 +1,102 @@
+{
+  "name": "07-adversarial-linear-ramp",
+  "what": "A perfectly straight ramp, 30 F/hr, forever. No thermal model produces this - a real core decelerates as it closes on the surface. The app must not report a good fit for it.",
+  "family": "none: a straight line",
+  "adversarial": true,
+  "weightLb": 6,
+  "pullTempF": 125,
+  "trueHitMin": 154,
+  "readings": [
+    {
+      "temp": 48,
+      "timestamp": "2026-08-22T18:00:00.000Z"
+    },
+    {
+      "temp": 55.5,
+      "timestamp": "2026-08-22T18:15:00.000Z"
+    },
+    {
+      "temp": 63,
+      "timestamp": "2026-08-22T18:30:00.000Z"
+    },
+    {
+      "temp": 70.5,
+      "timestamp": "2026-08-22T18:45:00.000Z"
+    },
+    {
+      "temp": 78,
+      "timestamp": "2026-08-22T19:00:00.000Z"
+    },
+    {
+      "temp": 85.5,
+      "timestamp": "2026-08-22T19:15:00.000Z"
+    },
+    {
+      "temp": 93,
+      "timestamp": "2026-08-22T19:30:00.000Z"
+    },
+    {
+      "temp": 100.5,
+      "timestamp": "2026-08-22T19:45:00.000Z"
+    },
+    {
+      "temp": 108,
+      "timestamp": "2026-08-22T20:00:00.000Z"
+    },
+    {
+      "temp": 115.5,
+      "timestamp": "2026-08-22T20:15:00.000Z"
+    },
+    {
+      "temp": 123,
+      "timestamp": "2026-08-22T20:30:00.000Z"
+    },
+    {
+      "temp": 130.5,
+      "timestamp": "2026-08-22T20:45:00.000Z"
+    },
+    {
+      "temp": 138,
+      "timestamp": "2026-08-22T21:00:00.000Z"
+    },
+    {
+      "temp": 145.5,
+      "timestamp": "2026-08-22T21:15:00.000Z"
+    },
+    {
+      "temp": 153,
+      "timestamp": "2026-08-22T21:30:00.000Z"
+    },
+    {
+      "temp": 160.5,
+      "timestamp": "2026-08-22T21:45:00.000Z"
+    },
+    {
+      "temp": 168,
+      "timestamp": "2026-08-22T22:00:00.000Z"
+    },
+    {
+      "temp": 175.5,
+      "timestamp": "2026-08-22T22:15:00.000Z"
+    },
+    {
+      "temp": 183,
+      "timestamp": "2026-08-22T22:30:00.000Z"
+    },
+    {
+      "temp": 190.5,
+      "timestamp": "2026-08-22T22:45:00.000Z"
+    },
+    {
+      "temp": 198,
+      "timestamp": "2026-08-22T23:00:00.000Z"
+    }
+  ],
+  "ovenEvents": [
+    {
+      "setTemp": 200,
+      "timestamp": "2026-08-22T18:00:00.000Z",
+      "isOff": false
+    }
+  ]
+}

@@ -1,0 +1,132 @@
+{
+  "name": "04-cylinder-dial-moved",
+  "what": "Two dial changes mid-cook. The projection integrates the actual timeline, so this is the case that would break a model which averaged the oven.",
+  "family": "1-D conduction, cylinder",
+  "adversarial": false,
+  "weightLb": 6,
+  "pullTempF": 125,
+  "trueHitMin": 127,
+  "readings": [
+    {
+      "temp": 48,
+      "timestamp": "2026-08-22T18:00:00.000Z"
+    },
+    {
+      "temp": 48,
+      "timestamp": "2026-08-22T18:12:00.000Z"
+    },
+    {
+      "temp": 48.5,
+      "timestamp": "2026-08-22T18:24:00.000Z"
+    },
+    {
+      "temp": 51.8,
+      "timestamp": "2026-08-22T18:36:00.000Z"
+    },
+    {
+      "temp": 58.1,
+      "timestamp": "2026-08-22T18:48:00.000Z"
+    },
+    {
+      "temp": 66.4,
+      "timestamp": "2026-08-22T19:00:00.000Z"
+    },
+    {
+      "temp": 75.9,
+      "timestamp": "2026-08-22T19:12:00.000Z"
+    },
+    {
+      "temp": 86.4,
+      "timestamp": "2026-08-22T19:24:00.000Z"
+    },
+    {
+      "temp": 97.6,
+      "timestamp": "2026-08-22T19:36:00.000Z"
+    },
+    {
+      "temp": 108.7,
+      "timestamp": "2026-08-22T19:48:00.000Z"
+    },
+    {
+      "temp": 119.5,
+      "timestamp": "2026-08-22T20:00:00.000Z"
+    },
+    {
+      "temp": 129.4,
+      "timestamp": "2026-08-22T20:12:00.000Z"
+    },
+    {
+      "temp": 138,
+      "timestamp": "2026-08-22T20:24:00.000Z"
+    },
+    {
+      "temp": 145.4,
+      "timestamp": "2026-08-22T20:36:00.000Z"
+    },
+    {
+      "temp": 151.6,
+      "timestamp": "2026-08-22T20:48:00.000Z"
+    },
+    {
+      "temp": 156.9,
+      "timestamp": "2026-08-22T21:00:00.000Z"
+    },
+    {
+      "temp": 161.5,
+      "timestamp": "2026-08-22T21:12:00.000Z"
+    },
+    {
+      "temp": 165.6,
+      "timestamp": "2026-08-22T21:24:00.000Z"
+    },
+    {
+      "temp": 169.2,
+      "timestamp": "2026-08-22T21:36:00.000Z"
+    },
+    {
+      "temp": 172.4,
+      "timestamp": "2026-08-22T21:48:00.000Z"
+    },
+    {
+      "temp": 175.2,
+      "timestamp": "2026-08-22T22:00:00.000Z"
+    },
+    {
+      "temp": 177.8,
+      "timestamp": "2026-08-22T22:12:00.000Z"
+    },
+    {
+      "temp": 180.1,
+      "timestamp": "2026-08-22T22:24:00.000Z"
+    },
+    {
+      "temp": 182.1,
+      "timestamp": "2026-08-22T22:36:00.000Z"
+    },
+    {
+      "temp": 183.9,
+      "timestamp": "2026-08-22T22:48:00.000Z"
+    },
+    {
+      "temp": 185.6,
+      "timestamp": "2026-08-22T23:00:00.000Z"
+    }
+  ],
+  "ovenEvents": [
+    {
+      "setTemp": 175,
+      "timestamp": "2026-08-22T18:00:00.000Z",
+      "isOff": false
+    },
+    {
+      "setTemp": 225,
+      "timestamp": "2026-08-22T18:37:00.000Z",
+      "isOff": false
+    },
+    {
+      "setTemp": 200,
+      "timestamp": "2026-08-22T19:37:00.000Z",
+      "isOff": false
+    }
+  ]
+}

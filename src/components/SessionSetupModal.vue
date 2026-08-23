@@ -10,10 +10,15 @@
            They are first and need no unfolding. Everything below them is a
            refinement of a working default. -->
       <div class="space-y-5">
-        <!-- Target ------------------------------------------------------- -->
+        <!-- On the plate --------------------------------------------------
+             The cook states the doneness they want to EAT. The temperature to
+             pull at is derived from it, because that is a fact about the roast
+             rather than a decision the cook should have to make in their head -
+             two of the presets used to carry a note telling them to do exactly
+             that arithmetic. -->
         <section>
           <div class="flex items-center justify-between gap-3">
-            <span class="section-label">Target</span>
+            <span class="section-label">On the plate</span>
             <UnitToggle
               :model-value="form.units.value"
               @update:model-value="handleUnitChange"
@@ -22,14 +27,15 @@
 
           <div class="mt-3">
             <NumberStepper
-              v-model="form.targetTemp.value"
-              label="Internal temperature"
+              :model-value="form.servingTemp.value"
+              label="Internal temperature when served"
               :suffix="'°' + form.units.value"
               :step="1"
               :min="tempRanges.min"
               :max="tempRanges.max"
-              :error="form.targetTemp.touched ? form.targetTemp.error : ''"
-              @blur="form.targetTemp.touched = true"
+              :error="form.servingTemp.touched ? form.servingTemp.error : ''"
+              @blur="form.servingTemp.touched = true"
+              @update:model-value="noteUserEdit('servingTemp', $event)"
             />
           </div>
 
@@ -45,6 +51,43 @@
               <span class="truncate">{{ preset.name }}</span>
               <span class="num text-ink-mute">{{ formatTemperature(preset.targetF, form.units.value) }}</span>
             </button>
+          </div>
+
+          <!-- The derived half, stated rather than hidden: this is the number
+               the app will actually steer to, and a cook who disagrees with the
+               carryover estimate needs to see it to know that. -->
+          <p class="mt-3 text-[13px] text-ink-dim">
+            Comes out of the oven at
+            <span class="num text-ink">{{ derivedPullText }}</span>,
+            then climbs about
+            <span class="num text-ink">{{ carryoverText }}</span>
+            while it rests.
+          </p>
+        </section>
+
+        <!-- Rest ----------------------------------------------------------
+             Subtracted from the serve time to get the moment the meat has to be
+             out of the oven. Nothing subtracted it before, which is why dinner
+             ran 20-45 minutes late as a matter of course. -->
+        <section class="rule-t pt-5">
+          <span class="section-label">Rest</span>
+          <p class="mt-1 text-[13px] text-ink-mute">
+            Time on the board before carving. The app aims to have the meat out
+            of the oven this far ahead of your serve time.
+          </p>
+          <div class="mt-3">
+            <!-- `@update:model-value` rather than a watcher on the value: see
+                 noteUserEdit. Choosing a preset writes this field too, and a
+                 watcher cannot tell that apart from the cook typing. -->
+            <NumberStepper
+              :model-value="form.restMinutes.value"
+              label="Minutes resting"
+              suffix="min"
+              :step="5"
+              :min="0"
+              :max="90"
+              @update:model-value="noteUserEdit('restMinutes', $event)"
+            />
           </div>
         </section>
 
@@ -121,7 +164,7 @@
 
           <div class="mt-3">
             <NumberStepper
-              v-model="form.initialOvenTemp.value"
+              :model-value="form.initialOvenTemp.value"
               label="Starting oven setting"
               :suffix="'°' + form.units.value"
               :step="1"
@@ -130,6 +173,7 @@
               :max="ovenTempRanges.max"
               :error="form.initialOvenTemp.touched ? form.initialOvenTemp.error : ''"
               @blur="form.initialOvenTemp.touched = true"
+              @update:model-value="noteUserEdit('initialOvenTemp', $event)"
             />
           </div>
 
@@ -160,7 +204,89 @@
           </p>
         </section>
 
-        <!-- Meat details (folded away — nothing here changes the maths) --- -->
+        <!-- The roast ---------------------------------------------------
+             Weight used to live inside the fold below, under a comment reading
+             "nothing here changes the maths". That is no longer true: the
+             projection's prior on how fast this particular roast heats scales as
+             weight^(-2/3), and the meat type sets the shape factor on top of it.
+             A field that feeds the model does not belong behind a disclosure
+             triangle labelled optional.
+
+             Its influence is honest, though, and stated as such below: once three
+             readings exist the prior is about a tenth of a percent of the fit.
+             What it buys is a projection on the very first eligible reading
+             instead of none. -->
+        <section class="rule-t pt-5">
+          <span class="section-label">The roast</span>
+
+          <div class="mt-3 space-y-4">
+            <div>
+              <label for="meatTypeMain" class="label">Type</label>
+              <select
+                id="meatTypeMain"
+                v-model="form.meatType.value"
+                class="field-select"
+                @change="handleMeatTypeChange"
+              >
+                <option value="">Not specified</option>
+                <option v-for="preset in MEAT_PRESETS" :key="preset.type" :value="preset.type">
+                  {{ preset.type }}
+                </option>
+              </select>
+            </div>
+
+            <div v-if="selectedMeatPreset">
+              <label for="meatCutMain" class="label">Cut</label>
+              <select id="meatCutMain" v-model="form.meatCut.value" class="field-select">
+                <option value="">Not specified</option>
+                <option v-for="cut in selectedMeatPreset.cuts" :key="cut" :value="cut">
+                  {{ cut }}
+                </option>
+              </select>
+            </div>
+
+            <div>
+              <div class="flex items-center justify-between gap-3">
+                <span class="label mb-0">Weight</span>
+                <!-- Weight is independent of the temperature unit: a cook who
+                     thinks in °C may well buy meat in pounds, and one who thinks
+                     in °F may not. Its own toggle, its own preference. -->
+                <div class="flex gap-1 p-0.5 rounded-lg bg-raised border border-rule" role="group" aria-label="Weight unit">
+                  <button
+                    v-for="unit in ['lb', 'kg']"
+                    :key="unit"
+                    type="button"
+                    class="tap px-3 rounded-md text-[13px] font-medium transition-colors duration-150"
+                    :class="form.weightUnit.value === unit ? 'bg-rule text-ink' : 'text-ink-dim'"
+                    :aria-pressed="form.weightUnit.value === unit"
+                    @click="setWeightUnit(unit)"
+                  >
+                    {{ unit }}
+                  </button>
+                </div>
+              </div>
+              <div class="mt-2">
+                <NumberStepper
+                  v-model="form.weight.value"
+                  :label="form.weightUnit.value"
+                  :suffix="form.weightUnit.value"
+                  :step="form.weightUnit.value === 'kg' ? 0.1 : 0.5"
+                  :min="0"
+                  :max="form.weightUnit.value === 'kg' ? 45 : 100"
+                  :error="form.weight.touched ? form.weight.error : ''"
+                  @blur="form.weight.touched = true"
+                />
+              </div>
+              <p class="mt-1.5 text-[12px] leading-snug text-ink-mute">
+                Sets the app's opening guess at how fast this roast heats — bigger
+                takes longer, and not in proportion. The readings take over from
+                it within the first hour.
+              </p>
+            </div>
+          </div>
+        </section>
+
+        <!-- Everything else, folded away ------------------------------------ -->
         <section class="rule-t pt-5">
           <button
             type="button"
@@ -168,7 +294,7 @@
             :aria-expanded="showMeatDetails"
             @click="showMeatDetails = !showMeatDetails"
           >
-            <span class="section-label">Meat details — optional</span>
+            <span class="section-label">Notes — optional</span>
             <svg
               class="w-4 h-4 shrink-0 text-ink-dim transition-transform duration-150"
               :class="{ 'rotate-180': showMeatDetails }"
@@ -182,42 +308,6 @@
           </button>
 
           <div v-show="showMeatDetails" class="mt-3 space-y-4">
-            <div>
-              <label for="meatType" class="label">Type</label>
-              <select
-                id="meatType"
-                v-model="form.meatType.value"
-                class="field-select"
-                @change="handleMeatTypeChange"
-              >
-                <option value="">Not specified</option>
-                <option v-for="preset in MEAT_PRESETS" :key="preset.type" :value="preset.type">
-                  {{ preset.type }}
-                </option>
-              </select>
-            </div>
-
-            <div v-if="selectedMeatPreset">
-              <label for="meatCut" class="label">Cut</label>
-              <select id="meatCut" v-model="form.meatCut.value" class="field-select">
-                <option value="">Not specified</option>
-                <option v-for="cut in selectedMeatPreset.cuts" :key="cut" :value="cut">
-                  {{ cut }}
-                </option>
-              </select>
-            </div>
-
-            <NumberStepper
-              v-model="form.weight.value"
-              label="Weight"
-              suffix="lbs"
-              :step="0.5"
-              :min="0"
-              :max="100"
-              :error="form.weight.touched ? form.weight.error : ''"
-              @blur="form.weight.touched = true"
-            />
-
             <div>
               <label for="notes" class="label">Notes</label>
               <textarea
@@ -268,6 +358,10 @@ import { sanitizeString } from '../utils/validationUtils.js';
 import { toStorageUnit, formatTemperature, fahrenheitToCelsius, celsiusToFahrenheit } from '../utils/temperatureUtils.js';
 import { addMinutes } from '../utils/timeUtils.js';
 import { MEAT_PRESETS, SESSION_DEFAULTS } from '../constants/defaults.js';
+import { estimateCarryoverF, pullTempFor } from '../services/carryoverService.js';
+import { storageService } from '../services/storageService.js';
+import { weightToDisplay, weightToStorage } from '../utils/temperatureUtils.js';
+import { validateSessionConfig } from '../utils/validationUtils.js';
 
 const props = defineProps({
   modelValue: {
@@ -287,12 +381,13 @@ const emit = defineEmits(['update:modelValue', 'submit', 'cancel']);
 const { preferredUnits } = useSession();
 
 // Defaults are stored in Fahrenheit; the form works in display units.
-const getInitialTargetTemp = (units) => {
+const getInitialServingTemp = (units) => {
   if (units === 'C') {
-    // Target temp with 1 decimal place for Celsius
-    return Math.round(fahrenheitToCelsius(SESSION_DEFAULTS.TARGET_TEMP_F) * 10) / 10;
+    // 1 decimal place for Celsius: 1 °F is finer than 1 °C, and a doneness
+    // target rounded to the whole degree Celsius moves by nearly two °F.
+    return Math.round(fahrenheitToCelsius(SESSION_DEFAULTS.SERVING_TEMP_F) * 10) / 10;
   }
-  return SESSION_DEFAULTS.TARGET_TEMP_F;
+  return SESSION_DEFAULTS.SERVING_TEMP_F;
 };
 
 const getInitialOvenTemp = (units) => {
@@ -302,6 +397,20 @@ const getInitialOvenTemp = (units) => {
   }
   return SESSION_DEFAULTS.INITIAL_OVEN_TEMP_F;
 };
+
+/**
+ * Switch the weight unit, converting the value with it and recording the choice.
+ *
+ * The value is converted rather than reinterpreted: a cook who typed 6 lb and
+ * then taps kg means 2.7 kg, not 6 kg.
+ */
+function setWeightUnit(unit) {
+  if (unit === form.weightUnit.value) return;
+  const asLb = weightToStorage(form.weight.value, form.weightUnit.value);
+  form.weightUnit.value = unit;
+  form.weight.value = weightToDisplay(asLb, unit);
+  storageService.saveWeightUnit(unit);
+}
 
 /** `datetime-local` wants a local-time string, not an ISO instant. */
 function toLocalInputValue(date) {
@@ -313,7 +422,8 @@ const startingUnits = preferredUnits.value;
 
 // Form state
 const form = reactive({
-  targetTemp: { value: getInitialTargetTemp(startingUnits), error: '', touched: false },
+  servingTemp: { value: getInitialServingTemp(startingUnits), error: '', touched: false },
+  restMinutes: { value: SESSION_DEFAULTS.REST_MINUTES, error: '', touched: false },
   units: { value: startingUnits, error: '', touched: false },
   startingTemp: { value: null, error: '', touched: false },
   desiredServeTime: { value: '', error: '', touched: false },
@@ -322,6 +432,7 @@ const form = reactive({
   meatType: { value: '', error: '', touched: false },
   meatCut: { value: '', error: '', touched: false },
   weight: { value: null, error: '', touched: false },
+  weightUnit: { value: storageService.loadWeightUnit() ?? 'lb', error: '', touched: false },
   notes: { value: '', error: '', touched: false }
 });
 
@@ -333,6 +444,44 @@ const timeRemaining = reactive({
 const showMeatDetails = ref(false);
 const userHasEditedTarget = ref(false);
 const userHasEditedOven = ref(false);
+const userHasEditedRest = ref(false);
+
+/**
+ * Carryover for the oven the cook has chosen, in °F.
+ *
+ * Computed live *while setting up*, which is the one moment it is safe to: no
+ * cook is running, so there is no finish line to move and no loop from the
+ * recommendation engine back into its own target. Once the session exists the
+ * value is frozen on it - see carryoverService.js.
+ */
+const carryoverF = computed(() => {
+  const ovenF = form.initialOvenTemp.value === null
+    ? SESSION_DEFAULTS.INITIAL_OVEN_TEMP_F
+    : toStorageUnit(form.initialOvenTemp.value, form.units.value);
+  return estimateCarryoverF(ovenF);
+});
+
+/** The serving temperature in °F, whatever unit the form is in. */
+const servingTempF = computed(() =>
+  form.servingTemp.value === null
+    ? null
+    : toStorageUnit(form.servingTemp.value, form.units.value)
+);
+
+const pullTempF = computed(() =>
+  servingTempF.value === null ? null : pullTempFor(servingTempF.value, carryoverF.value)
+);
+
+const derivedPullText = computed(() =>
+  pullTempF.value === null ? '--' : formatTemperature(pullTempF.value, form.units.value)
+);
+
+/** A DELTA, so no 32° offset: +4 °F is +2.2 °C, not -15.6 °C. */
+const carryoverText = computed(() => {
+  const raw = carryoverF.value;
+  const value = form.units.value === 'C' ? Math.round((raw * 5 / 9) * 10) / 10 : raw;
+  return `+${value}°${form.units.value}`;
+});
 
 // Quick select targets
 const quickSelectTargets = [
@@ -354,7 +503,10 @@ const ovenTempRanges = computed(() => {
   if (form.units.value === 'F') {
     return { min: 100, max: 550 };
   } else {
-    return { min: 38, max: 288 };
+    // 287, not 288. The validator's ceiling is 550 °F and 288 °C is 550.4 - so a
+    // Celsius cook could reach a value the app then refuses, with no way to see
+    // why. 287 °C is 548.6 °F, the highest whole degree that clears it.
+    return { min: 38, max: 287 };
   }
 });
 
@@ -365,9 +517,9 @@ const selectedMeatPreset = computed(() => {
 
 // Form validation
 const isFormValid = computed(() => {
-  return form.targetTemp.value !== null && 
-         form.targetTemp.value >= tempRanges.value.min && 
-         form.targetTemp.value <= tempRanges.value.max &&
+  return form.servingTemp.value !== null && 
+         form.servingTemp.value >= tempRanges.value.min && 
+         form.servingTemp.value <= tempRanges.value.max &&
          form.initialOvenTemp.value !== null &&
          form.initialOvenTemp.value >= ovenTempRanges.value.min &&
          form.initialOvenTemp.value <= ovenTempRanges.value.max;
@@ -381,7 +533,7 @@ function quickTargetValue(preset) {
 }
 
 function isQuickTarget(preset) {
-  return form.targetTemp.value === quickTargetValue(preset);
+  return form.servingTemp.value === quickTargetValue(preset);
 }
 
 // Handle unit change - convert displayed values
@@ -395,12 +547,12 @@ function handleUnitChange(newUnit) {
   
   if (oldUnit === newUnit) return;
   
-  // Convert target temp with 1 decimal for Celsius, whole number for Fahrenheit
-  if (form.targetTemp.value !== null) {
+  // Convert serving temp with 1 decimal for Celsius, whole number for Fahrenheit
+  if (form.servingTemp.value !== null) {
     if (newUnit === 'C') {
-      form.targetTemp.value = Math.round(fahrenheitToCelsius(form.targetTemp.value) * 10) / 10;
+      form.servingTemp.value = Math.round(fahrenheitToCelsius(form.servingTemp.value) * 10) / 10;
     } else {
-      form.targetTemp.value = Math.round(celsiusToFahrenheit(form.targetTemp.value));
+      form.servingTemp.value = Math.round(celsiusToFahrenheit(form.servingTemp.value));
     }
   }
   
@@ -428,7 +580,7 @@ function handleUnitChange(newUnit) {
 
 // Select quick target
 function selectQuickTarget(preset) {
-  form.targetTemp.value = quickTargetValue(preset);
+  form.servingTemp.value = quickTargetValue(preset);
   userHasEditedTarget.value = true;
 }
 
@@ -437,14 +589,19 @@ function handleMeatTypeChange() {
   const preset = selectedMeatPreset.value;
   if (!preset) return;
   
-  // Auto-populate target and oven temps if not manually edited
+  // Auto-populate serving temp, oven temp and rest if not manually edited
   if (!userHasEditedTarget.value) {
     if (form.units.value === 'F') {
-      form.targetTemp.value = preset.defaultTargetF;
+      form.servingTemp.value = preset.servingTempF;
     } else {
-      // Use precise conversion with 1 decimal place for target temp
-      form.targetTemp.value = Math.round(fahrenheitToCelsius(preset.defaultTargetF) * 10) / 10;
+      form.servingTemp.value = Math.round(fahrenheitToCelsius(preset.servingTempF) * 10) / 10;
     }
+  }
+  
+  // A shoulder rests 30 minutes and a tenderloin 15. Per-preset because it
+  // genuinely varies by cut, not as a nicety.
+  if (!userHasEditedRest.value && Number.isFinite(preset.restMinutes)) {
+    form.restMinutes.value = preset.restMinutes;
   }
   
   if (!userHasEditedOven.value) {
@@ -460,18 +617,36 @@ function handleMeatTypeChange() {
   form.meatCut.value = '';
 }
 
-// Track manual edits
-watch(() => form.targetTemp.value, () => {
-  if (form.targetTemp.touched) {
-    userHasEditedTarget.value = true;
-  }
-});
-
-watch(() => form.initialOvenTemp.value, () => {
-  if (form.initialOvenTemp.touched) {
-    userHasEditedOven.value = true;
-  }
-});
+/**
+ * A value the cook set themselves, which a preset must not overwrite.
+ *
+ * Called from the stepper's own `update:model-value`, because that only fires for
+ * a user action - typing or the +/- buttons. The alternative, a watcher on the
+ * value, cannot tell the cook apart from the code: applying a preset writes these
+ * same fields, so the watcher had to be gated on something, and it was gated on
+ * `touched`.
+ *
+ * That gate did not work, and `touched` was the wrong question anyway - it exists
+ * to decide when an error message may appear. Only three of the five steppers had
+ * an `@blur` to set it, and Rest was not one of them, so `form.restMinutes.touched`
+ * was set nowhere before handleSubmit's mark-all loop: userHasEditedRest stayed
+ * false for the whole setup and the guard on it was dead. Type 45 into "Minutes
+ * resting", then choose Pork Shoulder, and the rest silently became 30. It moves
+ * computeLatestPullTime one-for-one, so the app then steered the whole cook to a
+ * deadline the cook never set - over a 14 lb shoulder, 75 of 955 states gave
+ * different advice and 14 gave the OPPOSITE direction: "lower to 220, 12 min
+ * early" becoming "raise to 240, 18 min late".
+ *
+ * The other two only half worked for the same reason: `@blur` never fires for the
+ * +/- buttons, so a cook who clicked the stepper up to 275 and then chose a preset
+ * lost that too.
+ */
+function noteUserEdit(field, value) {
+  form[field].value = value;
+  if (field === 'servingTemp') userHasEditedTarget.value = true;
+  else if (field === 'restMinutes') userHasEditedRest.value = true;
+  else if (field === 'initialOvenTemp') userHasEditedOven.value = true;
+}
 
 /**
  * The sheet stays mounted between cooks, so opening it has to rebuild the
@@ -482,13 +657,15 @@ function resetForm() {
   const units = preferredUnits.value;
 
   form.units.value = units;
-  form.targetTemp.value = getInitialTargetTemp(units);
+  form.servingTemp.value = getInitialServingTemp(units);
+  form.restMinutes.value = SESSION_DEFAULTS.REST_MINUTES;
   form.initialOvenTemp.value = getInitialOvenTemp(units);
   form.startingTemp.value = null;
   form.timeInputMode.value = 'serveTime';
   form.meatType.value = '';
   form.meatCut.value = '';
   form.weight.value = null;
+  form.weightUnit.value = storageService.loadWeightUnit() ?? 'lb';
   form.notes.value = '';
 
   Object.values(form).forEach((field) => {
@@ -502,6 +679,7 @@ function resetForm() {
   showMeatDetails.value = false;
   userHasEditedTarget.value = false;
   userHasEditedOven.value = false;
+  userHasEditedRest.value = false;
 
   const fourHoursFromNow = new Date();
   fourHoursFromNow.setHours(fourHoursFromNow.getHours() + 4);
@@ -531,7 +709,6 @@ function handleSubmit() {
   }
   
   // Convert temps to Fahrenheit for storage
-  const targetTempF = toStorageUnit(form.targetTemp.value, form.units.value);
   const ovenTempF = toStorageUnit(form.initialOvenTemp.value, form.units.value);
   const startingTempF = form.startingTemp.value !== null 
     ? toStorageUnit(form.startingTemp.value, form.units.value) 
@@ -548,19 +725,52 @@ function handleSubmit() {
     }
   }
   
-  // Build config
+  // Build config. servingTempF is what the cook chose; pullTempF and carryoverF
+  // are derived by createSession from it and the oven temperature, so they are
+  // passed explicitly here rather than recomputed there from a stale oven value.
   const config = {
-    targetTemp: targetTempF,
+    servingTempF: servingTempF.value,
+    pullTempF: pullTempF.value,
+    carryoverF: carryoverF.value,
+    carryoverIsUserSet: false,
+    restMinutes: form.restMinutes.value ?? 0,
     units: form.units.value,
     startingTemp: startingTempF,
     desiredServeTime: desiredServeTime,
     initialOvenTemp: ovenTempF,
     meatType: sanitizeString(form.meatType.value) || null,
     meatCut: sanitizeString(form.meatCut.value) || null,
-    weight: form.weight.value || null,
+    // Canonical POUNDS. The display unit is a standing preference and is not
+    // part of the session: a cook who switches to kilograms next month must not
+    // find this roast's weight reinterpreted.
+    weight: weightToStorage(form.weight.value, form.weightUnit.value) || null,
     notes: sanitizeString(form.notes.value) || null
   };
   
+  /**
+   * The last gate before a session exists.
+   *
+   * validateSessionConfig had ZERO call sites, so none of its rules had ever
+   * run - including the weight bound, and now the pull-below-plate and rest
+   * bounds this wave added. A validator nothing calls is a validator whose rules
+   * are wrong and nobody knows.
+   *
+   * Called with °F values, so `units: 'F'` regardless of what the form is in:
+   * everything in `config` has already been through toStorageUnit.
+   */
+  const validation = validateSessionConfig(config, 'F');
+  if (!validation.valid) {
+    Object.entries(validation.errors).forEach(([field, message]) => {
+      // Surface it where the field lives if the form has that field; the derived
+      // temperatures have no control of their own, so they land on the one the
+      // cook can actually change.
+      const target = form[field] ?? form.servingTemp;
+      target.error = message;
+      target.touched = true;
+    });
+    return;
+  }
+
   emit('submit', config);
   emit('update:modelValue', false);
 }

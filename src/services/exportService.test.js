@@ -100,7 +100,10 @@ function makeSession(overrides = {}) {
   return {
     config: {
       units: 'F',
-      targetTemp: 130,
+      pullTempF: 125,
+      servingTempF: 130,
+      carryoverF: 5,
+      restMinutes: 20,
       initialOvenTemp: 225,
       createdAt: '2026-08-22T14:31:00.000Z',
       ...overrides.config
@@ -266,5 +269,40 @@ describe('exportToJSON', () => {
 describe('generateFilename', () => {
   it('appends an ISO date and the extension', () => {
     expect(generateFilename('roast-session', 'csv')).toMatch(/^roast-session-\d{4}-\d{2}-\d{2}\.csv$/);
+  });
+});
+
+describe('carryover is a difference, not a temperature', () => {
+  /**
+   * The carryover row ran through `csvTemp`, the ABSOLUTE converter, so a
+   * 5 °F carryover was exported to a Celsius sheet as `-15.0` - the
+   * freezing-point offset applied to a number that has no zero. It sat directly
+   * beneath a correctly converted pull/serve pair, so the sheet looked plausible.
+   * `csvDelta` already existed fifty lines above for exactly this.
+   */
+  const rowFor = (label, session) => {
+    const rows = parseCSV(exportToCSV(session));
+    return rows.find((r) => r[0] === label);
+  };
+
+  it('converts as a delta on a Celsius sheet', () => {
+    const session = makeSession({ config: { units: 'C', carryoverF: 5 } });
+    const [, value, unit] = rowFor('Carryover', session);
+    // 5 F of carryover is 2.8 C of carryover, not -15.
+    expect(Number(value)).toBeCloseTo(2.8, 1);
+    expect(unit).toBe('°C');
+  });
+
+  it('leaves a Fahrenheit sheet alone', () => {
+    const session = makeSession({ config: { units: 'F', carryoverF: 5 } });
+    const [, value] = rowFor('Carryover', session);
+    expect(Number(value)).toBeCloseTo(5, 1);
+  });
+
+  it('still converts the absolute temperatures beside it as absolutes', () => {
+    // The bug was invisible partly because these two were right.
+    const session = makeSession({ config: { units: 'C', pullTempF: 121, servingTempF: 125 } });
+    expect(Number(rowFor('Pull Temperature', session)[1])).toBeCloseTo(49.4, 1);
+    expect(Number(rowFor('Serving Temperature', session)[1])).toBeCloseTo(51.7, 1);
   });
 });

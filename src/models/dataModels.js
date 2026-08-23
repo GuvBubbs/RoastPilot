@@ -1,7 +1,20 @@
+import { SESSION_DEFAULTS } from '../constants/defaults.js';
+import { estimateCarryoverF, pullTempFor, servingTempFor } from '../services/carryoverService.js';
+
 /**
  * @typedef {Object} SessionConfig
  * @property {string} id - Unique session identifier (UUID v4)
- * @property {number} targetTemp - Target internal temperature in Fahrenheit
+ * @property {number} pullTempF - Where the cook STOPS, in Fahrenheit. This is
+ *   what the projection aims at and what "at target" means.
+ * @property {number} servingTempF - What the cook wants on the PLATE, in
+ *   Fahrenheit. Higher than pullTempF by the carryover.
+ * @property {number} carryoverF - Degrees the core is expected to climb after
+ *   the meat leaves the oven. Stored per session and never recomputed live -
+ *   see carryoverService.js for why.
+ * @property {boolean} carryoverIsUserSet - Whether the cook overrode the app's
+ *   estimate. Once true, no automatic re-estimate touches it.
+ * @property {number} restMinutes - Minutes on the board before carving. The
+ *   projection is judged against the serve time LESS this.
  * @property {'F'|'C'} units - Display unit preference
  * @property {number|null} startingTemp - Optional starting internal temp in Fahrenheit
  * @property {string|null} desiredServeTime - ISO 8601 datetime string or null
@@ -50,7 +63,7 @@
 
 /**
  * @typedef {Object} Recommendation
- * @property {'raise'|'lower'|'hold'|'oven-off'|'at-target'|'needs-reading'|'settling'|'none'} action
+ * @property {'raise'|'lower'|'hold'|'oven-off'|'restart-oven'|'at-target'|'needs-reading'|'settling'|'none'} action
  * @property {number|null} suggestedTemp - New oven set temp in Fahrenheit
  * @property {number|null} changeAmount - Degrees to change (always positive)
  * @property {string|null} message - TEMPLATE with {placeholders}; substituted (and
@@ -69,8 +82,11 @@
  * @property {string|null} blockerReason - If canRecommend is false, why (display string)
  * @property {string|null} blockerType - Machine-readable blocker discriminant, e.g.
  *   'insufficient_readings' | 'insufficient_time' | 'no_oven_data' |
- *   'stale_oven_data' | 'no_serve_time' | 'insufficient_confidence' |
- *   'bad_rate' | 'unstable_rate' | 'no_session'
+ *   'stale_reading' | 'no_serve_time' | 'no_projection' | 'no_session'
+ * @property {string|null} blockerCode - When blockerType is 'no_projection', the
+ *   specific cause: a dead-time gate code, 'rate-disagrees', 'unreachable',
+ *   'beyond-horizon'. The UI needs it because "raise the oven" is the right
+ *   suggestion for one of those and nonsense for the rest.
  * @property {{current: number, required: number, message: string}|null} progress -
  *   Progress toward clearing a countable blocker
  * @property {boolean} awaitingEffect - True while the last oven set-point change has
@@ -83,9 +99,6 @@
 
 /**
  * @typedef {Object} AppSettings
- * @property {number} smoothingWindowReadings - Number of readings for rate smoothing (default 3)
- * @property {number} smoothingWindowMinutes - Alternative: time window for smoothing (default 30)
- * @property {'readings'|'time'} smoothingMode - Which smoothing approach to use
  * @property {number} onTrackThresholdMinutes - Minutes variance considered "on track" (default 10)
  * @property {number} recommendationStepF - Default temp change step in F (default 10)
  * @property {number} recommendationMaxStepF - Maximum single change in F (default 25)
@@ -100,6 +113,15 @@
  *   up in the meat's heating rate (default 15)
  * @property {number} ovenChangeSettleReadings - Readings needed past that lag before
  *   the measured rate is treated as belonging to the new setting (default 2)
+ * @property {number} defaultRestMinutes - Rest to seed a NEW session with, when
+ *   its preset does not name one. Per-session after that: a shoulder rests 30
+ *   minutes and a tenderloin 15, so this is a starting point, not the value the
+ *   projection reads.
+ * @property {number} readingIntervalMinutes - The longest the app will go without
+ *   asking for a reading (default 45). The actual cadence is derived from the
+ *   projection and is usually shorter - see useReadingSchedule.
+ * @property {number} staleReadingMinutes - Age at which the newest reading stops
+ *   being evidence and advice is withheld (default 45).
  */
 
 /**
@@ -111,28 +133,101 @@
  */
 
 /**
+ * Resolve the pull / serving / carryover triple from whatever a caller supplied.
+ *
+ * Three fields that must agree, of which any two determine the third, and
+ * callers legitimately know different ones:
+ *
+ *  - the setup modal and the presets know the SERVING temperature (doneness);
+ *  - a migrated session knows only the PULL temperature, because that is all the
+ *    old build ever recorded;
+ *  - the harness and the tests pass the legacy `targetTemp`, which meant "where
+ *    the cook stops" and is therefore the pull temperature.
+ *
+ * The legacy key is accepted HERE and nowhere else. That is the whole shim: it
+ * exists so that `grep -rn "\.targetTemp" src` finds nothing outside this file,
+ * because the ambiguity of that name is the defect being fixed - and after this
+ * change the UI shows two temperatures, so an alias would only relocate the
+ * confusion.
+ *
+ * @param {Object} overrides - Raw config overrides, possibly legacy
+ * @returns {{pullTempF: number, servingTempF: number, carryoverF: number,
+ *   carryoverIsUserSet: boolean}}
+ */
+function resolveTemperatures(overrides) {
+  const ovenTempF = Number.isFinite(overrides.initialOvenTemp)
+    ? overrides.initialOvenTemp
+    : SESSION_DEFAULTS.INITIAL_OVEN_TEMP_F;
+
+  const carryoverIsUserSet = overrides.carryoverIsUserSet === true;
+  const carryoverF = Number.isFinite(overrides.carryoverF)
+    ? overrides.carryoverF
+    : estimateCarryoverF(ovenTempF);
+
+  // The legacy name, and the migration rule that matters: it maps to pullTempF,
+  // NOT to servingTempF. The old code stopped the cook exactly at it, so reading
+  // it as a plate temperature would move a running cook's finish line 3-8 °F
+  // earlier the moment the new build deployed.
+  const legacyPull = Number.isFinite(overrides.targetTemp) ? overrides.targetTemp : null;
+  const pullGiven = Number.isFinite(overrides.pullTempF) ? overrides.pullTempF : legacyPull;
+  const servingGiven = Number.isFinite(overrides.servingTempF) ? overrides.servingTempF : null;
+
+  if (pullGiven !== null) {
+    return {
+      pullTempF: pullGiven,
+      servingTempF: servingGiven ?? servingTempFor(pullGiven, carryoverF),
+      carryoverF,
+      carryoverIsUserSet
+    };
+  }
+
+  const servingTempF = servingGiven ?? SESSION_DEFAULTS.SERVING_TEMP_F;
+  return {
+    pullTempF: pullTempFor(servingTempF, carryoverF),
+    servingTempF,
+    carryoverF,
+    carryoverIsUserSet
+  };
+}
+
+/**
  * Factory function to create a new empty session
  * @param {Partial<SessionConfig>} configOverrides
  * @returns {Session}
  */
 export function createSession(configOverrides = {}) {
   const now = new Date().toISOString();
+  const temperatures = resolveTemperatures(configOverrides);
+  
+  // Strip the legacy key so it cannot survive into storage and be read again by
+  // something that has not been through the shim.
+  const { targetTemp: _legacyTargetTemp, ...overrides } = configOverrides;
+  
   return {
     config: {
       id: generateUUID(),
-      targetTemp: 125, // Default for medium-rare beef
       units: 'F',
       startingTemp: null,
       desiredServeTime: null,
       desiredTimeRemaining: null,
-      initialOvenTemp: 200,
+      initialOvenTemp: SESSION_DEFAULTS.INITIAL_OVEN_TEMP_F,
+      /**
+       * A NEW session gets a real rest. A MIGRATED one gets zero - see
+       * migrateSessionToV2. Retroactively inserting 20 minutes of rest would
+       * flip an in-flight cook from "on track" to "20 min late" without the cook
+       * having asked for anything.
+       */
+      restMinutes: SESSION_DEFAULTS.REST_MINUTES,
       meatType: null,
       meatCut: null,
       weight: null,
       notes: null,
       createdAt: now,
       updatedAt: now,
-      ...configOverrides
+      ...overrides,
+      // After the spread: these are derived from the overrides, so an override
+      // must not be able to reintroduce a disagreeing raw value.
+      ...temperatures
     },
     readings: [],
     ovenEvents: [],
@@ -141,14 +236,96 @@ export function createSession(configOverrides = {}) {
 }
 
 /**
+ * Bring a v1 stored session up to the v2 config shape, in place.
+ *
+ * Idempotent, and deliberately conservative: a session being migrated is a cook
+ * that is happening right now, so nothing here may move its finish line or its
+ * schedule verdict.
+ *
+ * @param {Session} session
+ * @returns {Session} the same object
+ */
+export function migrateSessionToV2(session) {
+  const config = session?.config;
+  if (!config) return session;
+  
+  if (!Number.isFinite(config.pullTempF)) {
+    // Where the cook stops. The old `targetTemp` is exactly this.
+    config.pullTempF = Number.isFinite(config.targetTemp)
+      ? config.targetTemp
+      : SESSION_DEFAULTS.SERVING_TEMP_F;
+  }
+  
+  if (!Number.isFinite(config.carryoverF)) {
+    config.carryoverF = estimateCarryoverF(config.initialOvenTemp);
+  }
+  if (typeof config.carryoverIsUserSet !== 'boolean') {
+    config.carryoverIsUserSet = false;
+  }
+  
+  if (!Number.isFinite(config.servingTempF)) {
+    // Derived upward from the pull temperature, so the pull stays put. The cook
+    // was already going to eat this roast at pull + carryover; the app is only
+    // now admitting that is what was happening.
+    config.servingTempF = servingTempFor(config.pullTempF, config.carryoverF);
+  }
+  
+  if (!Number.isFinite(config.restMinutes)) {
+    // ZERO, not the new-session default. A migrated cook's serve time was set
+    // against a projection with no rest in it; subtracting 20 minutes now would
+    // announce that dinner is late, about a decision the cook never made.
+    config.restMinutes = 0;
+  }
+  
+  /**
+   * The legacy key stays, as a shadow of pullTempF. See legacyCompatConfig.
+   */
+  config.targetTemp = config.pullTempF;
+  
+  return session;
+}
+
+/**
+ * A config with the pre-v2 key written alongside the v2 ones, for anything
+ * reading this session with an older build.
+ *
+ * ROLLBACK SAFETY. The migration used to `delete config.targetTemp` and
+ * createSession never wrote it, so a session written by this build carried no key
+ * the previous build could read: `targetTemp` came back undefined, went into
+ * arithmetic, and reached `new Date(NaN)` - "RangeError: Invalid time value",
+ * thrown inside a computed during render. The ErrorBoundary that catches it offers
+ * "Try again", which throws again, directly above "Erase saved cook and reset".
+ * So a rollback did not degrade a running cook, it destroyed it, and
+ * `registerType: 'autoUpdate'` in vite.config.js means a rollback reaches every
+ * client on its own without anyone choosing it.
+ *
+ * The old key means exactly what pullTempF means - the temperature the cook stops
+ * at - so the shadow is a rename, not a guess. Written at the persistence boundary
+ * rather than maintained across every config mutation, because localStorage IS the
+ * rollback surface and one choke point cannot drift out of sync.
+ *
+ * Drop this in a v3 migration one release after v2 has stopped being rolled back
+ * to. The property name is confined to this file, which is the point of the
+ * exercise: the ambiguous name was the original defect.
+ */
+export function legacyCompatConfig(config) {
+  if (!config) return config;
+  return Number.isFinite(config.pullTempF)
+    ? { ...config, targetTemp: config.pullTempF }
+    : { ...config };
+}
+
+/**
  * Factory function to create default settings
  * @returns {AppSettings}
  */
 export function createDefaultSettings() {
   return {
-    smoothingWindowReadings: 3,
-    smoothingWindowMinutes: 30,
-    smoothingMode: 'readings',
+    // smoothingWindowReadings, smoothingWindowMinutes and smoothingMode lived
+    // here. The first sized the rate fit's window; the other two were an
+    // alternative approach that was never implemented - `smoothingMode` had one
+    // reachable value. The thermal model fits every reading, so none of the three
+    // has anything to do.
     onTrackThresholdMinutes: 10,
     recommendationStepF: 10,
     recommendationMaxStepF: 25,
@@ -160,7 +337,10 @@ export function createDefaultSettings() {
     minTimeSpanMinutes: 30,
     ovenTempStaleMinutes: 60,
     ovenChangeLagMinutes: 15,
-    ovenChangeSettleReadings: 2
+    ovenChangeSettleReadings: 2,
+    defaultRestMinutes: SESSION_DEFAULTS.REST_MINUTES,
+    readingIntervalMinutes: 45,
+    staleReadingMinutes: 45
   };
 }
 

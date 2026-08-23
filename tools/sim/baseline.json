@@ -1,0 +1,159 @@
+{
+  "note": "Recorded misses the simulation harness asserts against. See tools/sim/baseline.js. Regenerate with `npm run sim:baseline` - and only in the same commit as the change that moved the numbers.",
+  "metrics": {
+    "convergenceAbs": {
+      "tolerance": 20,
+      "unit": "min"
+    },
+    "overshootF": {
+      "tolerance": 8,
+      "unit": "F"
+    },
+    "blindMinutes": {
+      "tolerance": 10,
+      "unit": "min"
+    },
+    "blockedMinutes": {
+      "tolerance": null,
+      "unit": "min"
+    },
+    "noAdviceMinutes": {
+      "tolerance": null,
+      "unit": "min"
+    },
+    "reversals": {
+      "tolerance": 2,
+      "unit": null
+    }
+  },
+  "scenarios": {
+    "01-real-replay": {
+      "convergenceAbs": 41,
+      "overshootF": 7,
+      "blindMinutes": 5,
+      "blockedMinutes": 45,
+      "noAdviceMinutes": 45,
+      "reversals": 0
+    },
+    "02-baseline-on-track": {
+      "convergenceAbs": 10,
+      "overshootF": 2.8,
+      "blindMinutes": 5,
+      "blockedMinutes": 40,
+      "noAdviceMinutes": 40,
+      "reversals": 0
+    },
+    "03-running-late": {
+      "convergenceAbs": 15,
+      "overshootF": 0.4,
+      "blindMinutes": 0,
+      "blockedMinutes": 55,
+      "noAdviceMinutes": 55,
+      "reversals": 0
+    },
+    "04-running-very-early": {
+      "convergenceAbs": 110,
+      "overshootF": 0.6,
+      "blindMinutes": 0,
+      "blockedMinutes": 40,
+      "noAdviceMinutes": 40,
+      "reversals": 0
+    },
+    "05-overnight-shoulder": {
+      "convergenceAbs": 100,
+      "overshootF": 4.6,
+      "blindMinutes": 15,
+      "blockedMinutes": 485,
+      "noAdviceMinutes": 485,
+      "reversals": 1
+    },
+    "06-reading-gap": {
+      "convergenceAbs": 5,
+      "overshootF": 0.2,
+      "blindMinutes": 0,
+      "blockedMinutes": 45,
+      "noAdviceMinutes": 45,
+      "reversals": 0
+    },
+    "07-pause-and-restart": {
+      "convergenceAbs": 20,
+      "overshootF": 3.9,
+      "blindMinutes": 10,
+      "blockedMinutes": 40,
+      "noAdviceMinutes": 40,
+      "reversals": 1
+    },
+    "09-rest-and-carryover": {
+      "convergenceAbs": 5,
+      "overshootF": 1.6,
+      "blindMinutes": 0,
+      "blockedMinutes": 45,
+      "noAdviceMinutes": 45,
+      "reversals": 0
+    },
+    "10-forgetful-cook": {
+      "convergenceAbs": 10,
+      "overshootF": 21.1,
+      "blindMinutes": 45,
+      "blockedMinutes": 100,
+      "noAdviceMinutes": 100,
+      "reversals": 0
+    },
+    "11-weight-driven-k-small": {
+      "convergenceAbs": 35,
+      "overshootF": 3.5,
+      "blindMinutes": 0,
+      "blockedMinutes": 35,
+      "noAdviceMinutes": 35,
+      "reversals": 0
+    },
+    "12-weight-driven-k-large": {
+      "convergenceAbs": null,
+      "overshootF": -1,
+      "blindMinutes": null,
+      "blockedMinutes": 80,
+      "noAdviceMinutes": 80,
+      "reversals": 2
+    },
+    "13-oven-off-danger-zone": {
+      "convergenceAbs": 405,
+      "overshootF": 2.2,
+      "blindMinutes": 5,
+      "blockedMinutes": 60,
+      "noAdviceMinutes": 60,
+      "reversals": 0
+    },
+    "15-reading-due-prompt": {
+      "convergenceAbs": 10,
+      "overshootF": 5.3,
+      "blindMinutes": 10,
+      "blockedMinutes": 60,
+      "noAdviceMinutes": 60,
+      "reversals": 0
+    },
+    "16-late-first-reading": {
+      "convergenceAbs": 55,
+      "overshootF": 1.9,
+      "blindMinutes": 0,
+      "blockedMinutes": 135,
+      "noAdviceMinutes": 135,
+      "reversals": 0
+    },
+    "14-dst-cook": {
+      "convergenceAbs": null,
+      "overshootF": -0.1,
+      "blindMinutes": null,
+      "blockedMinutes": 40,
+      "noAdviceMinutes": 40,
+      "reversals": 0
+    },
+    "08-celsius-eager-dial": {
+      "convergenceAbs": 15,
+      "overshootF": 1.3,
+      "blindMinutes": 0,
+      "blockedMinutes": 45,
+      "noAdviceMinutes": 45,
+      "reversals": 0
+    }
+  }
+}

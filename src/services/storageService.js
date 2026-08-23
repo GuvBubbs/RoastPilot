@@ -1,13 +1,22 @@
-import { createDefaultSettings } from '../models/dataModels.js';
+import {
+  createDefaultSettings, migrateSessionToV2, legacyCompatConfig
+} from '../models/dataModels.js';
 
 const STORAGE_KEYS = {
   CURRENT_SESSION: 'rstt_current_session',
   SETTINGS: 'rstt_settings',
   UNITS: 'rstt_units',
+  // Separate from UNITS: weight has nothing to do with the temperature scale, and
+  // a cook may well want pounds alongside Celsius.
+  WEIGHT_UNIT: 'rstt_weight_unit',
   SCHEMA_VERSION: 'rstt_schema_version'
 };
 
-const CURRENT_SCHEMA_VERSION = 1;
+/**
+ * v2 split the single ambiguous `targetTemp` into pullTempF / servingTempF /
+ * carryoverF and added restMinutes. See migrateSessionToV2.
+ */
+const CURRENT_SCHEMA_VERSION = 2;
 
 /**
  * Storage service for persisting application state to localStorage
@@ -55,16 +64,43 @@ export const storageService = {
   migrateSchema(fromVersion, toVersion) {
     console.log(`Migrating schema from v${fromVersion} to v${toVersion}`);
     
-    // Migration logic for future schema changes
-    // Each migration step should be idempotent
+    // Each step must be idempotent, and must not change the meaning of a cook
+    // that is happening right now. A session in storage is 4-8 hours of data
+    // that cannot be recreated.
     
     if (fromVersion < 1 && toVersion >= 1) {
-      // Initial schema setup - no migration needed
-      // Future migrations would go here:
-      // if (fromVersion < 2 && toVersion >= 2) { ... }
+      // Initial schema setup - nothing to migrate.
+    }
+    
+    if (fromVersion < 2 && toVersion >= 2) {
+      // targetTemp -> pullTempF / servingTempF / carryoverF, plus restMinutes.
+      // Rewritten in storage rather than patched on every load, so exactly one
+      // place in the codebase ever sees the old key.
+      const session = this.readSessionRaw();
+      if (session?.config) {
+        migrateSessionToV2(session);
+        this.saveSession(session);
+      }
     }
     
     this.setSchemaVersion(toVersion);
+  },
+
+  /**
+   * The stored session exactly as it sits on disk, with no repair applied.
+   *
+   * Separate from loadSession because a migration has to see the raw shape -
+   * loadSession is entitled to assume the current one.
+   * @returns {Session|null}
+   */
+  readSessionRaw() {
+    try {
+      const serialized = localStorage.getItem(STORAGE_KEYS.CURRENT_SESSION);
+      return serialized ? JSON.parse(serialized) : null;
+    } catch (error) {
+      console.error('Failed to read stored session:', error);
+      return null;
+    }
   },
 
   /**
@@ -77,9 +113,12 @@ export const storageService = {
       // Stamp updatedAt onto a copy, never onto the caller's object. The
       // autosave watcher in useSession watches the reactive session deeply, so
       // writing to it from here would retrigger the watcher that called us.
+      // legacyCompatConfig writes the pre-v2 `targetTemp` alongside the v2 keys
+      // so a rolled-back build can still read this session instead of throwing
+      // on it. See its docstring.
       const payload = {
         ...session,
-        config: { ...session.config, updatedAt: new Date().toISOString() }
+        config: { ...legacyCompatConfig(session.config), updatedAt: new Date().toISOString() }
       };
       
       const serialized = JSON.stringify(payload);
@@ -118,6 +157,13 @@ export const storageService = {
       if (!session.settings) {
         session.settings = createDefaultSettings();
       }
+      
+      // Belt to migrateSchema's braces. resumeSession() and the screenshot
+      // harness both reach loadSession without going through initialize(), and a
+      // config with no pullTempF would project against undefined - which is a
+      // blank ETA rather than a wrong one, but still a broken screen.
+      // Idempotent, so running it on an already-migrated session is free.
+      migrateSessionToV2(session);
       
       return session;
     } catch (error) {
@@ -236,6 +282,35 @@ export const storageService = {
       return stored === 'F' || stored === 'C' ? stored : null;
     } catch (error) {
       console.error('Failed to load units:', error);
+      return null;
+    }
+  },
+
+  /**
+   * Save the preferred weight unit
+   * @param {'lb'|'kg'} unit
+   * @returns {boolean} Success
+   */
+  saveWeightUnit(unit) {
+    try {
+      localStorage.setItem(STORAGE_KEYS.WEIGHT_UNIT, unit);
+      return true;
+    } catch (error) {
+      console.error('Failed to save weight unit:', error);
+      return false;
+    }
+  },
+
+  /**
+   * Load the preferred weight unit
+   * @returns {'lb'|'kg'|null} null when nothing valid is stored
+   */
+  loadWeightUnit() {
+    try {
+      const stored = localStorage.getItem(STORAGE_KEYS.WEIGHT_UNIT);
+      return stored === 'lb' || stored === 'kg' ? stored : null;
+    } catch (error) {
+      console.error('Failed to load weight unit:', error);
       return null;
     }
   },

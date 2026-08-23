@@ -1,0 +1,132 @@
+{
+  "name": "05-cylinder-paused",
+  "what": "A 40 minute oven-off period in the middle. The readings across it are cooling, not slow heating.",
+  "family": "1-D conduction, cylinder",
+  "adversarial": false,
+  "weightLb": 6,
+  "pullTempF": 125,
+  "trueHitMin": 141,
+  "readings": [
+    {
+      "temp": 48,
+      "timestamp": "2026-08-22T18:00:00.000Z"
+    },
+    {
+      "temp": 48,
+      "timestamp": "2026-08-22T18:12:00.000Z"
+    },
+    {
+      "temp": 48.7,
+      "timestamp": "2026-08-22T18:24:00.000Z"
+    },
+    {
+      "temp": 52.8,
+      "timestamp": "2026-08-22T18:36:00.000Z"
+    },
+    {
+      "temp": 60.9,
+      "timestamp": "2026-08-22T18:48:00.000Z"
+    },
+    {
+      "temp": 71.4,
+      "timestamp": "2026-08-22T19:00:00.000Z"
+    },
+    {
+      "temp": 82.9,
+      "timestamp": "2026-08-22T19:12:00.000Z"
+    },
+    {
+      "temp": 93.9,
+      "timestamp": "2026-08-22T19:24:00.000Z"
+    },
+    {
+      "temp": 103.3,
+      "timestamp": "2026-08-22T19:36:00.000Z"
+    },
+    {
+      "temp": 110.5,
+      "timestamp": "2026-08-22T19:48:00.000Z"
+    },
+    {
+      "temp": 115.8,
+      "timestamp": "2026-08-22T20:00:00.000Z"
+    },
+    {
+      "temp": 120.9,
+      "timestamp": "2026-08-22T20:12:00.000Z"
+    },
+    {
+      "temp": 126.6,
+      "timestamp": "2026-08-22T20:24:00.000Z"
+    },
+    {
+      "temp": 132.8,
+      "timestamp": "2026-08-22T20:36:00.000Z"
+    },
+    {
+      "temp": 139.3,
+      "timestamp": "2026-08-22T20:48:00.000Z"
+    },
+    {
+      "temp": 145.7,
+      "timestamp": "2026-08-22T21:00:00.000Z"
+    },
+    {
+      "temp": 151.8,
+      "timestamp": "2026-08-22T21:12:00.000Z"
+    },
+    {
+      "temp": 157.5,
+      "timestamp": "2026-08-22T21:24:00.000Z"
+    },
+    {
+      "temp": 162.7,
+      "timestamp": "2026-08-22T21:36:00.000Z"
+    },
+    {
+      "temp": 167.5,
+      "timestamp": "2026-08-22T21:48:00.000Z"
+    },
+    {
+      "temp": 171.8,
+      "timestamp": "2026-08-22T22:00:00.000Z"
+    },
+    {
+      "temp": 175.7,
+      "timestamp": "2026-08-22T22:12:00.000Z"
+    },
+    {
+      "temp": 179.2,
+      "timestamp": "2026-08-22T22:24:00.000Z"
+    },
+    {
+      "temp": 182.3,
+      "timestamp": "2026-08-22T22:36:00.000Z"
+    },
+    {
+      "temp": 185.1,
+      "timestamp": "2026-08-22T22:48:00.000Z"
+    },
+    {
+      "temp": 187.7,
+      "timestamp": "2026-08-22T23:00:00.000Z"
+    }
+  ],
+  "ovenEvents": [
+    {
+      "setTemp": 210,
+      "timestamp": "2026-08-22T18:00:00.000Z",
+      "isOff": false
+    },
+    {
+      "setTemp": 0,
+      "timestamp": "2026-08-22T18:49:00.000Z",
+      "isOff": true
+    },
+    {
+      "setTemp": 210,
+      "timestamp": "2026-08-22T19:29:00.000Z",
+      "isOff": false
+    }
+  ]
+}

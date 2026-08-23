@@ -86,12 +86,106 @@ describe('forward compatibility with a pre-redesign stored session', () => {
     localStorage.setItem(STORAGE_KEYS.CURRENT_SESSION, JSON.stringify(legacySession()));
   });
 
-  it('loads without triggering a schema migration', () => {
-    // Version unchanged means migrateSchema never runs, so nothing is rewritten.
+  it('migrates v1 to v2 and keeps the session', () => {
     expect(storageService.getSchemaVersion()).toBe(1);
     storageService.initialize();
-    expect(storageService.getSchemaVersion()).toBe(1);
+    expect(storageService.getSchemaVersion()).toBe(2);
     expect(storageService.loadSession()).not.toBeNull();
+  });
+
+  it('maps the legacy targetTemp to the PULL temperature, not the plate', () => {
+    // The migration rule that matters most. The old build stopped the cook
+    // exactly at targetTemp, so that number is where the meat comes OUT. Reading
+    // it as a plate temperature would derive a pull 3-8 °F lower and move a
+    // running cook's finish line the moment the new build deployed - the roast
+    // would be declared done while it was still short.
+    storageService.initialize();
+    const stored = storageService.loadSession();
+
+    expect(stored.config.pullTempF).toBe(125);
+    expect(stored.config.servingTempF).toBe(129); // 125 + 4 carryover at 200 °F
+    expect(stored.config.carryoverF).toBe(4);
+    expect(stored.config.carryoverIsUserSet).toBe(false);
+    /**
+     * The legacy key stays in STORAGE, as a shadow of pullTempF, so a rolled-back
+     * build can still read this cook - see legacyCompatConfig. It was deleted
+     * outright until a rollback was actually tried, at which point the old build
+     * threw a RangeError inside a render. What matters is that nothing downstream
+     * reads it: the ambiguous name is confined to dataModels.js, and the live
+     * config below does not carry it.
+     */
+    expect(stored.config.targetTemp).toBe(stored.config.pullTempF);
+  });
+
+  it('gives a migrated cook ZERO rest, not the new-session default', () => {
+    // A cook already running set their serve time against a projection with no
+    // rest in it. Inserting 20 minutes now would announce that dinner is late,
+    // about a decision the cook never made.
+    storageService.initialize();
+    expect(storageService.loadSession().config.restMinutes).toBe(0);
+  });
+
+  it('does not move the schedule verdict across the migration', () => {
+    /**
+     * The whole point, stated as the number a cook would see.
+     *
+     * The migration must be a pure renaming as far as the projection is
+     * concerned: same readings, same oven history, same pull temperature, same
+     * serve time, and - because a migrated session gets restMinutes 0 - the same
+     * deadline. So the same verdict, to the minute.
+     *
+     * Both sides are computed through the CURRENT engine, with only the config
+     * shape differing. Comparing a v1 config through the old engine against a v2
+     * config through the new one would be testing two changes at once and could
+     * not fail for the reason this test exists.
+     */
+    const legacy = legacySession();
+    const common = {
+      readings: legacy.readings,
+      ovenEvents: legacy.ovenEvents,
+      settings: legacy.settings,
+      now: '2026-08-22T21:30:00.000Z'
+    };
+
+    const before = computeSessionCalculations({
+      ...common,
+      // What the old build stopped at, read as the pull temperature.
+      pullTempF: legacy.config.targetTemp,
+      desiredServeTime: legacy.config.desiredServeTime,
+      restMinutes: 0
+    });
+
+    storageService.initialize();
+    const stored = storageService.loadSession();
+    const after = computeSessionCalculations({
+      ...common,
+      readings: stored.readings,
+      ovenEvents: stored.ovenEvents,
+      pullTempF: stored.config.pullTempF,
+      desiredServeTime: stored.config.desiredServeTime,
+      restMinutes: stored.config.restMinutes,
+      settings: stored.settings
+    });
+
+    expect(after.predictedTargetTime).toBe(before.predictedTargetTime);
+    expect(after.scheduleVarianceMinutes).toBe(before.scheduleVarianceMinutes);
+    expect(after.scheduleStatus).toBe(before.scheduleStatus);
+    expect(after.projectionRefusedReason).toBe(before.projectionRefusedReason);
+  });
+
+  it('is idempotent: migrating twice changes nothing', () => {
+    storageService.initialize();
+    const once = JSON.parse(JSON.stringify(storageService.loadSession().config));
+
+    // Force the migration to run again over the already-migrated blob.
+    localStorage.setItem(STORAGE_KEYS.SCHEMA_VERSION, '1');
+    storageService.initialize();
+    const twice = storageService.loadSession().config;
+
+    expect(twice.pullTempF).toBe(once.pullTempF);
+    expect(twice.servingTempF).toBe(once.servingTempF);
+    expect(twice.carryoverF).toBe(once.carryoverF);
+    expect(twice.restMinutes).toBe(once.restMinutes);
   });
 
   it('resumes the cook with every reading and oven event intact', () => {
@@ -103,7 +197,7 @@ describe('forward compatibility with a pre-redesign stored session', () => {
     expect(readings.value.map((r) => r.temp)).toEqual([48, 71, 94, 103]);
     expect(ovenEvents.value).toHaveLength(2);
     expect(config.value.meatType).toBe('beef');
-    expect(config.value.targetTemp).toBe(125);
+    expect(config.value.pullTempF).toBe(125);
     expect(config.value.desiredServeTime).toBe('2026-08-22T23:00:00.000Z');
   });
 
@@ -129,8 +223,10 @@ describe('forward compatibility with a pre-redesign stored session', () => {
     const { initialize, settings } = freshSession();
     initialize();
     // Read from the session's own settings; the standalone settings key was
-    // never written by the old build, so there is nothing to override with.
-    expect(settings.value.smoothingWindowReadings).toBe(3);
+    // never written by the old build, so there is nothing to override with. The
+    // keys asserted here are ones that still exist - a key the current build has
+    // dropped survives the merge trivially and proves nothing.
+    expect(settings.value.onTrackThresholdMinutes).toBe(10);
     expect(settings.value.ovenTempMaxF).toBe(300);
     expect(settings.value.minReadingsForRecommendation).toBe(3);
   });
@@ -158,22 +254,45 @@ describe('forward compatibility with a pre-redesign stored session', () => {
   });
 
   it('still predicts an ETA from the restored readings', () => {
-    const { initialize, readings, config, settings } = freshSession();
+    const { initialize, readings, ovenEvents, config, settings } = freshSession();
     initialize();
 
     // Driven through the service rather than useCalculations so the test needs
-    // no component instance for the refresh timer.
+    // no component instance for the refresh timer. The oven history is not
+    // optional: the model integrates the actual dial timeline, so leaving it out
+    // is not "no oven changes" but "no oven".
     const result = computeSessionCalculations({
       readings: readings.value,
-      targetTemp: config.value.targetTemp,
+      ovenEvents: ovenEvents.value,
+      pullTempF: config.value.pullTempF,
+      restMinutes: config.value.restMinutes,
       desiredServeTime: config.value.desiredServeTime,
       settings: settings.value,
+      weightLb: config.value.weight,
+      meatType: config.value.meatType,
       now: '2026-08-22T21:30:00.000Z'
     });
 
     expect(result.currentRate).toBeGreaterThan(0);
     expect(result.predictedTargetTime).not.toBeNull();
     expect(result.scheduleStatus).not.toBe('unknown');
+  });
+
+  it('refuses to project with no oven history rather than blaming the oven', () => {
+    // An absent dial is not an oven that is off. Saying "the oven is not hot
+    // enough" about a cook whose setting was never logged would be blaming the
+    // oven for the app's missing data.
+    const result = computeSessionCalculations({
+      readings: legacySession().readings,
+      ovenEvents: [],
+      pullTempF: 125,
+      desiredServeTime: '2026-08-22T23:00:00.000Z',
+      settings: legacySession().settings,
+      now: '2026-08-22T21:30:00.000Z'
+    });
+
+    expect(result.projectionRefusedReason).toBe('no-oven-history');
+    expect(result.confidence.code).toBe('no-oven-history');
   });
 
   it('persists the resumed session back without corrupting it', () => {
@@ -242,5 +361,114 @@ describe('forward compatibility with a pre-redesign stored session', () => {
 
     expect(hasActiveSession.value).toBe(true);
     expect(readings.value).toHaveLength(4);
+  });
+});
+
+/**
+ * BACKWARD compatibility: the previous build reading storage THIS build wrote.
+ *
+ * The suite above only ever went forwards. A rollback goes the other way, and
+ * `registerType: 'autoUpdate'` in vite.config.js means a rollback reaches every
+ * client on its own - nobody chooses it, and nobody gets warned. The v2 migration
+ * used to `delete config.targetTemp` while createSession never wrote it, so a
+ * session written here carried no key the old build could read: it came back
+ * undefined, went into arithmetic, and reached `new Date(NaN)`. The RangeError
+ * lands inside a computed during render, so ErrorBoundary offers "Try again" -
+ * which throws again - directly above "Erase saved cook and reset". A rollback did
+ * not degrade a cook in progress, it destroyed it.
+ *
+ * `tools/rollback/calculationService.previous.js` is the real previous-build
+ * module, taken from `main` and committed so this test cannot quietly stop testing
+ * the thing it names. It lives under tools/ rather than src/ so it can never reach
+ * the bundle.
+ */
+describe('backward compatibility with the build this one replaced', () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  const oldBuild = () => import('../../tools/rollback/calculationService.previous.js');
+
+  it('writes the legacy key the old build reads', () => {
+    const session = useSession();
+    session.startSession({
+      units: 'F', pullTempF: 125, servingTempF: 129, initialOvenTemp: 200, weight: 6
+    });
+    session.addReading(48);
+
+    const stored = JSON.parse(localStorage.getItem(STORAGE_KEYS.CURRENT_SESSION));
+    expect(stored.config.targetTemp).toBe(125);
+    expect(stored.config.pullTempF).toBe(125);
+    session.endSession();
+  });
+
+  it('keeps the shadow in step when the cook moves the pull temperature', () => {
+    const session = useSession();
+    session.startSession({
+      units: 'F', pullTempF: 125, servingTempF: 129, initialOvenTemp: 200, weight: 6
+    });
+    session.updateConfig({ pullTempF: 137 });
+
+    const stored = JSON.parse(localStorage.getItem(STORAGE_KEYS.CURRENT_SESSION));
+    expect(stored.config.targetTemp).toBe(137);
+    session.endSession();
+  });
+
+  it('does not write the legacy key into the live config', () => {
+    // The shadow exists for the wire, not for the app. Leaking it back into the
+    // session object would resurrect the ambiguous name the split removed.
+    const session = useSession();
+    session.startSession({
+      units: 'F', pullTempF: 125, servingTempF: 129, initialOvenTemp: 200, weight: 6
+    });
+    expect('targetTemp' in session.config.value).toBe(false);
+    session.endSession();
+  });
+
+  it('the previous build projects from it instead of throwing', async () => {
+    const session = useSession();
+    const start = Date.parse('2026-08-22T12:00:00.000Z');
+    const at = (m) => new Date(start + m * 60_000).toISOString();
+    session.startSession({
+      units: 'F', pullTempF: 125, servingTempF: 129, initialOvenTemp: 200, weight: 6
+    });
+    session.addReading(48, at(0));
+    session.addReading(74, at(45));
+    session.addReading(96, at(90));
+
+    const stored = JSON.parse(localStorage.getItem(STORAGE_KEYS.CURRENT_SESSION));
+    const { computeSessionCalculations: oldCompute } = await oldBuild();
+
+    // Exactly the call the old build's useCalculations makes.
+    const result = oldCompute({
+      readings: stored.readings,
+      targetTemp: stored.config.targetTemp,
+      desiredServeTime: stored.config.desiredServeTime,
+      settings: { onTrackThresholdMinutes: 10, smoothingWindowReadings: 3 },
+      now: at(90)
+    });
+
+    expect(Number.isFinite(result.predictedMinutesToTarget)).toBe(true);
+    // The thing that used to throw: turning that projection into a clock time.
+    expect(() => new Date(result.predictedTargetTime).toISOString()).not.toThrow();
+    session.endSession();
+  });
+
+  it('and without the shadow it does throw - the regression this pins', async () => {
+    const { computeSessionCalculations: oldCompute } = await oldBuild();
+    const start = Date.parse('2026-08-22T12:00:00.000Z');
+    const at = (m) => new Date(start + m * 60_000).toISOString();
+
+    expect(() => oldCompute({
+      readings: [
+        { temp: 48, timestamp: at(0) },
+        { temp: 74, timestamp: at(45) },
+        { temp: 96, timestamp: at(90) }
+      ],
+      targetTemp: undefined, // what a v2-written session used to hand it
+      desiredServeTime: null,
+      settings: { onTrackThresholdMinutes: 10, smoothingWindowReadings: 3 },
+      now: at(90)
+    })).toThrow(RangeError);
   });
 });

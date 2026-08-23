@@ -12,6 +12,25 @@ real recommendation loop through them, asserts the properties that can be stated
 numerically, and renders screenshots at checkpoints so the rest can be judged by
 eye.
 
+**Fifteen cooks.** Four are excluded from the acceptance aggregate and say so in
+`SUMMARY.md`, because they are not representative of normal operation: the
+12-hour shoulder, whose thresholds are not these, and three *controls* whose bad
+numbers are the measurement rather than a failure.
+
+The controls are the most useful thing on the deck, because each isolates one
+intervention by removing it:
+
+| cook | what it removes | overshoot |
+|---|---|---|
+| `02-baseline-on-track` | nothing — the reference | 2.8 °F |
+| `10-forgetful-cook` | the cook ignores the reading prompt | **21.1 °F** |
+| `15-reading-due-prompt` | sparse habit, but the prompt obeyed and the ceiling set to 3 h so only the *derived* cadence can be doing the work | 5.3 °F |
+
+`15` takes 9 of its 11 readings because the app asked. Compared with `10` — the
+same sparse habit with the prompt ignored — that is 21.1 °F of overshoot turned
+into 5.3, attributable to the derivation alone rather than to the settings
+ceiling.
+
 It replaces regression testing on the recommendation loop. It does **not**
 replace real cooks — see [Limits](#limits).
 
@@ -19,14 +38,20 @@ replace real cooks — see [Limits](#limits).
 
 ```bash
 npm run sim:calibrate     # refit the thermal model against a real export
-npm run sim               # run the deck, write transcripts + snapshots, assert nothing
-npm run sim:test          # the same run, with the invariants as assertions
+npm run sim               # run the deck, write transcripts + snapshots, ASSERT
+npm run sim:baseline      # the same run, then re-record baseline.json from it
 npm run sim:shots         # 40 screenshots from the snapshots npm run sim wrote
 ```
 
-`npm run sim` and `npm run sim:test` are the same code path — one flag decides
-whether findings are fatal. A reporting run and an asserting run that could drift
-apart would eventually disagree about what happened.
+There is one entry point and it asserts. `npm run sim` used to be wired to a
+`SIM_REPORT_ONLY` mode that wrote every transcript and asserted nothing, with the
+asserting run hidden behind `sim:test`; the obvious command, the one in this
+README, was the one that could not fail. That is fixed.
+
+A failing run still writes everything: the transcripts are written per scenario
+*before* anything is asserted, and `summary.json` is written in `afterAll` either
+way. So a red deck still leaves the full diagnostic, and `sim:baseline` can still
+re-record from it.
 
 Narrow to one cook with `SIM_ONLY`:
 
@@ -59,27 +84,91 @@ npx playwright install chromium
 
 `ignore-scripts` is on globally, so Playwright's postinstall never fetches it.
 
-### Not a CI gate
+### The baseline, and why it ratchets
 
-`vitest.config.js` carries `exclude: [..., 'tools/**']`. Without it, vitest's
-default include glob would sweep `sim.spec.js` into `npm run test:run`, which is
-the deploy gate in `.github/workflows/deploy.yml`. That exclusion is
-load-bearing: this harness is a judgement tool, and `sim:test` is *expected* to
-report findings that are real defects in the app rather than in itself. Failing
-the deploy on them would only teach someone to loosen the thresholds.
+The deck does not pass clean, and pretending otherwise is how it stopped being
+able to fail. Five cooks miss their serve time by more than the 20-minute
+tolerance and several overshoot the target by 15–30 °F. Those numbers are
+recorded in `baseline.json` and the harness asserts against *them*:
+
+| verdict | when |
+|---|---|
+| **ok** | inside the tolerance — the baseline is not consulted at all |
+| **advisory** | over tolerance, but no worse than the recorded baseline |
+| **error** | worse than the baseline |
+| **error** | *better* than the baseline by the ratchet margin |
+
+The last row is the point. A baseline that only ever loosens is a baseline nobody
+tightens: the improvement lands, the number stays stale, and a year later the
+harness is asserting a bound that stopped being true. Making a stale baseline a
+hard failure forces the fix and the tightened number into the same commit.
+
+So when a change legitimately improves the deck, the run goes red and tells you
+to re-record. Do that, and commit `baseline.json` *with the change*:
+
+```bash
+npm run sim:baseline
+```
+
+Never re-record to make an unexplained red go away — that is the one habit that
+defeats the whole arrangement.
+
+`blockedMinutes` has no tolerance and is watched in **both** directions. Silence
+is not a metric with a good value: deferring advice was measured inert once
+already, taking the deck from 485 to 1100 minutes of no advice at all in exchange
+for one minute of accuracy.
+
+### The oracle
+
+`npm run sim` also runs `tools/oracle`, which is the answer to the obvious
+objection about everything above: the app's model and this harness's roast are
+the *same family*, so agreement between them is not evidence. The oracle is a
+1-D conduction solve — an infinite spectrum of decay modes against the cascade's
+one repeated pole — validated against closed-form series solutions and used to
+score the projection on data neither model can fit exactly. See
+`tools/README.md`.
+
+Measured there: mean absolute error in predicted finish time of 7–16 minutes
+against 27–208 minutes for the straight line the curve replaced, across a cook a
+cook actually lives through. The line is a few minutes *better* late on, when a
+solid body's core is nearly straight; what it cannot do is decline to answer, and
+early on it is hours out in the wrong direction.
+
+### It IS a CI gate
+
+`.github/workflows/test.yml` runs `npm run test:run` and `npm run sim` on every
+pull request, in separate jobs, and uploads `artifacts/` when the deck is red.
+
+`vitest.config.js` still carries `exclude: [..., 'tools/**']`, so the deck is not
+swept into the unit suite by vitest's default include glob — but that is about
+keeping two differently-scored suites apart, not about keeping this one out of
+CI. The whole deck of eight cooks runs in about 1.3 s; the unit suite takes 6.6 s.
+
+Before this, the only gate was `npm run test:run` on push to `main` — which is
+*after* merge, so the first signal a commit was broken was a failed deploy.
 
 ## How it works
 
 ```
-meatModel.js    two-node thermal model + stall + oven cycling + probe error
-calibrate.js    fits the model to a real export; prints residuals
-scenarios.js    the deck (8 cooks)
-driver.js       closed loop: steps time, logs readings, obeys the app
-invariants.js   the machine-checkable properties
-report.js       transcripts, state budgets, checkpoint snapshots
-sim.spec.js     runs the deck under vitest
-shots.spec.js   Playwright screenshots from the checkpoint snapshots
+meatModel.js       two-node thermal model + stall + oven cycling + probe error
+calibrate.js       fits the model to a real export; prints residuals
+calibrate.test.js  asserts the committed constants still reproduce that export
+scenarios.js       the deck (8 cooks)
+driver.js          closed loop: steps time, logs readings, obeys the app
+score.js           the numbers a cook is judged by, derived from the outcome
+baseline.js        tolerance / baseline / ratchet policy over those numbers
+baseline.json      the recorded misses (committed)
+baseline.cli.js    `npm run sim:baseline` - re-records baseline.json
+invariants.js       the machine-checkable properties
+report.js          transcripts, state budgets, checkpoint snapshots
+sim.spec.js        runs the deck under vitest
+shots.spec.js      Playwright screenshots from the checkpoint snapshots
 ```
+
+`score.js` exists so the transcripts and the assertions cannot disagree about
+what "overshoot" was: both read the same function. `calibrate.test.js` exists
+because `CALIBRATED` in `meatModel.js` is two hand-pasted numbers that nothing
+checked — and every scenario's ground truth is whatever they say.
 
 Almost nothing in `src/` had to change, because the architecture was already set
 up for this:

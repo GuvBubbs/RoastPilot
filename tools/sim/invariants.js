@@ -7,7 +7,14 @@
  * transcript before anything is asserted.
  */
 import { celsiusToFahrenheit } from '../../src/utils/temperatureUtils.js';
-import { assessOvenChangeEffect } from '../../src/services/recommendationService.js';
+import {
+  assessOvenChangeEffect,
+  MIN_CORE_FOR_OVEN_OFF_F,
+  MAX_CUMULATIVE_OVEN_OFF_MINUTES,
+  MAX_OVEN_OFF_MINUTES
+} from '../../src/services/recommendationService.js';
+import { METRICS, METRIC_POLICY, judgeMetric, metricsOf } from './baseline.js';
+import { scoreOutcome } from './score.js';
 
 /** Convergence tolerance: |target reached - serve time|, in minutes. */
 export const CONVERGENCE_TOLERANCE_MIN = 20;
@@ -35,6 +42,12 @@ const dialMoves = (outcome) =>
 export function checkConvergence(outcome) {
   const out = [];
   const hit = outcome.rows.find((r) => r.trueCoreF >= outcome.targetF);
+  // The instant the meat has to be OUT of the oven: the serve time less the
+  // rest. Identical to the serve time when no rest is declared.
+  const deadlineISO = outcome.pullDeadlineISO ?? outcome.serveISO;
+  const restNote = outcome.restMinutes
+    ? ` (serve less ${outcome.restMinutes} min rest)`
+    : '';
 
   if (!hit) {
     const shortfall = outcome.targetF - outcome.finalCoreF;
@@ -55,15 +68,24 @@ export function checkConvergence(outcome) {
     return out;
   }
 
-  const variance = Math.round(minutesBetween(outcome.serveISO, hit.atISO));
+  const variance = Math.round(minutesBetween(deadlineISO, hit.atISO));
   const label = variance >= 0 ? `${variance} min late` : `${-variance} min early`;
-  const severity = Math.abs(variance) <= CONVERGENCE_TOLERANCE_MIN
-    ? 'ok'
-    : outcome.advisoryConvergence ? 'advisory' : 'error';
 
-  out.push(finding('convergence', severity,
-    `target reached at ${hit.atMin} min, ${label} against the serve time ` +
-    `(tolerance ${CONVERGENCE_TOLERANCE_MIN} min)`,
+  // Severity comes from the baseline policy, not from the tolerance alone.
+  // Five cooks on this deck miss by more than the tolerance today; asserting
+  // the tolerance raw would leave the harness permanently red, which is
+  // indistinguishable from not asserting. See tools/sim/baseline.js.
+  //
+  // `advisoryConvergence` still short-circuits ahead of it: that flag says the
+  // scenario is ABOUT something else (06 exists to have a reading gap), which
+  // is a different statement from "this number is a known miss".
+  const verdict = outcome.advisoryConvergence
+    ? { severity: 'advisory', message: 'convergence is advisory for this scenario' }
+    : judgeMetric(outcome.scenario, 'convergenceAbs', Math.abs(variance));
+
+  out.push(finding('convergence', verdict.severity,
+    `pull temperature reached at ${hit.atMin} min, ${label} against the pull ` +
+    `deadline${restNote} (tolerance ${CONVERGENCE_TOLERANCE_MIN} min) - ${verdict.message}`,
     { varianceMinutes: variance, atMin: hit.atMin }));
   return out;
 }
@@ -199,13 +221,13 @@ export function checkBounds(outcome) {
  *     is waiting - awaitingEffect true. Anything else means the projection is
  *     being read as if it had already seen the change.
  *
- * (b) Consecutive moves in the same direction with no settled state between them
- *     must not, in total, go further than the FIRST of them asked for by more
- *     than one step. The plan states this without the "no settled state"
- *     qualifier, but escalating a raise after a reading has confirmed the
- *     previous one is not enough is correct behaviour, not a bug - the property
- *     that matters is that the app never re-charges for a change it has not
- *     measured.
+ * (b) Consecutive moves in the same direction, DERIVED FROM THE SAME
+ *     MEASUREMENT, must not in total go further than the first of them asked for
+ *     by more than one step. The plan states this without the qualifier, but
+ *     escalating after a reading has shown the previous change was not enough is
+ *     correct behaviour, not a bug - the property that matters is that the app
+ *     never re-charges for a change it has not measured. "The same measurement"
+ *     is read off the evidence set point; see the note on newEvidenceBetween.
  */
 export function checkNoDoubleCharging(outcome) {
   const out = [];
@@ -233,6 +255,9 @@ export function checkNoDoubleCharging(outcome) {
     // design, so awaitingEffect is legitimately false there.
     if (r.action === 'at-target' || !r.canRecommend) continue;
     if (r.action === 'needs-reading') continue;
+    // The oven is off, so the settling question is moot: the projection cannot
+    // describe a set point that is not in force. Restart is the only advice.
+    if (r.action === 'restart-oven') continue;
 
     const truth = assessOvenChangeEffect({
       readings: r.readingTimes.map((timestamp) => ({ timestamp })),
@@ -271,9 +296,52 @@ export function checkNoDoubleCharging(outcome) {
   }
 
   // ---- (b) unsettled moves in one direction do not compound --------------
-  const settledAt = (fromMin, toMin) =>
-    outcome.rows.some((r) => r.atMin > fromMin && r.atMin <= toMin &&
-      r.canRecommend && !r.awaitingEffect && r.action !== 'at-target');
+  //
+  // "Unsettled" needs care, and the first attempt at it was wrong once the
+  // reading prompt made readings dense.
+  //
+  // The property is that the app never re-charges for a change it has not
+  // MEASURED. Walking the oven down five steps because each new reading says the
+  // roast is earlier still than the last one said is not that - it is the loop
+  // working. 04 does exactly that: 250 F against a four-hour serve, the variance
+  // going +15 -> -26 -> -110 as the rate climbs, and the dial stepping down from
+  // 235 to 185 over five readings. Every step is one increment off the newest
+  // MEASURED set point, in response to information the app did not have before.
+  //
+  // Requiring a fully settled row between moves called that a 50 F double
+  // charge, because with ovenChangeSettleReadings = 2 the evidence set point
+  // trails the dial and awaitingEffect is still true when the next reading
+  // arrives.
+  //
+  // So the discriminator is the EVIDENCE SET POINT, which is the precise
+  // statement of "what have the readings actually measured":
+  //
+  //   evidence moved between the two moves   new ground; a further step is a
+  //                                          response, not a re-charge
+  //   evidence unchanged                     both moves were derived from the
+  //                                          same measurement - that is stacking
+  //
+  // Read off the app's own assessOvenChangeEffect at each move's instant rather
+  // than restated here, for the same reason half (a) is.
+  const evidenceAt = (atMin) => {
+    // The row stamped by the driver at the moment the dial moved carries the
+    // session as it then stood.
+    const row = outcome.rows.find((r) => r.kind === 'apply' && Math.abs(r.atMin - atMin) < 0.01)
+      ?? [...outcome.rows].reverse().find((r) => r.atMin <= atMin && r.ovenHistory);
+    if (!row?.ovenHistory) return null;
+    return assessOvenChangeEffect({
+      readings: (row.readingTimes ?? []).map((timestamp) => ({ timestamp })),
+      ovenEvents: row.ovenHistory,
+      settings: outcome.settings,
+      now: row.atISO
+    }).evidenceTemp;
+  };
+
+  const newEvidenceBetween = (previousMove, move) => {
+    const before = evidenceAt(previousMove.atMin);
+    const after = evidenceAt(move.atMin);
+    return before !== null && after !== null && before !== after;
+  };
 
   let run = [];
   const flushRun = () => {
@@ -297,7 +365,7 @@ export function checkNoDoubleCharging(outcome) {
     const enriched = { ...move, toF: moveF };
     if (run.length === 0) { run = [enriched]; continue; }
     const previous = run[run.length - 1];
-    if (move.action !== previous.action || settledAt(previous.atMin, move.atMin)) {
+    if (move.action !== previous.action || newEvidenceBetween(previous, move)) {
       flushRun();
       run = [enriched];
     } else {
@@ -353,12 +421,27 @@ export function checkSaneNumbers(outcome) {
     }
   }
 
-  // Between readings the projected finish time is a fixed point; only the
-  // distance to it may move. Anything else means the clock is feeding back into
-  // the projection.
+  /**
+   * Between readings the projected finish time is a fixed point; only the
+   * distance to it may move. Anything else means the clock is feeding back into
+   * the projection.
+   *
+   * The anchor resets on a change in the OVEN EVENT COUNT, not on `kind ===
+   * 'reading'`. The old rule was right for an oven-blind projection: only a new
+   * reading could move it, so a row of kind 'apply' was a row whose projection
+   * had better not have changed. The projection now integrates the actual dial
+   * timeline, so a dial change legitimately moves the finish time with no reading
+   * in between - which is the whole point of modelling the oven.
+   *
+   * Both resets are needed. A reading is new evidence; an oven change is a new
+   * future. Anything else that moves the number is the bug this check is for.
+   */
   let anchor = null;
+  let ovenEventCount = null;
   for (const r of outcome.rows) {
-    if (r.kind === 'reading') { anchor = null; }
+    const events = r.ovenHistory ? r.ovenHistory.length : ovenEventCount;
+    if (r.kind === 'reading' || events !== ovenEventCount) anchor = null;
+    ovenEventCount = events;
     if (!r.predictedTargetTime) { anchor = null; continue; }
     if (anchor === null) { anchor = r; continue; }
     if (r.predictedTargetTime !== anchor.predictedTargetTime) {
@@ -415,8 +498,42 @@ export function checkRenderedText(outcome) {
     }
   }
 
+  /**
+   * THE WRONG UNIT, WHICH IS THE OTHER HALF OF THIS CHECK.
+   *
+   * The scan above only finds placeholders that failed to substitute, and a
+   * hardcoded literal is not a placeholder - so a Celsius cook was shown "not safe
+   * until the core is above 140°F" and "25°F above your 191°F pull" beside a screen
+   * reading 88 °C, five times in one cook, and this invariant reported no problem.
+   * Three separate sentences were assembling their own degree symbols in the
+   * service instead of emitting a placeholder for the substitution layer.
+   *
+   * A cook running in one unit must never be shown the other. Cheap to check and
+   * it closes the class rather than the three instances.
+   */
+  const wrongUnit = outcome.units === 'C' ? /°\s?F\b/ : /°\s?C\b/;
+  let unitBreaches = 0;
+
+  for (const r of outcome.rows) {
+    for (const field of TEXT_FIELDS) {
+      const text = r[field];
+      if (typeof text !== 'string') continue;
+      if (!wrongUnit.test(text)) continue;
+      const key = `unit:${field}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      unitBreaches++;
+      out.push(finding('rendered-text', 'error',
+        `a ${outcome.units === 'C' ? 'Fahrenheit' : 'Celsius'} temperature reached ` +
+        `${field} in a ${outcome.units} cook at ${r.atMin} min (action ` +
+        `"${r.action}"): ${text}`, { row: r.atMin, field }));
+    }
+  }
+
   if (seen.size === 0) {
-    out.push(finding('rendered-text', 'ok', 'no unsubstituted placeholders reached the screen'));
+    out.push(finding('rendered-text', 'ok',
+      `no unsubstituted placeholders reached the screen, and nothing was shown in ` +
+      `the wrong unit for a ${outcome.units} cook`));
   }
   return out;
 }
@@ -432,11 +549,246 @@ export function checkTerminalState(outcome) {
     { finished: outcome.finished, action: last.action, blockerType: last.blockerType })];
 }
 
+
+/**
+ * The acceptance metrics, each against its tolerance and its recorded baseline.
+ *
+ * Convergence has its own check above, which says more about *what* happened;
+ * this one covers the rest of the deck's numbers - overshoot, blind minutes,
+ * blocked minutes, reversals - so that every acceptance threshold in the plan
+ * is enforced by the harness rather than by someone reading SUMMARY.md.
+ *
+ * blockedMinutes is watched in both directions on purpose. A new eligibility
+ * gate is a new way to fall silent, and silence alone was measured inert:
+ * deferring advice took the deck from 485 to 1100 minutes of no advice at all
+ * and bought one minute of accuracy.
+ */
+export function checkAcceptanceMetrics(outcome) {
+  // Through metricsOf, not off the raw score: that is the function
+  // baseline.json is written with, so the number asserted here is bit-for-bit
+  // the number recorded there. Comparing a raw 17.900000000000006 against a
+  // stored 17.9 would put float dust into every message.
+  const metrics = metricsOf(scoreOutcome(outcome));
+  const out = [];
+
+  for (const metric of METRICS) {
+    // Convergence is reported by checkConvergence, which has the context to say
+    // whether the cook even reached target.
+    if (metric === 'convergenceAbs') continue;
+    const value = metrics[metric];
+    const verdict = judgeMetric(outcome.scenario, metric, value);
+    out.push(finding('acceptance', verdict.severity, verdict.message,
+      { metric, value, tolerance: METRIC_POLICY[metric].tolerance }));
+  }
+
+  return out;
+}
+
+
+/**
+ * The app must not advise from evidence it has admitted is stale.
+ *
+ * "On track for serve time" printed beside a three-hour-old reading is the
+ * contradiction the missing reading prompt used to produce, and it is the one
+ * thing the forgetful cook - who ignores the prompt entirely - is there to test.
+ * The app cannot make that cook take a reading; it can decline to pretend it
+ * knows where the roast is.
+ *
+ * Asserted against the app's OWN staleness setting rather than a number restated
+ * here, so raising the setting cannot silently widen the window this check
+ * allows.
+ */
+/**
+ * How far the TRUE core may drift, in degrees, between the reading a piece of
+ * advice rests on and the moment that advice is given.
+ *
+ * Owned by the harness, deliberately not by the app. The minutes half of this
+ * check reads `settings.staleReadingMinutes`, which makes it a consistency
+ * assertion - the app must respect its own limit - and NOT an independent one: a
+ * scenario configuring `staleReadingMinutes: 600` passed while the app advised
+ * off a ten-hour-old reading, because the check widened with the setting it was
+ * supposed to be policing. A degree limit cannot be widened by configuration, and
+ * it is measured against the simulated roast's true core, which the app cannot
+ * see. It is also the right question: a 180-minute-old reading on an overnight
+ * shoulder is fine, and a 60-minute-old one in the endgame is not.
+ *
+ * BOTH conditions have to hold: the reading has to be older than
+ * MAX_ADVICE_AGE_MIN *and* the roast has to have outrun it by MAX_ADVICE_DRIFT_F.
+ * Either alone is wrong. Age alone punishes an overnight shoulder for a
+ * three-hour gap in which the core moved 2 F, which is not staleness. Drift alone
+ * punishes a 3 lb tenderloin for a ten-minute-old reading, because the app's
+ * reading schedule has a deliberate 10-minute floor and a roast climbing at
+ * 124 F/hr will always outrun it - that is the floor's cost, not a stale-advice
+ * bug.
+ *
+ * 20 F is two and a half times the 8 F the app's own reading schedule tries to
+ * keep between readings. 45 min is the shipped default `staleReadingMinutes`, so
+ * a scenario cannot configure itself more lenient than the product ships.
+ */
+export const MAX_ADVICE_DRIFT_F = 20;
+export const MAX_ADVICE_AGE_MIN = 45;
+
+export function checkNoStaleAdvice(outcome) {
+  const out = [];
+  const staleAfter = outcome.settings.staleReadingMinutes ?? 45;
+  // Advice derived from the projection. at-target is a fact about the newest
+  // reading, restart-oven is about the oven, and needs-reading is itself a
+  // request for fresher evidence - none of them claim to know the schedule.
+  const PROJECTION_ADVICE = ['raise', 'lower', 'hold', 'oven-off', 'settling'];
+  let breaches = 0;
+
+  for (const r of outcome.rows) {
+    if (!r.canRecommend || !PROJECTION_ADVICE.includes(r.action)) continue;
+    if (!r.latestReadingISO) continue;
+
+    const age = minutesBetween(r.latestReadingISO, r.atISO);
+    // One tick of slack: a row stamped exactly on the boundary is the gate
+    // firing, not the gate failing.
+    if (age > staleAfter + 5.1) {
+      breaches++;
+      out.push(finding('no-stale-advice', 'error',
+        `at ${r.atMin} min the app advised "${r.action}" (${r.scheduleStatus}) from a ` +
+        `reading ${age.toFixed(0)} min old, past the ${staleAfter} min staleness ` +
+        'limit', { row: r.atMin, ageMinutes: age }));
+    }
+  }
+
+  /**
+   * The independent half: how much did the roast actually move since the reading
+   * the advice rested on? The true core at that instant is taken from the nearest
+   * transcript row, which is ground truth in Fahrenheit regardless of the
+   * session's display units.
+   */
+  let driftBreaches = 0;
+  const trueCoreAt = (iso) => {
+    const target = Date.parse(iso);
+    let best = null;
+    let bestGap = Infinity;
+    for (const row of outcome.rows) {
+      const gap = Math.abs(Date.parse(row.atISO) - target);
+      if (gap < bestGap) { bestGap = gap; best = row; }
+    }
+    // Only trust it if a row actually sits near that instant.
+    return bestGap <= 6 * 60_000 ? best?.trueCoreF ?? null : null;
+  };
+
+  for (const r of outcome.rows) {
+    if (!r.canRecommend || !PROJECTION_ADVICE.includes(r.action)) continue;
+    if (!r.latestReadingISO) continue;
+    const coreThen = trueCoreAt(r.latestReadingISO);
+    if (coreThen === null) continue;
+    const drift = r.trueCoreF - coreThen;
+    const age = minutesBetween(r.latestReadingISO, r.atISO);
+    if (drift > MAX_ADVICE_DRIFT_F && age > MAX_ADVICE_AGE_MIN) {
+      driftBreaches++;
+      out.push(finding('no-stale-advice', 'error',
+        `at ${r.atMin} min the app advised "${r.action}" (${r.scheduleStatus}) from a ` +
+        `reading ${age.toFixed(0)} min old, by which time the true core had moved ` +
+        `${drift.toFixed(1)} F - past both the ${MAX_ADVICE_AGE_MIN} min and the ` +
+        `${MAX_ADVICE_DRIFT_F} F the harness allows, whatever staleReadingMinutes ` +
+        'is set to',
+        { row: r.atMin, ageMinutes: age, driftF: drift }));
+    }
+  }
+
+  if (breaches === 0 && driftBreaches === 0) {
+    out.push(finding('no-stale-advice', 'ok',
+      `no advice given from a reading older than ${staleAfter} min, and none from ` +
+      `one over ${MAX_ADVICE_AGE_MIN} min old that the true core had outrun by ` +
+      `${MAX_ADVICE_DRIFT_F} F`));
+  }
+  return out;
+}
+
+/**
+ * FOOD SAFETY, WHICH NOTHING CHECKED.
+ *
+ * `grep -E "danger|140|mayPause" tools/sim/invariants.js` returned nothing before
+ * this. Scenario 13 exists to prove the app refuses to pause a cold roast - its
+ * own docstring says "It has to refuse... The number to read is that it refuses" -
+ * and it recorded the app recommending `oven-off` at core temperatures of 101,
+ * 117 and 124 F while reporting zero errors, because no check was looking.
+ *
+ * Three rules, all of them the app's own constants rather than numbers invented
+ * here, so a change to the rule and a change to the check cannot drift apart:
+ *
+ *   - never offer a pause below MIN_CORE_FOR_OVEN_OFF_F of measured core;
+ *   - never offer one longer than MAX_OVEN_OFF_MINUTES;
+ *   - never let the cumulative time off exceed MAX_CUMULATIVE_OVEN_OFF_MINUTES.
+ *
+ * Measured on the PROBE reading rather than the true core, deliberately: the app
+ * can only act on what it was told, and holding it to a temperature it could not
+ * see would be scoring the thermometer.
+ */
+export function checkFoodSafety(outcome) {
+  const out = [];
+  let breaches = 0;
+
+  /** Cumulative minutes the oven was off, from the transcript's own oven state. */
+  let offMinutes = 0;
+  for (let i = 0; i < outcome.rows.length; i++) {
+    const row = outcome.rows[i];
+    const until = outcome.rows[i + 1]?.atMin ?? row.atMin;
+    if (row.ovenOff) offMinutes += Math.max(0, until - row.atMin);
+  }
+
+  for (const row of outcome.rows) {
+    const offering = row.canRecommend && row.action === 'oven-off';
+    if (!offering) continue;
+
+    if (row.latestReadingF === null || row.latestReadingF === undefined) {
+      breaches++;
+      out.push(finding('food-safety', 'error',
+        `at ${row.atMin} min the app offered to switch the oven off with no reading ` +
+        'to judge the core temperature by', { row: row.atMin }));
+      continue;
+    }
+
+    // The transcript stores readings in the session's display units.
+    const coreF = outcome.units === 'C'
+      ? celsiusToFahrenheit(row.latestReadingF)
+      : row.latestReadingF;
+
+    if (coreF < MIN_CORE_FOR_OVEN_OFF_F) {
+      breaches++;
+      out.push(finding('food-safety', 'error',
+        `at ${row.atMin} min the app offered to switch the oven off with the core at ` +
+        `${coreF.toFixed(1)} F, under the ${MIN_CORE_FOR_OVEN_OFF_F} F floor: ` +
+        `"${row.message}"`,
+        { row: row.atMin, coreF }));
+    }
+
+    if (row.waitMinutes !== null && row.waitMinutes > MAX_OVEN_OFF_MINUTES) {
+      breaches++;
+      out.push(finding('food-safety', 'error',
+        `at ${row.atMin} min the app offered a ${row.waitMinutes} minute pause, over ` +
+        `the ${MAX_OVEN_OFF_MINUTES} minute cap`, { row: row.atMin }));
+    }
+  }
+
+  if (offMinutes > MAX_CUMULATIVE_OVEN_OFF_MINUTES + 5) {
+    breaches++;
+    out.push(finding('food-safety', 'error',
+      `the oven was off for ${Math.round(offMinutes)} minutes in total, over the ` +
+      `${MAX_CUMULATIVE_OVEN_OFF_MINUTES} minute budget`, { offMinutes }));
+  }
+
+  if (breaches === 0) {
+    out.push(finding('food-safety', 'ok',
+      `no pause offered below ${MIN_CORE_FOR_OVEN_OFF_F} F core, none longer than ` +
+      `${MAX_OVEN_OFF_MINUTES} min, and ${Math.round(offMinutes)} min off in total`));
+  }
+  return out;
+}
+
 export const CHECKS = [
   checkConvergence,
+  checkAcceptanceMetrics,
   checkNoFlapping,
   checkBounds,
   checkNoDoubleCharging,
+  checkNoStaleAdvice,
+  checkFoodSafety,
   checkSaneNumbers,
   checkRenderedText,
   checkTerminalState

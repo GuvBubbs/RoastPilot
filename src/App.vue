@@ -228,7 +228,8 @@ function getSessionInfo() {
 
   return {
     createdAt: stored.config.createdAt,
-    targetTemp: stored.config.targetTemp,
+    pullTempF: stored.config.pullTempF,
+    servingTempF: stored.config.servingTempF,
     units: stored.config.units,
     readingCount,
     lastReadingTemp: lastReading?.temp ?? null,

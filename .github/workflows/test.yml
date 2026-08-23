@@ -1,0 +1,66 @@
+name: Tests
+
+# The point of this workflow is that it runs BEFORE merge. deploy.yml runs
+# `npm run test:run` too, but only on push to main - by which time a broken
+# commit is already on the branch that deploys, and the only signal is a failed
+# deploy after the fact.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# A new push to the same PR makes the previous run's answer irrelevant.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit:
+    name: Unit suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      # TZ is load-bearing, not cosmetic. The DST tests assert against a zone
+      # that actually has a DST transition; CI's default UTC has none, so an
+      # unpinned run would pass them vacuously. The suite pins the zone per
+      # project as well - this is the belt to that braces.
+      - run: npm run test:run
+        env:
+          TZ: Pacific/Auckland
+
+  sim:
+    name: Simulated cook deck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run sim
+        env:
+          TZ: Pacific/Auckland
+
+      # The transcripts are the whole diagnostic. A red deck without them is
+      # just "eight cooks, one number wrong, good luck".
+      - name: Upload sim transcripts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sim-transcripts
+          path: tools/sim/artifacts/
+          retention-days: 14
+          if-no-files-found: warn

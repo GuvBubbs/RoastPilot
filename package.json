@@ -11,8 +11,8 @@
     "test:ui": "vitest --ui",
     "test:run": "vitest run",
     "generate-pwa-assets": "pwa-assets-generator",
-    "sim": "SIM_REPORT_ONLY=1 vitest run --config vitest.sim.config.js",
-    "sim:test": "vitest run --config vitest.sim.config.js",
+    "sim": "vitest run --config vitest.sim.config.js",
+    "sim:baseline": "vitest run --config vitest.sim.config.js; node tools/sim/baseline.cli.js",
     "sim:calibrate": "node tools/sim/calibrate.js",
     "sim:shots": "playwright test"
   },

@@ -2,12 +2,68 @@ import { computed } from 'vue';
 import { useSession } from './useSession.js';
 import { useCalculations } from './useCalculations.js';
 import { useRefreshTimer } from './useRefreshTimer.js';
-import { generateRecommendation, analyzeOvenResponsiveness, buildRecommendationResult } from '../services/recommendationService.js';
+import {
+  generateRecommendation, analyzeOvenResponsiveness, buildRecommendationResult,
+  assessOvenChangeEffect
+} from '../services/recommendationService.js';
+import { projectScheduleUnderOven } from '../services/calculationService.js';
 import { toDisplayUnit, formatTemperature } from '../utils/temperatureUtils.js';
 
 export function useRecommendations() {
   const { readings, ovenEvents, currentOvenTemp, lastActiveOvenTemp, config, settings, displayUnits } = useSession();
-  const { scheduleVariance, scheduleStatus, confidence, predictedMinutesToTarget, currentRateRaw } = useCalculations();
+  const {
+    scheduleVariance, scheduleStatus, confidence, predictedMinutesToTarget,
+    currentRateRaw, projectionRefusedReason
+  } = useCalculations();
+  
+  /**
+   * THE COLLISION, AND WHY THIS FUNCTION EXISTS.
+   *
+   * `generateRecommendation` feeds `calculateRecommendation` from
+   * `changeEffect.evidenceTemp` - the set point the READINGS describe - while a
+   * dial change is still unmeasured. That is right, and it is what stops the same
+   * step being charged for twice.
+   *
+   * It only worked because the projection was oven-blind. Now the projection
+   * integrates the actual dial timeline, so the variance handed in describes the
+   * oven as it IS while the recommendation is being computed for the oven as it
+   * was MEASURED. That mismatch is a reversal generator:
+   *
+   *   project under 250 -> on-track -> `hold` at evidenceTemp 200 ->
+   *   reconcileWithOvenChange sees a -50 gap -> "lower to 200",
+   *
+   * one reading after telling the cook to raise it. Both checkNoFlapping and
+   * checkNoDoubleCharging go red on it.
+   *
+   * So while a change is unmeasured, the variance is recomputed under the set
+   * point the readings describe. The recommendation is then internally
+   * consistent: a projection of the measured oven, judged against the deadline,
+   * advising from the measured oven.
+   */
+  const scheduleUnderEvidence = computed(() => {
+    tick.value;
+    if (!config.value || readings.value.length === 0) return null;
+
+    const effect = assessOvenChangeEffect({
+      readings: readings.value,
+      ovenEvents: ovenEvents.value,
+      settings: settings.value,
+      now: new Date().toISOString()
+    });
+
+    // Settled, or nothing to reconcile: the ordinary projection already
+    // describes the oven the readings describe.
+    if (effect.settled || effect.evidenceTemp === null) return null;
+
+    return projectScheduleUnderOven({
+      readings: readings.value,
+      ovenEvents: ovenEvents.value,
+      setPointF: effect.evidenceTemp,
+      config: config.value,
+      settings: settings.value,
+      now: new Date().toISOString()
+    });
+  });
   
   // The eligibility gate ages the last oven event against the clock. Without a
   // tick this computed never re-ran, so "your oven setting is stale" only fired
@@ -40,14 +96,23 @@ export function useRecommendations() {
       // the oven is off - "0 + 25" produced a 25°F set point the Apply button
       // then wrote into the oven history.
       ovenBaseTemp: lastActiveOvenTemp.value,
-      targetTemp: config.value.targetTemp,
+      pullTempF: config.value.pullTempF,
       desiredServeTime: config.value.desiredServeTime,
-      scheduleVarianceMinutes: scheduleVariance.value,
-      scheduleStatus: scheduleStatus.value,
+      // Under the MEASURED set point while a change is unmeasured; see
+      // scheduleUnderEvidence.
+      scheduleVarianceMinutes: scheduleUnderEvidence.value
+        ? scheduleUnderEvidence.value.scheduleVarianceMinutes
+        : scheduleVariance.value,
+      scheduleStatus: scheduleUnderEvidence.value
+        ? scheduleUnderEvidence.value.scheduleStatus
+        : scheduleStatus.value,
       confidence: confidence.value,
       settings: settings.value,
       predictedMinutesToTarget: predictedMinutesToTarget.value,
       currentRate: currentRateRaw.value,
+      // A refused projection has to reach the user as a blocker with a reason,
+      // not as "Unable to determine schedule status" dressed up as advice.
+      projectionRefusedReason: projectionRefusedReason.value,
       // The dial's markings depend on the unit on screen, so the service snaps
       // its suggestions in that unit rather than emitting 102°C.
       displayUnits: displayUnits.value,
@@ -138,6 +203,34 @@ export function useRecommendations() {
       }
     }
     
+    /**
+     * The food-safety floor, the oven headroom and the pull temperature.
+     *
+     * All three used to be written into their sentences as Fahrenheit literals in
+     * the service, so a Celsius cook was told "not safe until the core is above
+     * 140°F" and "25°F above your 191°F pull" while every number on the screen
+     * beside them was in °C. The `rendered-text` invariant did not catch it: it
+     * only looks for placeholders that failed to substitute, and a hardcoded
+     * literal is not a placeholder.
+     *
+     * {headroom} is a DIFFERENCE, so it converts as a difference - 25 °F of
+     * headroom is 14 °C, not -4 °C.
+     */
+    if (out.includes('{safeTemp}') && raw.safeCoreF !== null && raw.safeCoreF !== undefined) {
+      out = out.replace(/{safeTemp}/g, formatTemperature(raw.safeCoreF, displayUnits.value));
+    }
+
+    if (out.includes('{pullTemp}') && raw.pullTempF !== null && raw.pullTempF !== undefined) {
+      out = out.replace(/{pullTemp}/g, formatTemperature(raw.pullTempF, displayUnits.value));
+    }
+
+    if (out.includes('{headroom}') && raw.headroomF !== null && raw.headroomF !== undefined) {
+      const degrees = displayUnits.value === 'C'
+        ? Math.round(raw.headroomF * 5 / 9)
+        : raw.headroomF;
+      out = out.replace(/{headroom}/g, `${degrees}°${displayUnits.value}`);
+    }
+
     if (out.includes('{maxTemp}') && raw.maxTempF !== null && raw.maxTempF !== undefined) {
       out = out.replace(/{maxTemp}/g, formatTemperature(raw.maxTempF, displayUnits.value));
     }

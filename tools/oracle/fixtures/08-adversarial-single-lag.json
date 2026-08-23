@@ -1,0 +1,102 @@
+{
+  "name": "08-adversarial-single-lag",
+  "what": "A single first-order lag, straight at the oven: no dead time at all, fastest at t=0. The one shape a two-lag cascade structurally cannot produce, because its own response starts flat.",
+  "family": "none: one exponential",
+  "adversarial": true,
+  "weightLb": 6,
+  "pullTempF": 125,
+  "trueHitMin": 59,
+  "readings": [
+    {
+      "temp": 48,
+      "timestamp": "2026-08-22T18:00:00.000Z"
+    },
+    {
+      "temp": 73,
+      "timestamp": "2026-08-22T18:15:00.000Z"
+    },
+    {
+      "temp": 94,
+      "timestamp": "2026-08-22T18:30:00.000Z"
+    },
+    {
+      "temp": 111.4,
+      "timestamp": "2026-08-22T18:45:00.000Z"
+    },
+    {
+      "temp": 126,
+      "timestamp": "2026-08-22T19:00:00.000Z"
+    },
+    {
+      "temp": 138.2,
+      "timestamp": "2026-08-22T19:15:00.000Z"
+    },
+    {
+      "temp": 148.4,
+      "timestamp": "2026-08-22T19:30:00.000Z"
+    },
+    {
+      "temp": 156.9,
+      "timestamp": "2026-08-22T19:45:00.000Z"
+    },
+    {
+      "temp": 164,
+      "timestamp": "2026-08-22T20:00:00.000Z"
+    },
+    {
+      "temp": 169.9,
+      "timestamp": "2026-08-22T20:15:00.000Z"
+    },
+    {
+      "temp": 174.9,
+      "timestamp": "2026-08-22T20:30:00.000Z"
+    },
+    {
+      "temp": 179,
+      "timestamp": "2026-08-22T20:45:00.000Z"
+    },
+    {
+      "temp": 182.5,
+      "timestamp": "2026-08-22T21:00:00.000Z"
+    },
+    {
+      "temp": 185.4,
+      "timestamp": "2026-08-22T21:15:00.000Z"
+    },
+    {
+      "temp": 187.8,
+      "timestamp": "2026-08-22T21:30:00.000Z"
+    },
+    {
+      "temp": 189.8,
+      "timestamp": "2026-08-22T21:45:00.000Z"
+    },
+    {
+      "temp": 191.5,
+      "timestamp": "2026-08-22T22:00:00.000Z"
+    },
+    {
+      "temp": 192.9,
+      "timestamp": "2026-08-22T22:15:00.000Z"
+    },
+    {
+      "temp": 194,
+      "timestamp": "2026-08-22T22:30:00.000Z"
+    },
+    {
+      "temp": 195,
+      "timestamp": "2026-08-22T22:45:00.000Z"
+    },
+    {
+      "temp": 195.8,
+      "timestamp": "2026-08-22T23:00:00.000Z"
+    }
+  ],
+  "ovenEvents": [
+    {
+      "setTemp": 200,
+      "timestamp": "2026-08-22T18:00:00.000Z",
+      "isOff": false
+    }
+  ]
+}

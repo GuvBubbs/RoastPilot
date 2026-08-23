@@ -1,0 +1,102 @@
+{
+  "name": "06-slab-6lb-200F",
+  "what": "The same weight as 01 but a slab - a flat cut rather than a round one, so the heat comes in from two faces instead of all round. A different spectrum again, and a different time scale.",
+  "family": "1-D conduction, slab",
+  "adversarial": false,
+  "weightLb": 6,
+  "pullTempF": 125,
+  "trueHitMin": 63,
+  "readings": [
+    {
+      "temp": 48,
+      "timestamp": "2026-08-22T18:00:00.000Z"
+    },
+    {
+      "temp": 48.6,
+      "timestamp": "2026-08-22T18:08:00.000Z"
+    },
+    {
+      "temp": 56.2,
+      "timestamp": "2026-08-22T18:16:00.000Z"
+    },
+    {
+      "temp": 69,
+      "timestamp": "2026-08-22T18:24:00.000Z"
+    },
+    {
+      "temp": 82.7,
+      "timestamp": "2026-08-22T18:32:00.000Z"
+    },
+    {
+      "temp": 95.6,
+      "timestamp": "2026-08-22T18:40:00.000Z"
+    },
+    {
+      "temp": 107.3,
+      "timestamp": "2026-08-22T18:48:00.000Z"
+    },
+    {
+      "temp": 117.8,
+      "timestamp": "2026-08-22T18:56:00.000Z"
+    },
+    {
+      "temp": 127.1,
+      "timestamp": "2026-08-22T19:04:00.000Z"
+    },
+    {
+      "temp": 135.4,
+      "timestamp": "2026-08-22T19:12:00.000Z"
+    },
+    {
+      "temp": 142.7,
+      "timestamp": "2026-08-22T19:20:00.000Z"
+    },
+    {
+      "temp": 149.2,
+      "timestamp": "2026-08-22T19:28:00.000Z"
+    },
+    {
+      "temp": 155,
+      "timestamp": "2026-08-22T19:36:00.000Z"
+    },
+    {
+      "temp": 160.1,
+      "timestamp": "2026-08-22T19:44:00.000Z"
+    },
+    {
+      "temp": 164.6,
+      "timestamp": "2026-08-22T19:52:00.000Z"
+    },
+    {
+      "temp": 168.6,
+      "timestamp": "2026-08-22T20:00:00.000Z"
+    },
+    {
+      "temp": 172.2,
+      "timestamp": "2026-08-22T20:08:00.000Z"
+    },
+    {
+      "temp": 175.3,
+      "timestamp": "2026-08-22T20:16:00.000Z"
+    },
+    {
+      "temp": 178.1,
+      "timestamp": "2026-08-22T20:24:00.000Z"
+    },
+    {
+      "temp": 180.6,
+      "timestamp": "2026-08-22T20:32:00.000Z"
+    },
+    {
+      "temp": 182.8,
+      "timestamp": "2026-08-22T20:40:00.000Z"
+    }
+  ],
+  "ovenEvents": [
+    {
+      "setTemp": 200,
+      "timestamp": "2026-08-22T18:00:00.000Z",
+      "isOff": false
+    }
+  ]
+}

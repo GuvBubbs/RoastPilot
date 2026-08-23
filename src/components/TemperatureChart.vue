@@ -31,11 +31,13 @@ import { useSession } from '../composables/useSession.js';
 import { hasReadingSince } from '../services/recommendationService.js';
 import { useCalculations } from '../composables/useCalculations.js';
 import { toDisplayUnit } from '../utils/temperatureUtils.js';
+import { advance } from '../services/thermalModel.js';
 import { formatTime } from '../utils/timeUtils.js';
 import {
   defaultChartOptions,
   createOvenScale,
   createTargetAnnotation,
+  createRestBandAnnotation,
   createServeTimeAnnotation,
   createCrossingMarker,
   createDataLabel,
@@ -49,7 +51,10 @@ const props = defineProps({
 });
 
 const { readings, ovenEvents, config, displayUnits } = useSession();
-const { predictedTargetTime, currentTemp, canPredict } = useCalculations();
+const {
+  predictedTargetTime, currentTemp, canPredict, restMinutes, predictedServeTime,
+  targetReached, fit
+} = useCalculations();
 
 const { width } = useWindowSize();
 
@@ -193,7 +198,7 @@ const meatRange = computed(() => {
   const temps = readings.value.map(r => toDisplayUnit(r.temp, displayUnits.value));
 
   if (config.value) {
-    temps.push(toDisplayUnit(config.value.targetTemp, displayUnits.value));
+    temps.push(toDisplayUnit(config.value.pullTempF, displayUnits.value));
   }
 
   if (temps.length === 0) return { min: 0, max: 200 };
@@ -243,8 +248,21 @@ const awaitingPostPauseReading = computed(() => {
   return !hasReadingSince(readings.value, last.timestamp);
 });
 
+/** Points along the projected path. Enough to read as a curve, few enough to be free. */
+const PROJECTION_SAMPLES = 16;
+
 /**
  * Dashed projection from the latest reading to the predicted crossing.
+ *
+ * SAMPLED ALONG THE FITTED CURVE, not drawn as a straight segment between the
+ * two ends. It used to be two points, which was honest when the projection WAS a
+ * straight line and became a lie when it stopped being one: the chart would show
+ * a constant climb while the engine had computed a decelerating one, and the gap
+ * between them is largest exactly where a cook looks - the last half hour, where
+ * the curve flattens and the line does not.
+ *
+ * The samples come from the same `advance` the projection itself uses, so the
+ * drawn path and the predicted crossing cannot disagree.
  */
 const projectionData = computed(() => {
   if (!canPredict.value || !predictedTargetTime.value || currentTemp.value === null) {
@@ -254,21 +272,56 @@ const projectionData = computed(() => {
   // While cooking is paused with nothing logged since, the app deliberately
   // refuses to estimate the meat - the advice band asks for a fresh reading.
   // Projecting here would contradict it with the brightest mark on the screen,
-  // and it would be wrong in a known direction: the fit is the pre-pause
-  // heating rate, but the meat is cooling.
+  // and it would be wrong in a known direction: the fit describes heating, and
+  // the meat is cooling.
   if (awaitingPostPauseReading.value) return [];
 
+  // The shared verdict, not a fourth reimplementation of it. This used to
+  // compare DISPLAY units, which round to 0.1 °C - so on a Celsius session the
+  // chart could land on the other side of the boundary from the advice band and
+  // the two would disagree about whether the same roast was done.
+  if (targetReached.value) return [];
+
   const lastReading = readings.value[readings.value.length - 1];
-  const currentTempDisplay = toDisplayUnit(currentTemp.value, displayUnits.value);
-  const targetTempDisplay = toDisplayUnit(config.value.targetTemp, displayUnits.value);
+  const startMs = new Date(lastReading.timestamp).getTime();
+  const endMs = new Date(predictedTargetTime.value).getTime();
+  const pullTempDisplay = toDisplayUnit(config.value.pullTempF, displayUnits.value);
+  const totalMinutes = (endMs - startMs) / 60_000;
 
-  // Nothing left to project once the target is reached.
-  if (currentTempDisplay >= targetTempDisplay) return [];
+  const anchor = fit.value?.anchorState;
+  const k = fit.value?.k;
+  const setPointF = currentOvenSetPointF.value;
 
-  return [
-    { x: new Date(lastReading.timestamp).getTime(), y: currentTempDisplay },
-    { x: new Date(predictedTargetTime.value).getTime(), y: targetTempDisplay }
-  ];
+  // No fit to sample - a straight segment is the honest fallback, because the
+  // alternative is drawing nothing where the engine has an answer.
+  if (!anchor || !Number.isFinite(k) || totalMinutes <= 0) {
+    return [
+      { x: startMs, y: toDisplayUnit(currentTemp.value, displayUnits.value) },
+      { x: endMs, y: pullTempDisplay }
+    ];
+  }
+
+  const points = [];
+  for (let i = 0; i < PROJECTION_SAMPLES; i++) {
+    const minutes = (totalMinutes * i) / (PROJECTION_SAMPLES - 1);
+    const state = advance(anchor, { minutes, setPointF }, k);
+    points.push({
+      x: startMs + minutes * 60_000,
+      y: toDisplayUnit(state.coreF, displayUnits.value)
+    });
+  }
+  // Land the last point exactly on the crossing rather than on the sample, so the
+  // marker and the line meet.
+  points[points.length - 1] = { x: endMs, y: pullTempDisplay };
+  return points;
+});
+
+/** The set point in force now; null while the oven is off. */
+const currentOvenSetPointF = computed(() => {
+  const events = ovenEvents.value;
+  if (events.length === 0) return config.value?.initialOvenTemp ?? null;
+  const last = events[events.length - 1];
+  return last.isOff === true ? null : last.setTemp;
 });
 
 /**
@@ -412,8 +465,11 @@ const annotations = computed(() => {
 
   if (config.value) {
     result.targetRule = createTargetAnnotation(
-      toDisplayUnit(config.value.targetTemp, displayUnits.value),
-      displayUnits.value
+      toDisplayUnit(config.value.pullTempF, displayUnits.value),
+      displayUnits.value,
+      Number.isFinite(config.value.servingTempF)
+        ? toDisplayUnit(config.value.servingTempF, displayUnits.value)
+        : null
     );
   }
 
@@ -448,9 +504,19 @@ const annotations = computed(() => {
     });
   }
 
+  // The rest, as a band whose LEFT edge is the pull deadline. Behind the
+  // datasets, so it is a region of the plot rather than a mark in it. Only when
+  // there is both a projection to hang it off and a rest to draw.
+  if (projectionData.value.length > 0 && restMinutes.value > 0 && predictedServeTime.value) {
+    result.restBand = createRestBandAnnotation(
+      projectionData.value[projectionData.value.length - 1].x,
+      new Date(predictedServeTime.value).getTime()
+    );
+  }
+
   // The signature. Only drawn when there is a projection to land.
   if (projectionData.value.length > 0) {
-    const crossing = projectionData.value[1];
+    const crossing = projectionData.value[projectionData.value.length - 1];
     const fraction = xFraction(crossing.x);
     const serve = config.value?.desiredServeTime
       ? new Date(config.value.desiredServeTime).getTime()

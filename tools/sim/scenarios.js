@@ -1,5 +1,5 @@
 /**
- * The scenario deck: eight simulated cooks.
+ * The scenario deck: fifteen simulated cooks.
  *
  * Default behaviour in all of them is the real cook's pattern, taken from
  * Docs/Reference/roast-session-2026-08-22.json: sparse irregular readings about
@@ -36,12 +36,18 @@ const quantise = (minutes) => Math.round(minutes / TICK_MINUTES) * TICK_MINUTES;
  * @param {Array<{afterMin: number, gapMin: number}>} [params.gaps] - Force a
  *   stretch with no readings at all, starting after the first reading at or
  *   past `afterMin`
- * @returns {number[]} Ascending minute offsets, first always 0
+ * @param {number} [params.firstAtMin] - When the FIRST reading lands. Defaults to
+ *   0, which was the only thing this could do and was a hole in the deck: every
+ *   cook here, and every oracle case, began with a reading the instant the roast
+ *   went in. The minutes between a roast entering a hot oven and the cook
+ *   remembering to log a temperature were therefore never exercised anywhere,
+ *   while the app's own reading prompt asks for that first reading 30 minutes in.
+ * @returns {number[]} Ascending minute offsets
  */
-export function cadence({ seed, everyMin, jitterMin, untilMin, gaps = [] }) {
+export function cadence({ seed, everyMin, jitterMin, untilMin, gaps = [], firstAtMin = 0 }) {
   const rand = mulberry32(seed);
-  const out = [0];
-  let t = 0;
+  const out = [firstAtMin];
+  let t = firstAtMin;
   while (t < untilMin) {
     let step = everyMin + (rand() * 2 - 1) * jitterMin;
     const gap = gaps.find((g) => t >= g.afterMin && !g.used);
@@ -76,6 +82,17 @@ export function cadence({ seed, everyMin, jitterMin, untilMin, gaps = [] }) {
  * @property {number} maxMinutes - Give up after this long
  * @property {boolean} [advisoryConvergence] - Exclude from the convergence
  *   assertion (still reported)
+ * @property {boolean} [obeysReadingPrompt] - Default true. False models a cook
+ *   who ignores the app's request for a reading, which is the control for whether
+ *   the prompt is worth anything.
+ * @property {boolean} [excludeFromAcceptance] - Keep this cook out of the
+ *   deck-wide acceptance aggregate. For cooks that are not representative of
+ *   normal operation: the 12-hour shoulder, and the control cooks whose bad
+ *   numbers are the measurement rather than a failure. Still fully asserted
+ *   against its own recorded baseline.
+ * @property {string} [startISO] - Override COOK_START_ISO for this cook. Only
+ *   14-dst-cook uses it, to place a real daylight-saving transition inside the
+ *   cook.
  */
 
 /** Shared: a 6 lb bone-in prime rib out of the fridge. */
@@ -228,7 +245,10 @@ export const SCENARIOS = [
     },
     model: { weightLb: 9, cut: 'pork-shoulder', startCoreF: 40, ovenSetF: 225 },
     readingsAt: cadence({ seed: 505, everyMin: 60, jitterMin: 15, untilMin: 900 }),
-    maxMinutes: 960
+    maxMinutes: 960,
+    // A 12-hour cook against thresholds set for 3-hour ones. Asserted against its
+    // own baseline; kept out of the aggregate.
+    excludeFromAcceptance: true
   },
 
   {
@@ -295,6 +315,302 @@ export const SCENARIOS = [
       { atMin: 135, kind: 'restart-oven' }
     ],
     maxMinutes: 460
+  },
+
+  {
+    name: '09-rest-and-carryover',
+    title: 'Rest and carryover',
+    what:
+      'The same 6 lb prime rib as 02, but with a 30 minute rest declared and ' +
+      'the pull temperature set 4 F below the plate temperature. The schedule ' +
+      'is judged against the latest PULL time, so the app has to steer the ' +
+      'roast out of the oven 30 minutes before dinner rather than at dinner. ' +
+      'Nothing subtracted the rest before this, which is why dinner was ' +
+      'systematically 20-45 min late.',
+    caveat:
+      'Convergence is measured against the PULL DEADLINE - serve time less the ' +
+      'rest - which is what the app steers to. This scenario is the reason the ' +
+      'harness measures it that way: against the raw serve time a correct cook ' +
+      'here would score 30 min early.',
+    seed: 909,
+    config: {
+      // 121 F pull for a 125 F plate at a 200 F oven: the app derives this
+      // itself for a new cook, and it is stated here so the deck measures the
+      // pull the same way the app does.
+      targetTemp: 121,
+      units: 'F',
+      startingTemp: 48,
+      initialOvenTemp: 200,
+      restMinutes: 30,
+      // 165 min was 02's serve time with no rest. With 30 minutes of rest the
+      // meat has to be out at +135, which the model reaches at about +145 - so
+      // the app should be asking for a little more heat, not less.
+      serveAfterMin: 175,
+      meatType: 'Prime Rib',
+      meatCut: 'Bone-in',
+      weight: 6,
+      notes: null
+    },
+    model: { ...PRIME_RIB_6LB, ovenSetF: 200 },
+    readingsAt: cadence({ seed: 909, everyMin: 40, jitterMin: 8, untilMin: 400 }),
+    maxMinutes: 420
+  },
+
+  {
+    name: '10-forgetful-cook',
+    title: 'Forgetful cook',
+    what:
+      'The same cook as 02, who ignores the reading prompt entirely and logs ' +
+      'on their own sparse schedule. This is the README\'s own stated limit of ' +
+      'the harness: every other scenario has a perfectly obedient cook, and a ' +
+      'control loop that only works with a perfectly obedient operator has not ' +
+      'been tested. It is also the honest control for the reading prompt - the ' +
+      'difference between this and 02 is what the prompt is worth.',
+    caveat:
+      'Overshoot here is expected to be BAD, and the baseline records it as ' +
+      'such. The number that matters is that the app says so: it must not ' +
+      'report "on track" beside a three-hour-old reading.',
+    seed: 1010,
+    obeysReadingPrompt: false,
+    config: {
+      targetTemp: 125,
+      units: 'F',
+      startingTemp: 48,
+      initialOvenTemp: 200,
+      serveAfterMin: 165,
+      meatType: 'Prime Rib',
+      meatCut: 'Bone-in',
+      weight: 6,
+      notes: null
+    },
+    model: { ...PRIME_RIB_6LB, ovenSetF: 200 },
+    // Deliberately sparse and irregular: 55 min apart on average, with one long
+    // stretch, which is what a cook who is cooking dinner rather than watching a
+    // dashboard actually does.
+    readingsAt: cadence({
+      seed: 1010, everyMin: 55, jitterMin: 12, untilMin: 400,
+      gaps: [{ afterMin: 70, gapMin: 85 }]
+    }),
+    maxMinutes: 440,
+    advisoryConvergence: true,
+    // THE CONTROL. Its overshoot is meant to be terrible - that is the
+    // measurement. Averaging it into the acceptance figures would report the
+    // cook's choice as the app's failure.
+    excludeFromAcceptance: true
+  },
+
+  {
+    name: '11-weight-driven-k-small',
+    title: 'Weight-driven k: 3 lb tenderloin',
+    what:
+      'The light end of a 4x weight range. The projection\'s prior on how fast ' +
+      'this roast heats scales as weight^(-2/3) with a shape factor on top, so a ' +
+      'hardcoded constant cannot fit both this and 12-weight-driven-k-large. ' +
+      'Paired with it deliberately: either scenario alone would pass against a ' +
+      'model that ignored weight entirely.',
+    seed: 1111,
+    config: {
+      targetTemp: 125,
+      units: 'F',
+      startingTemp: 45,
+      initialOvenTemp: 250,
+      serveAfterMin: 85,
+      meatType: 'Beef Tenderloin',
+      meatCut: 'Center-cut',
+      weight: 3,
+      notes: null
+    },
+    model: { weightLb: 3, cut: 'tenderloin', startCoreF: 45, ovenSetF: 250 },
+    // A fast cook needs a fast cadence; the reading prompt will ask for more.
+    readingsAt: cadence({ seed: 1111, everyMin: 15, jitterMin: 4, untilMin: 200 }),
+    maxMinutes: 240
+  },
+
+  {
+    name: '12-weight-driven-k-large',
+    title: 'Weight-driven k: 12 lb shoulder',
+    what:
+      'The heavy end of the same range: four times the weight of ' +
+      '11-weight-driven-k-small, so about 2.5x the time constant. Its stall is ' +
+      'off, unlike 05 - the point here is the weight scaling, and leaving the ' +
+      'fabricated evaporation term in would confound it.',
+    seed: 1212,
+    config: {
+      targetTemp: 175,
+      units: 'F',
+      startingTemp: 42,
+      initialOvenTemp: 250,
+      serveAfterMin: 480,
+      meatType: 'Pork Shoulder',
+      meatCut: 'Bone-in',
+      weight: 12,
+      notes: null
+    },
+    model: {
+      weightLb: 12, cut: 'pork-shoulder', startCoreF: 42, ovenSetF: 250,
+      // Explicitly off: this scenario is about weight, not about the stall.
+      stalls: false
+    },
+    readingsAt: cadence({ seed: 1212, everyMin: 45, jitterMin: 10, untilMin: 800 }),
+    maxMinutes: 900,
+    /**
+     * IN the acceptance aggregate, unlike the other three long cooks. It was out,
+     * with no reason recorded anywhere - and the plan excluded exactly one cook, not
+     * four. Putting it back moves aggregate reversals from 1 to 3, which is the
+     * point: an exclusion nobody could justify was keeping two real reversals out
+     * of the headline. Its stall is switched off and its thresholds are the ordinary
+     * ones, so there is nothing to exclude it for.
+     */
+    excludeFromAcceptance: false
+  },
+
+  {
+    name: '13-oven-off-danger-zone',
+    title: 'Running very early with a cold core',
+    what:
+      'A 6 lb prime rib whose oven is ALREADY at the practical minimum, against ' +
+      'a serve time six hours out. So from its first eligible reading the app is ' +
+      'very early with nowhere left to lower - which is the one path that reaches ' +
+      'the pause branch. The core is 60-100 F for all of it, and pausing there ' +
+      'would hold the meat in the food-safety danger zone for a stretch the app ' +
+      'cannot police. It has to refuse, and say why.',
+    caveat:
+      'Convergence is advisory. A cook six hours ahead of its serve time cannot ' +
+      'be brought back by an app whose only remaining lever - a 20 minute pause - ' +
+      'it is correctly declining to use. The number to read is that it refuses.\n' +
+      '\n' +
+      'The target is 125 F on purpose. At 195 F the oven-headroom floor (target ' +
+      'plus 25 F) fires first and the ladder never reaches the practical minimum, ' +
+      'so the danger-zone branch is unreachable - which an earlier version of this ' +
+      'scenario demonstrated by exercising the wrong guardrail 72 times.',
+    seed: 1313,
+    config: {
+      targetTemp: 125,
+      units: 'F',
+      startingTemp: 40,
+      // Already on the practical minimum: nothing left to lower.
+      initialOvenTemp: 175,
+      serveAfterMin: 600,
+      meatType: 'Prime Rib',
+      meatCut: 'Bone-in',
+      weight: 6,
+      notes: null
+    },
+    model: { weightLb: 6, cut: 'prime-rib', startCoreF: 40, ovenSetF: 175 },
+    readingsAt: cadence({ seed: 1313, everyMin: 30, jitterMin: 6, untilMin: 500 }),
+    maxMinutes: 560,
+    advisoryConvergence: true,
+    // THE OTHER CONTROL. This cook is 6-7 hours early on purpose, so its
+    // convergence is the scenario's premise rather than the app's performance -
+    // the number to read here is whether the app refuses to pause a cold roast,
+    // which checkFoodSafety now asserts directly. Kept out of the aggregate for
+    // the same reason as 10, and asserted against its own baseline.
+    excludeFromAcceptance: true
+  },
+
+  {
+    name: '15-reading-due-prompt',
+    title: 'The prompt carries the cadence on its own',
+    what:
+      'A cook whose own reading habit is almost non-existent - one reading every ' +
+      'two hours - with readingIntervalMinutes set to three hours so the CEILING ' +
+      'cannot be what keeps the app honest. Everything that stops this roast ' +
+      'overshooting has to come from the derived cadence: never let more than 8 F ' +
+      'of core pass unobserved, which near the end means a reading every ten ' +
+      'minutes rather than every hundred and eighty.',
+    caveat:
+      'Every other scenario has a cook whose own habit is dense enough that the ' +
+      'ceiling and the derivation are hard to tell apart. This one separates ' +
+      'them. Compare it with 10-forgetful-cook, which is the same sparse habit ' +
+      'with the prompt ignored: the difference between the two is what the ' +
+      'derivation is worth.',
+    seed: 1515,
+    config: {
+      targetTemp: 125,
+      units: 'F',
+      startingTemp: 48,
+      initialOvenTemp: 200,
+      serveAfterMin: 165,
+      meatType: 'Prime Rib',
+      meatCut: 'Bone-in',
+      weight: 6,
+      notes: null
+    },
+    settings: { readingIntervalMinutes: 180, staleReadingMinutes: 180 },
+    model: { ...PRIME_RIB_6LB, ovenSetF: 200 },
+    readingsAt: cadence({ seed: 1515, everyMin: 120, jitterMin: 10, untilMin: 400 }),
+    maxMinutes: 420
+  },
+  {
+    name: '16-late-first-reading',
+    title: 'Nobody logged a temperature for the first half hour',
+    what:
+      'A 14 lb shoulder that went into a 250 F oven at t=0 and whose cook did ' +
+      'not log a temperature until t=35. No opening reading at all, which is ' +
+      'what the setup modal allows and what the reading prompt then produces: ' +
+      'with no readings it asks for the first one thirty minutes after the ' +
+      'session was created.',
+    caveat:
+      'This is the hole every other cook in this deck shared, and the oracle ' +
+      'cases with it. All of them handed the app a reading at t=0, so the ' +
+      'projection was never asked about a roast with a head start - the one ' +
+      'interval where it inverted its own verdict. Measured against the ' +
+      'conduction oracle before the timeline was re-anchored, a 20 lb shoulder ' +
+      'with a 30-minute head start read 30 min EARLY where the same roast read ' +
+      '38 min late with no head start, so the app advised lowering a roast that ' +
+      'was running behind. What this scenario watches is the direction of the ' +
+      'advice, not a tighter ETA.',
+    seed: 1616,
+    noStartingReading: true,
+    config: {
+      targetTemp: 195,
+      units: 'F',
+      startingTemp: 40,
+      initialOvenTemp: 250,
+      serveAfterMin: 400,
+      meatType: 'Pork Shoulder',
+      meatCut: 'Boneless',
+      weight: 14,
+      notes: null
+    },
+    model: { weightLb: 14, cut: 'pork-shoulder', startCoreF: 40, ovenSetF: 250 },
+    readingsAt: cadence({
+      seed: 1616, everyMin: 40, jitterMin: 5, untilMin: 500, firstAtMin: 35
+    }),
+    maxMinutes: 560
+  },
+
+  {
+    name: '14-dst-cook',
+    title: 'A cook across a DST boundary',
+    what:
+      'The same cook as 02, started so that it straddles a daylight-saving ' +
+      'transition. Every projection is derived from addMinutes, so a wall-clock ' +
+      'implementation puts the whole schedule an hour out - in the direction ' +
+      'that flips the verdict. The deck asserts the same numbers as any other ' +
+      'cook, which is the point: the roast does not care what the clocks do.',
+    caveat:
+      'Only meaningful in a zone that HAS a transition. The suite pins ' +
+      'TZ=Pacific/Auckland, and the timestamps below straddle the real 2026 ' +
+      'spring-forward instant. In UTC this scenario is simply scenario 02.',
+    seed: 1414,
+    // 2026-09-26T14:00Z is the Auckland spring-forward instant; starting 90
+    // minutes before it puts the transition inside the first stretch of the cook.
+    startISO: '2026-09-26T12:30:00.000Z',
+    config: {
+      targetTemp: 125,
+      units: 'F',
+      startingTemp: 48,
+      initialOvenTemp: 200,
+      serveAfterMin: 165,
+      meatType: 'Prime Rib',
+      meatCut: 'Bone-in',
+      weight: 6,
+      notes: null
+    },
+    model: { ...PRIME_RIB_6LB, ovenSetF: 200 },
+    readingsAt: cadence({ seed: 202, everyMin: 45, jitterMin: 10, untilMin: 400 }),
+    maxMinutes: 420
   },
 
   {

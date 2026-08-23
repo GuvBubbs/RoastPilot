@@ -196,10 +196,10 @@ describe('useSession settings persistence', () => {
     s.initialize();
     s.startSession({ targetTemp: 200, units: 'F' });
 
-    s.updateSettings({ smoothingWindowReadings: 7, ovenTempMaxF: 275 });
+    s.updateSettings({ readingIntervalMinutes: 35, ovenTempMaxF: 275 });
 
     const stored = JSON.parse(localStorage.getItem(SETTINGS_KEY));
-    expect(stored.smoothingWindowReadings).toBe(7);
+    expect(stored.readingIntervalMinutes).toBe(35);
     expect(stored.ovenTempMaxF).toBe(275);
   });
 
@@ -207,13 +207,13 @@ describe('useSession settings persistence', () => {
     const first = await freshSession();
     first.initialize();
     first.startSession({ targetTemp: 200, units: 'F' });
-    first.updateSettings({ smoothingWindowReadings: 7, ovenTempMaxF: 275 });
+    first.updateSettings({ readingIntervalMinutes: 35, ovenTempMaxF: 275 });
 
     const second = await freshSession();
     second.initialize();
 
     expect(second.hasActiveSession.value).toBe(true);
-    expect(second.settings.value.smoothingWindowReadings).toBe(7);
+    expect(second.settings.value.readingIntervalMinutes).toBe(35);
     expect(second.settings.value.ovenTempMaxF).toBe(275);
   });
 
@@ -221,7 +221,7 @@ describe('useSession settings persistence', () => {
     const first = await freshSession();
     first.initialize();
     first.startSession({ targetTemp: 200, units: 'F' });
-    first.updateSettings({ smoothingWindowMinutes: 45 });
+    first.updateSettings({ staleReadingMinutes: 75 });
     first.endSession();
 
     const second = await freshSession();
@@ -229,17 +229,17 @@ describe('useSession settings persistence', () => {
     expect(second.hasActiveSession.value).toBe(false);
 
     second.startSession({ targetTemp: 190, units: 'F' });
-    expect(second.settings.value.smoothingWindowMinutes).toBe(45);
+    expect(second.settings.value.staleReadingMinutes).toBe(75);
   });
 
   it('tolerates partial stored settings by filling in defaults', async () => {
-    localStorage.setItem(SETTINGS_KEY, JSON.stringify({ smoothingWindowReadings: 9 }));
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify({ readingIntervalMinutes: 25 }));
 
     const s = await freshSession();
     s.initialize();
     s.startSession({ targetTemp: 200, units: 'F' });
 
-    expect(s.settings.value.smoothingWindowReadings).toBe(9);
+    expect(s.settings.value.readingIntervalMinutes).toBe(25);
     expect(s.settings.value.ovenTempMaxF).toBe(300);
     expect(s.settings.value.minReadingsForRecommendation).toBe(3);
   });
@@ -353,13 +353,28 @@ describe('useSession oven-event invariants', () => {
   });
 
   it('leaves the opening event with no predecessor when startSession logged it', () => {
-    session.endSession();
-    session.startSession({ targetTemp: 200, units: 'F', initialOvenTemp: 200 });
-    // The opening event exists; a later mutation must not rewrite its origin.
-    session.addOvenEvent(225, at(10));
+    // The opening event is stamped with `new Date()`, and every other event
+    // here is stamped from at(), whose base day is fixed. Left to the real
+    // clock this test asserts on whichever side of at(10) today happens to
+    // fall - it passed for months and then failed on 2026-08-22, when the
+    // fixture day WAS today and the opening event sorted second.
+    //
+    // Date only: the composable's autosave debounce is a real setTimeout and
+    // faking it here would leave a pending write for the next test.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date(at(9)));
+    try {
+      session.endSession();
+      session.startSession({ targetTemp: 200, units: 'F', initialOvenTemp: 200 });
+      // The opening event exists; a later mutation must not rewrite its origin.
+      session.addOvenEvent(225, at(10));
 
-    expect(session.ovenEvents.value[0].previousTemp).toBeNull();
-    expect(session.ovenEvents.value[0].setTemp).toBe(200);
+      expect(session.ovenEvents.value.map(e => e.setTemp)).toEqual([200, 225]);
+      expect(session.ovenEvents.value[0].previousTemp).toBeNull();
+      expect(session.ovenEvents.value[0].setTemp).toBe(200);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

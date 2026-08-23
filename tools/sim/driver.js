@@ -44,7 +44,10 @@ const near = (a, b) => Math.abs(a - b) < EPS;
 export async function runScenario(scenario, deps) {
   const { vi, mount, defineComponent, h, nextTick } = deps;
 
-  const startMs = new Date(COOK_START_ISO).getTime();
+  // Per-scenario start, so a cook can be placed across a daylight-saving
+  // transition. Everything else in the run is relative to it.
+  const cookStartISO = scenario.startISO ?? COOK_START_ISO;
+  const startMs = new Date(cookStartISO).getTime();
   const units = scenario.config.units;
   const model = createMeatModel({ seed: scenario.seed, ...scenario.model });
 
@@ -59,11 +62,15 @@ export async function runScenario(scenario, deps) {
       captured.session = deps.useSession();
       captured.calc = deps.useCalculations();
       captured.rec = deps.useRecommendations();
+      // The reading prompt is the Phase 3 intervention, and it is only testable
+      // if the virtual cook can see it. Mounted with the rest so its
+      // useRefreshTimer subscription is registered against the fake clock.
+      captured.schedule = deps.useReadingSchedule();
       return () => h('div');
     }
   });
   const wrapper = mount(Probe);
-  const { session, calc, rec } = captured;
+  const { session, calc, rec, schedule } = captured;
 
   session.initialize();
   session.setUnits(units);
@@ -79,9 +86,24 @@ export async function runScenario(scenario, deps) {
   // it wrong, not the app - it showed up as a -13.9 C opening reading.
   const openingProbeF = Math.round(model.probeF() * 10) / 10;
   session.startSession({
-    targetTemp: scenario.config.targetTemp,
+    // pullTempF, not servingTempF: every scenario's `targetTemp` names the
+    // temperature the cook stops at, which is what the deck measures against.
+    // Passing it as a plate temperature would silently move every scenario's
+    // finish line by the carryover.
+    pullTempF: scenario.config.targetTemp,
+    // Rest defaults to 0 for the existing deck so the recorded convergence
+    // numbers still mean the same thing. The rest-and-carryover scenario sets
+    // its own.
+    restMinutes: scenario.config.restMinutes ?? 0,
     units,
-    startingTemp: openingProbeF,
+    /**
+     * A scenario can decline the opening reading with `noStartingReading`, which
+     * is what the setup modal's optional starting temperature does in the app.
+     * Every cook in the deck used to pass one, so the minutes between the roast
+     * going into a hot oven and the first logged temperature were never
+     * exercised - the interval where the projection was most wrong.
+     */
+    startingTemp: scenario.noStartingReading ? null : openingProbeF,
     desiredServeTime: new Date(startMs + scenario.config.serveAfterMin * 60_000).toISOString(),
     initialOvenTemp: scenario.config.initialOvenTemp,
     meatType: scenario.config.meatType,
@@ -178,6 +200,10 @@ export async function runScenario(scenario, deps) {
       isPaused: rec.isPaused.value,
       timeRemainingFormatted: calc.timeRemainingFormatted.value,
       varianceFormatted: calc.scheduleVarianceFormatted.value,
+      // The reading prompt, as the cook sees it.
+      readingStatus: schedule.status.value,
+      readingDueAt: schedule.dueAt.value,
+      readingSpacingMinutes: schedule.spacingMinutes.value,
       // Enough of the session for an invariant to re-run the app's own
       // assessOvenChangeEffect at this instant and check the settling state the
       // UI is showing agrees with it. Kept out of the transcript - it is for
@@ -242,6 +268,15 @@ export async function runScenario(scenario, deps) {
       if (firstChangeAtMin === null) firstChangeAtMin = cursor;
       snapshot('after-dial-change');
       row('apply', `${action} to ${suggested}${units === 'C' ? 'C' : 'F'}`);
+      return;
+    }
+
+    // The oven is off and the app is asking for it back on. A cook who has just
+    // deliberately paused ignores this (deliberatePauseUntilMin, checked above);
+    // any other paused state, the cook does what it says.
+    if (action === 'restart-oven') {
+      await advanceTo(cursor + APPLY_DELAY_MIN);
+      await restartOven();
       return;
     }
 
@@ -316,6 +351,30 @@ export async function runScenario(scenario, deps) {
   const readingsAt = scenario.readingsAt.filter((t) => t <= scenario.maxMinutes);
   let readingIndex = 0;
 
+  /**
+   * Does this cook do what the reading prompt asks?
+   *
+   * Default yes, because that is the intervention being measured: the prompt is
+   * only worth anything if acting on it moves overshoot, and a cook who cannot
+   * see it cannot tell us. Each scenario's own `readingsAt` remains its baseline
+   * habit - the readings it would have taken unprompted - and the prompt adds to
+   * it.
+   *
+   * Set false for the forgetful cook, which is the README's own stated limit of
+   * this harness: the virtual cook is otherwise perfectly obedient, and a control
+   * loop that only works with a perfectly obedient operator has not been tested.
+   */
+  const obeysPrompt = scenario.obeysReadingPrompt !== false;
+
+  /** Log a reading off the probe, exactly as the Add Reading modal would. */
+  async function logReading() {
+    // The probe is the only thing the app is allowed to see: true core plus this
+    // cook's placement bias plus per-reading noise.
+    const probeF = model.probeF();
+    session.addReading(displayOf(probeF));
+    await settle();
+  }
+
   // The opening state, before any time passes.
   considerCheckpoints(row('start'));
 
@@ -342,11 +401,7 @@ export async function runScenario(scenario, deps) {
 
     if (near(next, nextReading)) {
       readingIndex += 1;
-      // The probe is the only thing the app is allowed to see: true core plus
-      // this cook's placement bias plus per-reading noise.
-      const probeF = model.probeF();
-      session.addReading(displayOf(probeF));
-      await settle();
+      await logReading();
       const current = row('reading');
       considerCheckpoints(current);
       if (current.action === 'at-target') {
@@ -367,6 +422,29 @@ export async function runScenario(scenario, deps) {
     if (current.action === 'at-target') {
       snapshot('at-target');
       finished = 'at-target';
+      continue;
+    }
+
+    /**
+     * The app asked for a reading, so the cook takes one.
+     *
+     * Checked on the tick rather than folded into `next`, because the due time
+     * moves as the projection does - computing it once per loop would be reading
+     * a schedule that has already changed. `now` and `overdue` only: `soon` is
+     * information, not an instruction.
+     */
+    if (obeysPrompt && (current.readingStatus === 'now' || current.readingStatus === 'overdue')) {
+      await logReading();
+      const prompted = row('reading', 'prompted by the app');
+      considerCheckpoints(prompted);
+      if (prompted.action === 'at-target') {
+        snapshot('at-target');
+        finished = 'at-target';
+        continue;
+      }
+      const movesBefore = applied.length;
+      await obey();
+      if (!finished && applied.length > movesBefore) considerCheckpoints(row('post-advice'));
     }
   }
 
@@ -384,14 +462,28 @@ export async function runScenario(scenario, deps) {
     targetF,
     serveAfterMin: scenario.config.serveAfterMin,
     serveISO: new Date(startMs + scenario.config.serveAfterMin * 60_000).toISOString(),
-    cookStartISO: COOK_START_ISO,
+    /**
+     * Minutes of rest, and the deadline it implies.
+     *
+     * Convergence is measured against the PULL deadline, not the serve time: the
+     * app steers the roast out of the oven early enough to rest, so a cook that
+     * lands on the serve time with 30 minutes of rest declared is 30 minutes
+     * LATE, not on time. With no rest the two are the same instant, which is why
+     * the existing deck's recorded numbers do not move.
+     */
+    restMinutes: scenario.config.restMinutes ?? 0,
+    pullDeadlineISO: new Date(
+      startMs + (scenario.config.serveAfterMin - (scenario.config.restMinutes ?? 0)) * 60_000
+    ).toISOString(),
+    cookStartISO,
     finalCoreF: round1(model.coreF),
     probeBiasF: round1(model.probeBiasF),
     settings: JSON.parse(JSON.stringify(session.settings.value)),
     rows,
     applied,
     snapshots,
-    advisoryConvergence: scenario.advisoryConvergence === true
+    advisoryConvergence: scenario.advisoryConvergence === true,
+    excludeFromAcceptance: scenario.excludeFromAcceptance === true
   };
 
   wrapper.unmount();
@@ -416,6 +508,7 @@ export async function loadAppModules(vi) {
   const { useSession } = await import('../../src/composables/useSession.js');
   const { useCalculations } = await import('../../src/composables/useCalculations.js');
   const { useRecommendations } = await import('../../src/composables/useRecommendations.js');
+  const { useReadingSchedule } = await import('../../src/composables/useReadingSchedule.js');
   return {
     mount: testUtils.mount,
     defineComponent: vue.defineComponent,
@@ -423,6 +516,7 @@ export async function loadAppModules(vi) {
     nextTick: vue.nextTick,
     useSession,
     useCalculations,
-    useRecommendations
+    useRecommendations,
+    useReadingSchedule
   };
 }

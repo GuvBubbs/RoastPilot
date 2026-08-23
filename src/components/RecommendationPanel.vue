@@ -57,13 +57,16 @@
 import { computed } from 'vue';
 import { useSession } from '../composables/useSession.js';
 import { useRecommendations } from '../composables/useRecommendations.js';
+import { useCalculations } from '../composables/useCalculations.js';
 import { useRefreshTimer } from '../composables/useRefreshTimer.js';
 import { useToast } from '../composables/useToast.js';
 import { formatDuration, formatTime, minutesBetween, now } from '../utils/timeUtils.js';
+import { formatTemperature } from '../utils/temperatureUtils.js';
 
 const emit = defineEmits(['openOvenModal', 'openReadingModal', 'openSettings', 'openPauseModal', 'openRestartModal', 'openEndSession']);
 
-const { addOvenEvent, ovenEvents } = useSession();
+const { addOvenEvent, ovenEvents, displayUnits } = useSession();
+const { projectionIfRestarted } = useCalculations();
 const {
   canRecommend,
   action,
@@ -99,6 +102,25 @@ const pausedLine = computed(() => {
   return `Oven off since ${formatTime(pausedSince.value)} · ${formatDuration(Math.max(0, elapsed))}`;
 });
 
+/**
+ * What the projection would say once the oven is back on.
+ *
+ * The ETA correctly disappears while the oven is off - a cooling roast has no
+ * finish time - but that is a visible regression, and a dash where a time used
+ * to be tells the cook nothing about how much of their evening is left. So the
+ * pause band carries the counterfactual: the same fit, projected forward at the
+ * setting they last used.
+ *
+ * Explicitly conditional: it is a statement about a decision the cook has not
+ * made yet, and it must not read as a prediction about the state they are in.
+ */
+const restartProjectionLine = computed(() => {
+  const projection = projectionIfRestarted.value;
+  if (!projection || projection.minutes === null) return null;
+  const oven = formatTemperature(projection.atOvenTempF, displayUnits.value);
+  return `About ${formatDuration(projection.minutes)} to target once the oven is back on at ${oven}.`;
+});
+
 const headline = computed(() => {
   if (!canRecommend.value) return blockerReason.value || 'Not enough data yet.';
   return message.value || 'No recommendation yet.';
@@ -106,6 +128,9 @@ const headline = computed(() => {
 
 const detail = computed(() => {
   if (!canRecommend.value) return blockerProgress.value?.message ?? null;
+  // While paused, the most useful thing the app can say is how long the rest of
+  // the cook will take once the oven is on again.
+  if (isPaused.value && restartProjectionLine.value) return restartProjectionLine.value;
   // Only oven-off carries an alternative, and it is the whole point of it — but
   // it describes turning the oven off, so it is noise once the oven is already
   // off (and its {ovenTemp} resolves to 0° in that state).
@@ -130,8 +155,10 @@ const dotClass = computed(() => {
     case 'oven-off': return 'bg-early';
     // The dial is where it needs to be; we are only waiting to see it land.
     case 'settling': return 'bg-ontrack';
-    // Pause is an action, not a status, so it gets neutral treatment.
+    // Pause is an action, not a status, so it gets neutral treatment. Both of
+    // these are the app waiting on the cook rather than judging the cook.
     case 'needs-reading': return 'bg-ink-dim';
+    case 'restart-oven': return 'bg-ink-dim';
     default: return 'bg-ink-mute';
   }
 });
@@ -157,6 +184,11 @@ const control = computed(() => {
       case 'no_oven_data':
       case 'stale_oven_data':
         return { kind: 'ghost', label: 'Update oven temp', event: 'openOvenModal' };
+      // The BottomBar already carries "+ Add reading" in the thumb zone, and the
+      // status band's prompt strip is already saying this louder. Spend the one
+      // control on the escape hatch nothing else reaches.
+      case 'stale_reading':
+        return pauseControl.value;
       // No "Add reading" control here: App.vue's BottomBar already carries
       // "+ Add reading" as its primary button whenever a session is active, and
       // this band renders directly above it - the two rendered as a stack of
@@ -164,8 +196,16 @@ const control = computed(() => {
       // bottom bar does not offer.
       case 'insufficient_readings':
         return pauseControl.value;
+      // This used to be a dead end: the button opened the settings sheet, which
+      // had no serve-time control anywhere in it. Settings now leads with an
+      // editable Cook plan section, so the one action this blocker offers can
+      // actually clear it.
       case 'no_serve_time':
         return { kind: 'ghost', label: 'Set serve time', event: 'openSettings' };
+      // Nothing the cook can do but take another reading, which the BottomBar
+      // already offers. Fall through to the pause/restart escape hatch.
+      case 'no_projection':
+        return pauseControl.value;
       // Nothing to offer before there is a session to act on.
       case 'no_session':
         return null;
@@ -185,6 +225,12 @@ const control = computed(() => {
       // With the oven off, pauseControl resolves to "Log oven restart", which is
       // the other half of what a paused cook needs.
       return pauseControl.value;
+
+    case 'restart-oven':
+      // The oven is off and a post-pause reading exists, so the app knows where
+      // the meat is - it just cannot advise anything about a cold oven. The one
+      // action that means something here is turning it back on.
+      return { kind: 'primary', label: 'Log oven restart', event: 'openRestartModal' };
 
     case 'settling':
       // Nothing to apply - the change has been accepted, and the only thing that
