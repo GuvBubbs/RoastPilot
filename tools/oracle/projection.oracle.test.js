@@ -42,27 +42,32 @@
  * WHAT IT MEASURES, AS MEASURED
  *
  * Mean absolute error in predicted finish time, over every reading of the cook at
- * which each method produced a number:
+ * which each method produced a number. ASSERTED, not decorative - see the "what it
+ * measures, as measured" block below, which recomputes these and fails when one
+ * moves. Refresh them from a verbose run of that block rather than by hand; the
+ * previous version of this table was hand-maintained, drifted 20-30 %, and was
+ * being cited while stale.
  *
- *     case                      curve   answers   line   worst line
- *     6 lb prime rib @200         9.8      4/7    45.4        199
- *     3 lb roast @250             6.7      3/5   172.5        644
- *     9 lb shoulder @225          6.8     9/12    46.3        240
- *     24 lb bird @175            12.5     8/11    78.3        396
- *     6 lb, 2 dial moves          7.0      4/7    29.2        131
- *     6 lb, 40 min pause         15.7      3/6    27.0         98
- *     6 lb, noisy probe          11.0      4/7   207.7       1026
- *     ---- adversarial ------------------------------------------------
- *     6 lb SPHERE @200           53.8      5/8    44.6        190
- *     9 lb SPHERE @225           50.4     9/13    59.0        168
+ *     case                      curve   answers    line   worst line
+ *     6 lb prime rib @200        20.3     8/12     80.5        615
+ *     3 lb roast @250            11.6      5/8    173.1       1065
+ *     9 lb shoulder @225         17.7    17/21     86.6        696
+ *     24 lb bird @175            31.7    15/19     83.9        156
+ *     6 lb, 2 dial moves         20.1     7/10     63.1        371
+ *     6 lb, 40 min pause          9.8     5/11     42.4        256
+ *     6 lb, noisy probe          22.9     8/12     26.6        168
  *
  * The `answers` column is the honest other half: the curve buys its accuracy
  * partly by staying quiet, and it answers about two thirds of the time. The line
- * always answers, and its worst single answer on a noisy probe is seventeen
- * hours out.
+ * always answers, and its worst single answer is seventeen hours out.
  *
- * On the adversarial geometry the line wins one of the two, and the app reports
- * `loose-fit` throughout - which is the behaviour being asserted there.
+ * These are worse than the numbers that used to sit here, and the reason is not a
+ * regression: the oracle's cylinder had a tenderloin's proportions - four diameters
+ * long - and heated more than twice as fast as the one real cook in this
+ * repository. The roast the app is now scored against is a harder and more honest
+ * one. Averaged over the WHOLE cook as stated, including the earliest scoring point
+ * in each, where the error is always largest; the accuracy threshold the suite
+ * enforces is over the second half.
  */
 import { describe, it, expect } from 'vitest';
 import { createConductionModel } from './conductionModel.js';
@@ -359,6 +364,71 @@ describe('the projection against 1-D conduction in a cylinder', () => {
         expect(app.predictedTargetTime).toBeNull();
         expect(app.projectionRefusedReason).toBeTruthy();
       });
+    });
+  }
+});
+
+/**
+ * The header table, as a test.
+ *
+ * It used to be a hand-written comment with no generator, so it drifted: the
+ * review found it 20-30 % stale, and changing the oracle's geometry made it
+ * staler still. A table of measured numbers that nothing recomputes is not
+ * evidence, it is decoration - and worse, it is decoration people cite.
+ *
+ * This recomputes it and fails when a figure moves by more than the recorded
+ * tolerance. Run with `--reporter=verbose` to read the printed table; the
+ * numbers in the file header are copied from this test's output and are
+ * therefore only ever as stale as the last time it passed.
+ */
+describe('what it measures, as measured', () => {
+  const RECORDED = {
+    '6 lb prime rib at 200 F': 20.3,
+    '3 lb roast at 250 F': 11.6,
+    '9 lb shoulder at 225 F to 195 F': 17.7,
+    '24 lb bird at 175 F': 31.7,
+    '6 lb prime rib, dial moved twice': 20.1,
+    '6 lb prime rib with a 40 min pause': 9.8,
+    '6 lb prime rib with a noisy probe': 22.9
+  };
+  /** How far a figure may move before the header is out of date. */
+  const TOLERANCE_MINUTES = 6;
+
+  for (const spec of CYLINDER_CASES) {
+    it(`${spec.name} still scores what the header says`, () => {
+      const cook = oracleCook(spec);
+      const errors = [];
+      let answered = 0;
+      let asked = 0;
+      for (const upTo of spec.readAt.filter((t) => t > 0 && t < cook.trueHitMin)) {
+        asked++;
+        const app = appAt(cook, spec, upTo);
+        if (app.finishMin === null) continue;
+        answered++;
+        errors.push(Math.abs(app.finishMin - cook.trueHitMin));
+      }
+      expect(errors.length).toBeGreaterThan(0);
+      const mae = mean(errors);
+
+      // The straight line on the same readings, for scale.
+      const lineErrors = [];
+      for (const upTo of spec.readAt.filter((t) => t > 0 && t < cook.trueHitMin)) {
+        const line = lineAt(cook, spec, upTo);
+        if (line !== null) lineErrors.push(Math.abs(line - cook.trueHitMin));
+      }
+
+      // Printed so the header can be refreshed from a passing run rather than
+      // from someone's memory.
+      // eslint-disable-next-line no-console
+      console.log(
+        `  ${spec.name.padEnd(36)} curve ${mae.toFixed(1).padStart(6)}` +
+        `  answers ${answered}/${asked}` +
+        `  line ${(lineErrors.length ? mean(lineErrors) : NaN).toFixed(1).padStart(7)}` +
+        `  worst ${(lineErrors.length ? Math.max(...lineErrors) : NaN).toFixed(0).padStart(6)}`
+      );
+
+      expect(Math.abs(mae - RECORDED[spec.name]), `${spec.name}: ${mae.toFixed(1)}`)
+        .toBeLessThanOrEqual(TOLERANCE_MINUTES);
     });
   }
 });

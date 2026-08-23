@@ -362,6 +362,7 @@ import {
 import { estimateCarryoverF, pullTempFor } from '../services/carryoverService.js';
 import { storageService as weightStore } from '../services/storageService.js';
 import { formatDateTime } from '../utils/timeUtils.js';
+import { validateSessionConfig } from '../utils/validationUtils.js';
 import { exportToJSON, exportToCSV, downloadFile, generateFilename } from '../services/exportService.js';
 import { APP_VERSION, buildLabel } from '../config/version.js';
 
@@ -649,9 +650,20 @@ function handleSave() {
       ? config.value?.servingTempF
       : toStorageUnit(localServingTemp.value, localUnits.value);
     
-    updateConfig({
+    /**
+     * A serve time that does not parse must reach the validator, not throw on the
+     * way there. `new Date('not a date').toISOString()` is a RangeError, and it was
+     * being raised while ASSEMBLING the patch - before anything could reject it -
+     * so the panel blew up inside a click handler instead of saying what was wrong.
+     * Same failure as `new Date(NaN)` on the rollback path.
+     *
+     * Passing the raw value through lets validateSessionConfig produce the message,
+     * which is the whole point of it running here.
+     */
+    const serveMs = localServeTime.value ? Date.parse(localServeTime.value) : null;
+    const changes = {
       desiredServeTime: localServeTime.value
-        ? new Date(localServeTime.value).toISOString()
+        ? (Number.isFinite(serveMs) ? new Date(serveMs).toISOString() : localServeTime.value)
         : null,
       servingTempF,
       // Derived, never stored independently of the pair it comes from.
@@ -659,7 +671,31 @@ function handleSave() {
       carryoverF,
       carryoverIsUserSet: localCarryoverIsUserSet.value,
       restMinutes: localRestMinutes.value ?? 0
-    });
+    };
+
+    /**
+     * VALIDATED, which it was not.
+     *
+     * `validateSessionConfig` ran only from SessionSetupModal, so this - the other
+     * way into the same fields, and the only way into them once a cook is under way
+     * - wrote straight through to updateConfig. Its rules therefore did not apply
+     * to a running cook: a pull above the plate temperature, a rest of a thousand
+     * minutes, a serve time that does not parse.
+     *
+     * The MERGED config is what gets validated, not this patch. The patch is
+     * partial - no oven temperature, no starting reading - so validating it alone
+     * would fail on required fields that are already set and are not being changed.
+     * What matters is whether the session is valid after the write.
+     */
+    const merged = { ...config.value, ...changes };
+    const validation = validateSessionConfig(merged, 'F');
+    if (!validation.valid) {
+      const first = Object.values(validation.errors)[0];
+      showToast(first ?? 'Those settings are not valid', 'error');
+      return;
+    }
+
+    updateConfig(changes);
   }
   
   showToast('Settings saved', 'success');
