@@ -586,7 +586,23 @@ const maxStepMax = computed(() => localUnits.value === 'C' ? 28 : 50);
 const ovenMinDisplay = computed({
   get: () => toDisplayUnit(localSettings.ovenTempMinF, localUnits.value),
   set: (val) => {
-    localSettings.ovenTempMinF = toStorageUnit(val, localUnits.value);
+    const floorF = toStorageUnit(val, localUnits.value);
+    localSettings.ovenTempMinF = floorF;
+    /**
+     * Push the practical minimum up with it. The row below is bounded by
+     * `:min="ovenMinDisplay"`, but a stepper's min only constrains the next edit -
+     * it does not move a value already stored. So raising this floor to 250 while
+     * the practical minimum sat at 175 left the app advising "lower to 225", below
+     * the floor the cook had just set, with this row still describing itself as
+     * "The practical minimum below cannot be set under this".
+     *
+     * This is the cross-field rule `validateSettings` used to carry. That function
+     * was deleted as dead - its bounds really are enforced by the stepper props -
+     * but this one rule was not a bound, and nothing replaced it.
+     */
+    if (localSettings.ovenTempPracticalMinF < floorF) {
+      localSettings.ovenTempPracticalMinF = floorF;
+    }
   }
 });
 

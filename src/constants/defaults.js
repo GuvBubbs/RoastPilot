@@ -87,7 +87,7 @@ export const RECOMMENDATION_MESSAGES = {
   // Emitted when the oven is already as low as it goes, the cook is early, and
   // the core is still under 140 F - so pausing is not offered. There is nothing
   // to do but let it run.
-  EARLY_NO_PAUSE_YET: 'Running early with the oven already at {minTemp}. Let it run - pausing the oven is not safe until the core is above 140°F.',
+  EARLY_NO_PAUSE_YET: 'Running early with the oven already at {minTemp}. Let it run - pausing the oven is not safe until the core is above {safeTemp}.',
   // The oven has already been off long enough this cook. Each further pause adds
   // danger-zone time, and nothing bounded the count before this.
   EARLY_PAUSE_BUDGET_SPENT: 'Running early, but the oven has already been off long enough this cook. Let it run - more pauses would keep the meat cool for too long in total.',

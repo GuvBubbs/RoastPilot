@@ -94,9 +94,16 @@ const PROJECTION_REFUSAL_REASONS = {
     'The oven is not hot enough to reach your target. Raise it - waiting will ' +
     'not get there.',
 
+  /**
+   * Said "five hours" while PROJECTION_HORIZON_MINUTES was 1440 - wrong by a
+   * factor of five, and pointing at a threshold nothing used. The second half was
+   * worse: "log another reading as it speeds up" is advice for a roast that is
+   * about to get faster, and this state means the projection ran out of horizon,
+   * which on a roast this slow it will do again at the next reading too.
+   */
   'beyond-horizon':
-    'The target is more than five hours away, which is too far out for this ' +
-    'projection to be worth acting on. Log another reading as it speeds up.',
+    'This roast is heating too slowly to put a finish time on yet - more than a ' +
+    'day out at the current rate. Raise the oven if you need it sooner.',
 
   // --- and the older arithmetic guards ------------------------------------
   'no-rate': 'Not enough usable readings to measure a heating rate yet.',
@@ -628,6 +635,28 @@ export function calculateRecommendation({
     ovenTempMaxF,
     onTrackThresholdMinutes
   } = settings;
+
+  /**
+   * Every branch below does arithmetic on `ovenBaseTemp`, and none of them
+   * checked it. An absent or non-numeric dial produced `suggestedTemp: NaN` with
+   * `action: 'lower'` and a confident sentence around it - the UI would render
+   * "Set oven to NaN" and the Apply button would write it. Same class as the
+   * unguarded rate that used to throw a RangeError out of the whole status panel:
+   * a missing input has to become a refusal, not a number.
+   */
+  if (!Number.isFinite(ovenBaseTemp)) {
+    return {
+      action: 'none',
+      suggestedTemp: null,
+      changeAmount: null,
+      message: 'The oven setting is not known, so there is no change to suggest.',
+      reasoning: 'Log the oven temperature and advice will resume.',
+      alternativeMessage: null,
+      ovenOffMinutes: null,
+      practicalMinF: null,
+      severity: 'normal'
+    };
+  }
   
   // On track - recommend holding steady
   if (scheduleStatus === 'on-track') {
@@ -793,12 +822,22 @@ export function calculateRecommendation({
           message: absVariance > 30
             ? RECOMMENDATION_MESSAGES.LOWER_LARGE
             : RECOMMENDATION_MESSAGES.LOWER_SMALL,
+          /**
+           * Placeholders, not literals. This sentence used to be assembled here
+           * with `${MIN_OVEN_HEADROOM_F}°F` and `${targetTempF}°F` in it, so a
+           * Celsius cook read "25°F above your 191°F pull" beside a screen showing
+           * 88 °C. The substitution layer in useRecommendations converts and
+           * formats; the service's job is to say which numbers, not how to write
+           * them.
+           */
           reasoning: headroomBinds
-            ? `Running approximately ${Math.round(absVariance)} minutes early. This is as low as the oven can go and still finish the roast - it has to stay at least ${MIN_OVEN_HEADROOM_F}°F above your ${Math.round(targetTempF)}°F pull temperature.`
+            ? `Running approximately ${Math.round(absVariance)} minutes early. This is as low as the oven can go and still finish the roast - it has to stay at least {headroom} above your {pullTemp} pull temperature.`
             : `Running approximately ${Math.round(absVariance)} minutes early. This is the practical minimum for most ovens.`,
           alternativeMessage: null,
           ovenOffMinutes: null,
           practicalMinF: null,
+          headroomF: MIN_OVEN_HEADROOM_F,
+          pullTempF: Math.round(targetTempF),
           severity
         };
       }
@@ -825,7 +864,7 @@ export function calculateRecommendation({
          * is simply false.
          */
         const reasons = {
-          'danger-zone': `Running ${Math.round(absVariance)} minutes early, and the oven is as low as it can usefully go. Pausing is not offered below ${MIN_CORE_FOR_OVEN_OFF_F}°F core: switching the oven off lets the surface - the part the heat has actually been pasteurising - cool back toward the food-safety danger zone, for a stretch the app cannot police.`,
+          'danger-zone': `Running ${Math.round(absVariance)} minutes early, and the oven is as low as it can usefully go. Pausing is not offered below {safeTemp} core: switching the oven off lets the surface - the part the heat has actually been pasteurising - cool back toward the food-safety danger zone, for a stretch the app cannot police.`,
           'pause-budget-spent': `Running ${Math.round(absVariance)} minutes early, but the oven has already been off for about ${Math.round(pausedMinutesSoFar)} minutes this cook. Each further pause keeps the meat cool for longer in total, so there are no more to offer.`,
           'no-reading': `Running ${Math.round(absVariance)} minutes early. A fresh reading is needed before pausing can be considered.`,
           'pause-unmeasured': `Running ${Math.round(absVariance)} minutes early, but nothing has been measured since the oven came back on - so how much the last pause bought is unknown. Log a reading before pausing again.`,
@@ -845,6 +884,9 @@ export function calculateRecommendation({
           ovenOffMinutes: null,
           // The dial the cook is on, so {minTemp} names something true.
           minTempF: Math.round(ovenBaseTemp),
+          // EARLY_NO_PAUSE_YET names the food-safety floor; it used to write it as
+          // a "140°F" literal, which a Celsius cook read verbatim.
+          safeCoreF: MIN_CORE_FOR_OVEN_OFF_F,
           practicalMinF: null,
           severity: 'info'
         };

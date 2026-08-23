@@ -493,8 +493,42 @@ export function checkRenderedText(outcome) {
     }
   }
 
+  /**
+   * THE WRONG UNIT, WHICH IS THE OTHER HALF OF THIS CHECK.
+   *
+   * The scan above only finds placeholders that failed to substitute, and a
+   * hardcoded literal is not a placeholder - so a Celsius cook was shown "not safe
+   * until the core is above 140°F" and "25°F above your 191°F pull" beside a screen
+   * reading 88 °C, five times in one cook, and this invariant reported no problem.
+   * Three separate sentences were assembling their own degree symbols in the
+   * service instead of emitting a placeholder for the substitution layer.
+   *
+   * A cook running in one unit must never be shown the other. Cheap to check and
+   * it closes the class rather than the three instances.
+   */
+  const wrongUnit = outcome.units === 'C' ? /°\s?F\b/ : /°\s?C\b/;
+  let unitBreaches = 0;
+
+  for (const r of outcome.rows) {
+    for (const field of TEXT_FIELDS) {
+      const text = r[field];
+      if (typeof text !== 'string') continue;
+      if (!wrongUnit.test(text)) continue;
+      const key = `unit:${field}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      unitBreaches++;
+      out.push(finding('rendered-text', 'error',
+        `a ${outcome.units === 'C' ? 'Fahrenheit' : 'Celsius'} temperature reached ` +
+        `${field} in a ${outcome.units} cook at ${r.atMin} min (action ` +
+        `"${r.action}"): ${text}`, { row: r.atMin, field }));
+    }
+  }
+
   if (seen.size === 0) {
-    out.push(finding('rendered-text', 'ok', 'no unsubstituted placeholders reached the screen'));
+    out.push(finding('rendered-text', 'ok',
+      `no unsubstituted placeholders reached the screen, and nothing was shown in ` +
+      `the wrong unit for a ${outcome.units} cook`));
   }
   return out;
 }

@@ -112,7 +112,11 @@ export function exportToCSV(session) {
   lines.push(csvRow(['Setting', 'Value', 'Unit']));
   lines.push(csvRow(['Pull Temperature', csvTemp(session.config.pullTempF, units, 1), `°${units}`]));
   lines.push(csvRow(['Serving Temperature', csvTemp(session.config.servingTempF, units, 1), `°${units}`]));
-  lines.push(csvRow(['Carryover', csvTemp(session.config.carryoverF, units, 1), `°${units}`]));
+  // csvDelta, not csvTemp: carryover is a DIFFERENCE. Run through the absolute
+  // converter it came out as `Carryover,-15.0,°C` for a carryoverF of 5, next to a
+  // correctly converted pull/serve pair - the freezing-point offset applied to a
+  // number that has no zero.
+  lines.push(csvRow(['Carryover', csvDelta(session.config.carryoverF, units, 1), `°${units}`]));
   lines.push(csvRow(['Rest', session.config.restMinutes ?? 0, 'minutes']));
   lines.push(csvRow(['Initial Oven Temp', csvTemp(session.config.initialOvenTemp, units, 1), `°${units}`]));
   lines.push(csvRow(['Started', formatDateTime(session.config.createdAt), '']));

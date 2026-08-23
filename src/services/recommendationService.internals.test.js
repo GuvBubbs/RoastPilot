@@ -429,3 +429,87 @@ describe('the oven-headroom floor', () => {
     expect(result.suggestedTemp).toBeLessThan(250);
   });
 });
+
+describe('a missing oven setting', () => {
+  it('refuses rather than suggesting NaN', () => {
+    /**
+     * Every branch of calculateRecommendation does arithmetic on `ovenBaseTemp`
+     * and none of them checked it. An absent dial produced
+     * `{ action: 'lower', suggestedTemp: NaN }` with a confident sentence around
+     * it - the panel would render "Set oven to NaN" and the Apply button would
+     * write it into the oven log. Same class as the unguarded rate that threw a
+     * RangeError out of the whole status panel: a missing input has to become a
+     * refusal, not a number.
+     */
+    for (const dial of [undefined, null, NaN, 'abc']) {
+      const result = calculateRecommendation({
+        ovenBaseTemp: dial,
+        scheduleVarianceMinutes: -40,
+        scheduleStatus: 'early',
+        targetTempF: 192,
+        latestCoreTempF: 170,
+        displayUnits: 'F',
+        settings: createDefaultSettings(),
+        predictedMinutesToTarget: 60,
+        currentRate: 10
+      });
+      expect(result.action).toBe('none');
+      expect(result.suggestedTemp).toBeNull();
+      expect(result.message).not.toMatch(/NaN/);
+    }
+  });
+});
+
+describe('temperatures in the copy are placeholders, not Fahrenheit literals', () => {
+  /**
+   * Three sentences used to be assembled in this service with `°F` baked in, so a
+   * Celsius cook read "not safe until the core is above 140°F" and "25°F above
+   * your 191°F pull" beside a screen showing 88 °C. The `rendered-text` invariant
+   * could not catch it, because it only looks for placeholders that failed to
+   * substitute and a hardcoded literal is not a placeholder. These assert the
+   * service emits a placeholder and the number beside it, leaving the conversion
+   * to the substitution layer.
+   */
+  const early = (dial) => calculateRecommendation({
+    ovenBaseTemp: dial,
+    scheduleVarianceMinutes: -40,
+    scheduleStatus: 'early',
+    targetTempF: 192,
+    latestCoreTempF: 100,
+    displayUnits: 'F',
+    settings: createDefaultSettings(),
+    predictedMinutesToTarget: 60,
+    currentRate: 10
+  });
+
+  it('names the food-safety floor as {safeTemp}', () => {
+    // Core 100 F, so the pause is refused on danger-zone.
+    const result = early(180);
+    const text = `${result.message} ${result.reasoning}`;
+    expect(text).toMatch(/\{safeTemp\}/);
+    expect(text).not.toMatch(/140°F/);
+    expect(result.safeCoreF).toBe(140);
+  });
+
+  it('names the headroom and the pull as placeholders', () => {
+    // 225 is one dial step above the headroom floor for a 192 F pull, so the
+    // ordinary step lands below it and the clamp-to-floor branch fires.
+    const result = calculateRecommendation({
+      ovenBaseTemp: 225,
+      scheduleVarianceMinutes: -40,
+      scheduleStatus: 'early',
+      targetTempF: 192,
+      latestCoreTempF: 170,
+      displayUnits: 'F',
+      settings: createDefaultSettings(),
+      predictedMinutesToTarget: 60,
+      currentRate: 10
+    });
+    expect(result.action).toBe('lower');
+    expect(result.reasoning).toMatch(/\{headroom\}/);
+    expect(result.reasoning).toMatch(/\{pullTemp\}/);
+    expect(result.reasoning).not.toMatch(/°F/);
+    expect(result.headroomF).toBe(25);
+    expect(result.pullTempF).toBe(192);
+  });
+});

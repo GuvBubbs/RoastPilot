@@ -203,6 +203,34 @@ export function useRecommendations() {
       }
     }
     
+    /**
+     * The food-safety floor, the oven headroom and the pull temperature.
+     *
+     * All three used to be written into their sentences as Fahrenheit literals in
+     * the service, so a Celsius cook was told "not safe until the core is above
+     * 140°F" and "25°F above your 191°F pull" while every number on the screen
+     * beside them was in °C. The `rendered-text` invariant did not catch it: it
+     * only looks for placeholders that failed to substitute, and a hardcoded
+     * literal is not a placeholder.
+     *
+     * {headroom} is a DIFFERENCE, so it converts as a difference - 25 °F of
+     * headroom is 14 °C, not -4 °C.
+     */
+    if (out.includes('{safeTemp}') && raw.safeCoreF !== null && raw.safeCoreF !== undefined) {
+      out = out.replace(/{safeTemp}/g, formatTemperature(raw.safeCoreF, displayUnits.value));
+    }
+
+    if (out.includes('{pullTemp}') && raw.pullTempF !== null && raw.pullTempF !== undefined) {
+      out = out.replace(/{pullTemp}/g, formatTemperature(raw.pullTempF, displayUnits.value));
+    }
+
+    if (out.includes('{headroom}') && raw.headroomF !== null && raw.headroomF !== undefined) {
+      const degrees = displayUnits.value === 'C'
+        ? Math.round(raw.headroomF * 5 / 9)
+        : raw.headroomF;
+      out = out.replace(/{headroom}/g, `${degrees}°${displayUnits.value}`);
+    }
+
     if (out.includes('{maxTemp}') && raw.maxTempF !== null && raw.maxTempF !== undefined) {
       out = out.replace(/{maxTemp}/g, formatTemperature(raw.maxTempF, displayUnits.value));
     }
