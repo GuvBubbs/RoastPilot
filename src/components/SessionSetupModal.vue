@@ -27,7 +27,7 @@
 
           <div class="mt-3">
             <NumberStepper
-              v-model="form.servingTemp.value"
+              :model-value="form.servingTemp.value"
               label="Internal temperature when served"
               :suffix="'°' + form.units.value"
               :step="1"
@@ -35,6 +35,7 @@
               :max="tempRanges.max"
               :error="form.servingTemp.touched ? form.servingTemp.error : ''"
               @blur="form.servingTemp.touched = true"
+              @update:model-value="noteUserEdit('servingTemp', $event)"
             />
           </div>
 
@@ -75,13 +76,17 @@
             of the oven this far ahead of your serve time.
           </p>
           <div class="mt-3">
+            <!-- `@update:model-value` rather than a watcher on the value: see
+                 noteUserEdit. Choosing a preset writes this field too, and a
+                 watcher cannot tell that apart from the cook typing. -->
             <NumberStepper
-              v-model="form.restMinutes.value"
+              :model-value="form.restMinutes.value"
               label="Minutes resting"
               suffix="min"
               :step="5"
               :min="0"
               :max="90"
+              @update:model-value="noteUserEdit('restMinutes', $event)"
             />
           </div>
         </section>
@@ -159,7 +164,7 @@
 
           <div class="mt-3">
             <NumberStepper
-              v-model="form.initialOvenTemp.value"
+              :model-value="form.initialOvenTemp.value"
               label="Starting oven setting"
               :suffix="'°' + form.units.value"
               :step="1"
@@ -168,6 +173,7 @@
               :max="ovenTempRanges.max"
               :error="form.initialOvenTemp.touched ? form.initialOvenTemp.error : ''"
               @blur="form.initialOvenTemp.touched = true"
+              @update:model-value="noteUserEdit('initialOvenTemp', $event)"
             />
           </div>
 
@@ -611,24 +617,36 @@ function handleMeatTypeChange() {
   form.meatCut.value = '';
 }
 
-// Track manual edits
-watch(() => form.servingTemp.value, () => {
-  if (form.servingTemp.touched) {
-    userHasEditedTarget.value = true;
-  }
-});
-
-watch(() => form.restMinutes.value, () => {
-  if (form.restMinutes.touched) {
-    userHasEditedRest.value = true;
-  }
-});
-
-watch(() => form.initialOvenTemp.value, () => {
-  if (form.initialOvenTemp.touched) {
-    userHasEditedOven.value = true;
-  }
-});
+/**
+ * A value the cook set themselves, which a preset must not overwrite.
+ *
+ * Called from the stepper's own `update:model-value`, because that only fires for
+ * a user action - typing or the +/- buttons. The alternative, a watcher on the
+ * value, cannot tell the cook apart from the code: applying a preset writes these
+ * same fields, so the watcher had to be gated on something, and it was gated on
+ * `touched`.
+ *
+ * That gate did not work, and `touched` was the wrong question anyway - it exists
+ * to decide when an error message may appear. Only three of the five steppers had
+ * an `@blur` to set it, and Rest was not one of them, so `form.restMinutes.touched`
+ * was set nowhere before handleSubmit's mark-all loop: userHasEditedRest stayed
+ * false for the whole setup and the guard on it was dead. Type 45 into "Minutes
+ * resting", then choose Pork Shoulder, and the rest silently became 30. It moves
+ * computeLatestPullTime one-for-one, so the app then steered the whole cook to a
+ * deadline the cook never set - over a 14 lb shoulder, 75 of 955 states gave
+ * different advice and 14 gave the OPPOSITE direction: "lower to 220, 12 min
+ * early" becoming "raise to 240, 18 min late".
+ *
+ * The other two only half worked for the same reason: `@blur` never fires for the
+ * +/- buttons, so a cook who clicked the stepper up to 275 and then chose a preset
+ * lost that too.
+ */
+function noteUserEdit(field, value) {
+  form[field].value = value;
+  if (field === 'servingTemp') userHasEditedTarget.value = true;
+  else if (field === 'restMinutes') userHasEditedRest.value = true;
+  else if (field === 'initialOvenTemp') userHasEditedOven.value = true;
+}
 
 /**
  * The sheet stays mounted between cooks, so opening it has to rebuild the
