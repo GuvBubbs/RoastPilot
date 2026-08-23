@@ -673,6 +673,47 @@ export function calculateRecommendation({
     };
   }
   
+  /**
+   * TOO LATE FOR THE DIAL TO MATTER.
+   *
+   * `predictedMinutesToTarget` and `currentRate` were destructured at the top of
+   * this function and then referenced nowhere in its body: the step ladder chose
+   * its size purely from how far off schedule the cook was, with no notion of
+   * whether there was time left for a change to do anything.
+   *
+   * So `{ predictedMinutesToTarget: 1, scheduleVarianceMinutes: 31 }` returned
+   * "raise to 300". With ovenChangeLagMinutes at 15 and the oven's own time
+   * constant at 10, a change made one minute from the target cannot move the
+   * finish time at all. It is a wasted trip to the kitchen, and worse than that:
+   * it puts surface heat into the roast during the final approach, which is
+   * exactly where overshoot comes from. The last few minutes are the ones where
+   * the dial should be left alone.
+   *
+   * Both directions, because neither works. Not applied to the pause path below,
+   * which is reached from the early branch and is a different lever.
+   */
+  const changeLagMinutes = settings.ovenChangeLagMinutes ?? 15;
+  if (Number.isFinite(predictedMinutesToTarget)
+      && predictedMinutesToTarget < changeLagMinutes
+      && (scheduleStatus === 'late' || scheduleStatus === 'early')) {
+    return {
+      action: 'hold',
+      suggestedTemp: ovenBaseTemp,
+      changeAmount: 0,
+      message: RECOMMENDATION_MESSAGES.HOLD_ENDGAME,
+      reasoning:
+        `About ${Math.round(predictedMinutesToTarget)} minutes to go, and a dial ` +
+        `change takes around ${changeLagMinutes} to show up in the core - so ` +
+        'nothing set now would change when this is done. It will be roughly ' +
+        `${Math.round(Math.abs(scheduleVarianceMinutes))} minutes ` +
+        `${scheduleStatus === 'late' ? 'late' : 'early'}.`,
+      alternativeMessage: null,
+      ovenOffMinutes: null,
+      practicalMinF: null,
+      severity: 'normal'
+    };
+  }
+
   // Running late - suggest raising temperature
   if (scheduleStatus === 'late') {
     const absVariance = Math.abs(scheduleVarianceMinutes);

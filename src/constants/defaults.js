@@ -77,6 +77,10 @@ export const UI_CONSTANTS = {
  */
 export const RECOMMENDATION_MESSAGES = {
   HOLD: 'Hold steady at {ovenTemp}. You\'re on track to hit your target.',
+  // Not "on track" - off schedule, but too close to the end for the dial to
+  // change that. Raising here only adds surface heat during the final approach,
+  // which is where overshoot comes from.
+  HOLD_ENDGAME: 'Leave the oven at {ovenTemp} - there is not enough time left for a change to make a difference.',
   RAISE_SMALL: 'Consider raising oven to {suggestedTemp} to speed things up.',
   RAISE_LARGE: 'Running late. Consider raising oven to {suggestedTemp}.',
   LOWER_SMALL: 'Running ahead of schedule. Consider lowering oven to {suggestedTemp}.',

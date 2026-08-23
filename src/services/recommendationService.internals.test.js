@@ -513,3 +513,59 @@ describe('temperatures in the copy are placeholders, not Fahrenheit literals', (
     expect(result.pullTempF).toBe(192);
   });
 });
+
+describe('the endgame, where the dial stops mattering', () => {
+  /**
+   * `predictedMinutesToTarget` and `currentRate` were destructured at the top of
+   * calculateRecommendation and referenced nowhere in its body. The step ladder
+   * chose its size purely from how far off schedule the cook was, with no notion of
+   * whether there was time left for a change to do anything - so one minute from
+   * the target, 31 minutes late, it said "raise to 300".
+   *
+   * With ovenChangeLagMinutes at 15 and the oven's own time constant at 10, that
+   * change cannot move the finish time. It is a wasted trip to the kitchen, and it
+   * puts surface heat into the roast during the final approach, which is where
+   * overshoot comes from.
+   */
+  const endgame = ({ minutesLeft, status }) => calculateRecommendation({
+    ovenBaseTemp: 250,
+    scheduleVarianceMinutes: status === 'late' ? 31 : -31,
+    scheduleStatus: status,
+    targetTempF: 195,
+    latestCoreTempF: 185,
+    displayUnits: 'F',
+    settings: createDefaultSettings(),
+    predictedMinutesToTarget: minutesLeft,
+    currentRate: 12
+  });
+
+  it('leaves the dial alone when a change cannot land in time', () => {
+    for (const status of ['late', 'early']) {
+      for (const minutesLeft of [1, 5, 14]) {
+        const result = endgame({ minutesLeft, status });
+        expect(result.action, `${status}, ${minutesLeft} min left`).toBe('hold');
+        expect(result.suggestedTemp).toBe(250);
+        expect(result.changeAmount).toBe(0);
+      }
+    }
+  });
+
+  it('says how far off it will be, rather than pretending it is on track', () => {
+    // "Hold" must not read as "on track" here - the cook is 31 minutes out and
+    // nothing can fix it, which is a different sentence.
+    const result = endgame({ minutesLeft: 5, status: 'late' });
+    expect(result.reasoning).toMatch(/31 minutes late/);
+    expect(result.message).not.toMatch(/on track/i);
+  });
+
+  it('still acts while there is time for the change to work', () => {
+    expect(endgame({ minutesLeft: 15, status: 'late' }).action).toBe('raise');
+    expect(endgame({ minutesLeft: 60, status: 'late' }).action).toBe('raise');
+    expect(endgame({ minutesLeft: 60, status: 'early' }).action).toBe('lower');
+  });
+
+  it('does not fire when there is no projection to measure against', () => {
+    // A null horizon is not a short one. The eligibility gates own that case.
+    expect(endgame({ minutesLeft: null, status: 'late' }).action).toBe('raise');
+  });
+});

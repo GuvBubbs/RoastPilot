@@ -68,15 +68,24 @@ describe('RecommendationPanel', () => {
     let cursor = 0;
     const toDisplay = (f) => (units === 'C' ? Math.round(((f - 32) * 5 / 9) * 10) / 10 : Math.round(f * 10) / 10);
     session.addReading(toDisplay(48), at(0));
-    // Stopping at +110 keeps the core near 117 °F - still climbing toward the
-    // 125 °F pull, so the advice is a dial change rather than "you're done".
-    for (const m of [40, 75, 110]) {
+    /**
+     * Stopping at +75 leaves the core near 88 °F, well short of the 125 °F pull -
+     * so there is real time left and the advice is a DIAL CHANGE, which is what
+     * these tests are about.
+     *
+     * It used to stop at +110, ten minutes from the target. That is inside the
+     * window where a dial change cannot land before the roast is done, so the
+     * advice is now "leave it alone" and there is no suggestion to apply. The
+     * fixture was relying on the app offering a change it should never have
+     * offered.
+     */
+    for (const m of [40, 75]) {
       state = advance(state, { minutes: m - cursor, setPointF: ovenF }, 0.011);
       cursor = m;
       session.addReading(toDisplay(state.coreF), at(m));
     }
     // `now` is the last reading, so the panel is not also fighting a stale one.
-    vi.setSystemTime(new Date(at(112)));
+    vi.setSystemTime(new Date(at(77)));
     wrapper = mount(RecommendationPanel);
     return nextTick();
   }
