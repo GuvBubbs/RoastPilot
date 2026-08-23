@@ -955,16 +955,24 @@ export function assessDeadTimeGate({ readings, k, pullTempF }) {
    *    0.10          32.7              345            1.9             0
    *    0.08          32.7              345            1.9             0
    *
-   * 0.12 rather than the 0.15 the plan specified: it buys 60 minutes of the
-   * deck's silence at no cost in overshoot or reversals, and below it the gate
-   * stops being the binding constraint so nothing further is bought.
+   * 0.12 rather than the 0.15 the plan specified. DO NOT CITE THAT TABLE AS THE
+   * JUSTIFICATION: an independent reviewer re-ran the sweep and got 0.12 slightly
+   * WORSE than 0.15 on mean convergence and blind minutes, so whatever the numbers
+   * above measured, they are not reproducible and the "60 minutes at no cost"
+   * reading of them does not survive. The deck has also changed since (a sixteenth
+   * cook, a re-anchored timeline, a rate-agreement gate), so the table is a record
+   * of one run and not a finding.
    *
-   * The number that actually justifies the choice is not in that table. It is
-   * that at 0.12 the FIRST advice of every cook on the deck is still correct in
-   * DIRECTION - every cook that finishes early is told to lower, every cook that
-   * finishes late is not told to lower. That is the defect this gate exists for:
-   * before it, scenario 04's first advice was "raise" on a roast that finishes
-   * 110 minutes early.
+   * The number that actually justifies the choice is not in that table, and it is
+   * the one that did reproduce. At 0.12 the FIRST advice of every cook on the deck
+   * is still correct in DIRECTION - every cook that finishes early is told to
+   * lower, every cook that finishes late is not told to lower. That is the defect
+   * this gate exists for: before it, scenario 04's first advice was "raise" on a
+   * roast that finishes 110 minutes early.
+   *
+   * The gate is also no longer the only thing standing between an early reading and
+   * a confident wrong answer - see MIN_PROGRESS_FOR_HIGH_CONFIDENCE, which caps a
+   * fit this young at medium however small its residual.
    */
   /**
    * A pull temperature at or below where the roast started is not "too early in
@@ -1072,7 +1080,27 @@ function rmsOfRecent(residuals) {
  * @param {boolean} [params.warmStart]
  * @returns {{level: string, code: string, reason: string}}
  */
-export function confidenceFromFit({ rmsResidual, dof, warmStart = false }) {
+/**
+ * Progress into the cook below which the fit cannot earn HIGH confidence, however
+ * small its residual.
+ *
+ * The dof <= 1 cap says a fit with one degree of freedom can be perfect by luck.
+ * The same argument holds more widely and the count does not capture it: early in a
+ * cook the curvature that tells one thermal model from another has not happened
+ * yet, so every model fits and a small residual is not evidence of the right one.
+ *
+ * Measured against a sphere - a shape a two-lag cascade provably cannot fit - the
+ * app reported `good-fit`, HIGH confidence, at the first reading past the gate,
+ * with the projection 144 minutes out on a 151 minute cook. Three residuals, all
+ * tiny, on a curve it had no business being confident about. Every reading after
+ * that was correctly graded moderate or loose as the mismatch became visible.
+ *
+ * Twice the gate's own minimum: the gate says 12 % is enough to say something at
+ * all, and this says the same evidence is not enough to say it confidently.
+ */
+export const MIN_PROGRESS_FOR_HIGH_CONFIDENCE = 2 * MIN_PROGRESS_FRACTION;
+
+export function confidenceFromFit({ rmsResidual, dof, warmStart = false, progress = null }) {
   /**
    * A large residual no longer REFUSES, it caps confidence at low.
    *
@@ -1126,6 +1154,20 @@ export function confidenceFromFit({ rmsResidual, dof, warmStart = false }) {
   } else {
     level = 'low';
     code = 'loose-fit';
+  }
+
+  /**
+   * Too early for a small residual to mean anything - see
+   * MIN_PROGRESS_FOR_HIGH_CONFIDENCE.
+   */
+  if (level === 'high'
+      && Number.isFinite(progress)
+      && progress < MIN_PROGRESS_FOR_HIGH_CONFIDENCE) {
+    return {
+      level: 'medium',
+      code: 'early-fit',
+      reason: 'Only a little way into the cook, so the readings so far would fit several different curves. The timing will firm up as the roast gets closer.'
+    };
   }
 
   /**

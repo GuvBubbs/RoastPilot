@@ -72,6 +72,7 @@ import {
   predictTimeToTarget
 } from '../../src/services/calculationService.js';
 import { createDefaultSettings } from '../../src/models/dataModels.js';
+import { calculateRecommendation } from '../../src/services/recommendationService.js';
 import { clearFitCache } from '../../src/services/thermalModel.js';
 
 const BASE = Date.parse('2026-08-22T18:00:00.000Z');
@@ -394,13 +395,90 @@ describe('the projection against a sphere, which it cannot fit', () => {
          * "the readings only loosely follow a heating curve" is being told
          * something true and useful about a projection that is an hour out.
          */
+        /**
+         * THE WHOLE COOK, not from 0.4 of it onward. The window used to start at
+         * `trueHitMin * 0.4`, and on one of these cases that put the first sampled
+         * reading exactly one minute after the app's only `good-fit` verdict - so
+         * the assertion passed on where the window began rather than on what the app
+         * said. A filter that decides the result is not a filter.
+         *
+         * The dead-time gate keeps the early readings from producing a verdict at
+         * all, which is the honest way to exclude them.
+         */
         const codes = new Set();
-        for (const upTo of spec.readAt.filter((t) => t >= cook.trueHitMin * 0.4 && t < cook.trueHitMin)) {
+        for (const upTo of spec.readAt.filter((t) => t > 0 && t < cook.trueHitMin)) {
           const app = appAt(cook, spec, upTo);
           if (app.confidence.code) codes.add(app.confidence.code);
         }
         expect(codes.size).toBeGreaterThan(0);
         expect([...codes]).not.toContain('good-fit');
+      });
+
+      it('never advises a change it is confident about', () => {
+        /**
+         * ADVICE DIRECTION, WHICH NOTHING SCORED. Every assertion against this
+         * geometry was about the ETA and the confidence label; none of them asked
+         * what the app would actually tell a cook to do.
+         *
+         * It tells them to raise the oven. With the serve time set to the truth -
+         * so the roast is exactly on schedule - the 6 lb sphere gets "raise to 225"
+         * three readings running, and the 9 lb one gets a raise seven times.
+         * Obeying it walks the dial up and costs real overshoot.
+         *
+         * That is not a logic error, it is the accuracy limit of a two-lag cascade
+         * against a shape it provably cannot fit, showing up where it matters: the
+         * projection says late, so the advice says raise. A real roast is a
+         * cylinder, which is why that is the primary geometry.
+         *
+         * What can be demanded is that the app is never CONFIDENT while doing it,
+         * and that it converges. Both are asserted rather than hoped for, and the
+         * first is the reason the good-fit verdict on the first reading past the
+         * gate had to go: it was high confidence with the projection 144 minutes
+         * out on a 151 minute cook.
+         */
+        const serveISO = at(cook.trueHitMin);
+        const advice = [];
+
+        for (const upTo of spec.readAt.filter((t) => t > 0 && t < cook.trueHitMin)) {
+          clearFitCache();
+          const cutoff = BASE + upTo * 60_000;
+          const calc = computeSessionCalculations({
+            readings: cook.readings.filter((r) => Date.parse(r.timestamp) <= cutoff),
+            ovenEvents: cook.ovenEvents.filter((e) => Date.parse(e.timestamp) <= cutoff),
+            pullTempF: spec.pullTempF,
+            desiredServeTime: serveISO,
+            restMinutes: 0,
+            settings: SETTINGS,
+            weightLb: spec.weightLb,
+            now: at(upTo)
+          });
+          if (calc.predictedTargetTime === null) continue;
+
+          const recommendation = calculateRecommendation({
+            ovenBaseTemp: spec.ovenF,
+            scheduleVarianceMinutes: calc.scheduleVarianceMinutes,
+            scheduleStatus: calc.scheduleStatus,
+            targetTempF: spec.pullTempF,
+            latestCoreTempF: calc.currentTempF,
+            displayUnits: 'F',
+            settings: createDefaultSettings(),
+            predictedMinutesToTarget: calc.predictedMinutesToTarget,
+            currentRate: calc.currentRate
+          });
+          advice.push({ upTo, action: recommendation.action, level: calc.confidence.level });
+        }
+
+        expect(advice.length).toBeGreaterThan(2);
+
+        // Never a dial change at high confidence against a geometry it cannot fit.
+        const confidentChanges = advice.filter(
+          (a) => a.level === 'high' && (a.action === 'raise' || a.action === 'lower')
+        );
+        expect(confidentChanges, JSON.stringify(advice)).toEqual([]);
+
+        // And it has to arrive at "leave it alone" by the end, not still be
+        // chasing the dial when the roast is nearly done.
+        expect(advice[advice.length - 1].action).toBe('hold');
       });
 
       it('still never predicts a finish before its anchor', () => {

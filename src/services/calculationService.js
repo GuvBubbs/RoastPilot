@@ -571,7 +571,10 @@ export function computeSessionCalculations({
     // reading ever made refusal permanent. See CONFIDENCE_WINDOW_READINGS.
     rmsResidual: fit.recentRmsResidual,
     dof: fit.dof,
-    warmStart
+    warmStart,
+    // How far into the cook we are. A small residual on the first reading past the
+    // gate is not evidence - see MIN_PROGRESS_FOR_HIGH_CONFIDENCE.
+    progress: gate.detail?.progress ?? null
   });
   
   // A fit the model itself does not believe is not a projection with a caveat.
