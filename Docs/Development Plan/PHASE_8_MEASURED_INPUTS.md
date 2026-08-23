@@ -2,8 +2,9 @@
 
 **Status:** requirements only. Nothing here is built.
 
-Capture three things the model already wants and currently guesses, without making
-the app any more work to use on the day.
+Ask for everything about the roast and the oven that the thermal model or the
+simulator parameterises, once, at the start of a cook — and put all of it in the
+export. Without making the app any more work to use on the day.
 
 ---
 
@@ -21,7 +22,7 @@ intention.
 
 ---
 
-## Why these three
+## Why
 
 Every thermal constant traces to one export with three readings and zero degrees
 of freedom. Some of the gaps can only be closed by measurement, and the measuring
@@ -29,13 +30,45 @@ currently has nowhere to live in the app — which is how the calibration protoc
 ended up asking for pen and paper. That was the wrong answer. A field that is
 empty by default costs nothing and captures everything.
 
-| what | how much work, per cook | what it retires |
-|---|---|---|
-| Thickness of the roast | one tape measure, once | the weight→length inference *and* the per-cut shape fudge |
-| Starting core temperature | already asked for | the "did it go in cold" assumption |
-| Oven temperature beside a reading | one glance, whenever you feel like it | three constants resting on nothing |
+| what | work, per cook | what it retires | req |
+|---|---|---|---|
+| Thickness of the roast | one tape measure, once | the weight→length inference *and* the per-cut shape fudge | R1 |
+| Length | same tape measure | the oracle's assumed aspect ratio | R1.3 |
+| Starting core temperature | already asked for | the "did it go in cold" assumption | R2 |
+| Oven temperature by a reading | one glance, when you feel like it | three constants resting on nothing | R3 |
+| Bone in or out | already asked for | nothing yet — it reaches no physics at all | R6 |
+| Fan-forced or conventional | one tap, once ever | `BIOT = 8`, hardcoded "natural convection" | R7.1 |
+| Covered or open | one tap | the same surface-transfer channel as the fan | R7.2 |
+| Whether a stall is expected | nothing — derived from the type | the app rediscovering the stall every cook | R8 |
 
 ---
+
+## What the two models parameterise, and what the app asks
+
+Worked through `tools/sim/meatModel.js`, `tools/oracle/conductionModel.js` and
+`src/services/thermalModel.js`. This is the whole input surface.
+
+| parameter | where | asked at setup? | reaches the app's physics? |
+|---|---|---|---|
+| meat type | `SHAPE_FACTORS`, `CUTS` | **yes** | yes — shape factor |
+| weight | `kPrior` | **yes** | yes |
+| starting core temp | `readings[0]` | **yes** | yes |
+| starting oven setting | opening set point | **yes** | yes |
+| **cut (bone-in / boneless)** | — | **yes** | **no — label and CSV only** |
+| **thickness** | the whole point of `weight^(-2/3) × shapeFactor` | **no** | R1 |
+| **length** | oracle aspect ratio, assumed 1.5 D | **no** | R1.3 — recorded, not modelled |
+| **stalls (per cut)** | `CUTS[cut].stalls` | **no** — derivable from type | R8 |
+| **fan vs conventional oven** | `BIOT = 8`, "natural convection" | **no** | R7 |
+| **covered / foil / open** | same channel as the fan | **no** | R7 |
+| oven temperature observed | `ovenActualF` | **no** | R3 — calibration only |
+| kitchen ambient | `ambientF = 70` | **no** | R7.3 — minor |
+| `tauOvenHeatMin` / `tauOvenCoolMin` | oven lag | no — **measure, don't ask** | R3 |
+| `cycleAmplitudeF`, `cyclePeriodMin` | thermostat sawtooth | no — not knowable by a cook | R3 |
+| `probeBiasRangeF`, `probeNoiseF` | probe error | **never ask** — it is an error, not a setting | — |
+| `ALPHA_CM2_PER_MIN = 0.084` | beef diffusivity | no — it is mostly water content, near-constant across red meat | — |
+
+Four gaps a cook could simply state, and one field already stated that goes
+nowhere. Everything else is either measured (R3) or not a cook's business.
 
 ## R1 — Thickness, at session setup
 
@@ -231,6 +264,113 @@ Validation failures must name the field and must not lose the cook's other edits
 
 ---
 
+## R6 — The cut already asked for should reach the physics, or say why not
+
+`config.meatCut` is captured at setup, offers Bone-in / Boneless for four of the
+five presets, and reaches **nothing but a label in SettingsPanel and a row in the
+CSV export**. It does not touch `kPrior`, `SHAPE_FACTORS` or the projection.
+
+Bone-in versus boneless is a real physical difference — bone conducts differently
+from muscle, and a bone-in roast is usually a different shape at the same weight.
+
+### The requirement is *not* to invent a coefficient
+
+There is no data to justify a bone-in factor, and inventing one is exactly the
+failure this whole line of work has been correcting. So:
+
+1. Pass `meatCut` into `kPrior`'s parameter object, so the call sites already carry
+   it and a future calibration can test a factor without touching every caller.
+2. Apply **1.0** for every cut, and say so in the docstring: *"captured, exported,
+   and deliberately not yet used — no cook has been measured that could justify a
+   number."*
+3. Ensure it is in the export (it is, `config` is serialised wholesale) and in the
+   CSV (it is, `exportService.js:129`).
+
+That way the data accumulates, the wiring exists, and nothing is fabricated. If a
+cook with a thickness measurement is entered, R1 supersedes this anyway — a measured
+thickness already contains whatever the bone did to the shape.
+
+## R7 — Oven character
+
+The single largest un-asked physical input. `BIOT = 8` is documented as
+"a domestic oven with **natural convection**". A fan-forced oven has substantially
+higher surface heat transfer, and a roast under foil has substantially lower. Both
+change how fast the surface tracks the oven, which is the first stage of the
+cascade.
+
+### R7.1 — Fan-forced or conventional: a persisted setting, not a per-cook question
+
+This is a property of the cook's **oven**, not of the roast. Asking it every time is
+the sort of friction this phase exists to avoid.
+
+- Lives in **Settings** as `settings.ovenIsFanForced` (boolean, default `false`),
+  asked once and remembered.
+- Surfaced in setup only as a one-line confirmation of the remembered value, with a
+  way to change it — not as a question.
+
+### R7.2 — Covered or open: per-cook, one tap
+
+`config.covering`: `'open' | 'foil' | 'lid'`, default `'open'`. This genuinely
+varies cook to cook and a lidded pot is a different thermal problem from an open
+tray.
+
+### R7.3 — Kitchen ambient: optional, and mainly for the rest
+
+`config.ambientF`, optional, defaulting to today's `AMBIENT_F` of 70 °F. It matters
+in two places: how fast the oven cools when switched off, and — more importantly —
+how the roast behaves during the rest, which is where the carryover measurement
+comes from. A rest in a 12 °C kitchen is not a rest in a 24 °C one.
+
+Low priority. One number, and the default is fine for most cooks.
+
+### R7.4 — None of these three feed the runtime model yet
+
+Same rule as R3.3 and R6: **capture, export, do not consume.** There is no
+calibrated coefficient for a fan oven or for foil, and the honest move is to record
+the conditions so that one real cook can produce one, rather than to guess a
+multiplier now and have it look like knowledge.
+
+What they change immediately is the *interpretation of a calibration run*: a fitted
+`k` from a fan-forced covered cook and one from an open conventional cook are not
+the same measurement, and today's export cannot tell them apart. That alone
+justifies the fields.
+
+## R8 — Stall expectation, derived rather than asked
+
+`tools/sim/meatModel.js` knows which cuts stall — `CUTS['pork-shoulder'].stalls` is
+`true`, the other four are `false`. The app has **no stall concept at all**. Its
+rate-agreement gate discovers a stall reactively, every cook, from scratch.
+
+No new setup question is needed: the app already has `meatType`.
+
+### The requirement
+
+Expose a derived `expectsStall` from the meat type, and use it **only for the
+copy**, not for the maths:
+
+- When the rate gate refuses and `expectsStall` is true, say so with confidence:
+  *"This is the stall — normal for a shoulder around 150–165 °F. Timing advice comes
+  back when it picks up again."*
+- When it refuses and `expectsStall` is false, the current wording is right, because
+  an unexpected slowdown on a prime rib might well be a probe that has moved.
+
+The maths must not change. A stall term in the model is a much larger piece of work
+and needs the endgame data the next real cook will produce. This is copy that tells
+the cook what is happening, from information the app already holds.
+
+## R9 — Everything asked must be in the JSON
+
+The user-facing requirement behind all of the above: **if the app asks it, the
+export carries it.**
+
+- `exportToJSON` serialises `session.config` and `session.readings` wholesale, so
+  every new config field lands automatically. Assert it rather than assume it.
+- `exportToCSV` builds rows explicitly. Add: thickness, length, covering, ambient,
+  and `settings.ovenIsFanForced`. Lengths are **absolute**, not deltas — use a
+  length converter, and note that the carryover row in that same function was
+  exported through the wrong converter for precisely this class of reason.
+- The reading rows need an `ovenActualF` column, blank where absent.
+
 ## Tests required
 
 Not optional, and not "tests exist" — these specific properties:
@@ -266,8 +406,9 @@ Not optional, and not "tests exist" — these specific properties:
 
 ## Acceptance criteria
 
-- **A1.** Weight, thickness, length, starting temperature and the per-reading oven
-  temperature are all capturable through the UI, and all optional.
+- **A1.** Weight, thickness, length, cut, meat type, starting temperature, oven
+  character (fan / covering / ambient) and the per-reading oven temperature are all
+  capturable through the UI, and all optional.
 - **A2.** A cook entering a thickness gets a prior derived from it, with no shape
   factor applied.
 - **A3.** `npm run sim:calibrate` on an export produced by the app — with no manual
@@ -282,6 +423,14 @@ Not optional, and not "tests exist" — these specific properties:
   oven thermometer is an app field rather than a sheet of paper, fridge-out time is
   replaced by the starting reading, and the dimensions are entered rather than
   written down.
+- **A7.** Every field this phase adds appears in both exports. A cook who fills in
+  everything produces a JSON from which the conditions of the cook can be
+  reconstructed without asking them a single follow-up question. That is the test:
+  **could a session months later work out what this roast was and what oven it was
+  in, from the file alone?**
+- **A8.** Setup remains one screen-worth of scrolling with no new required field,
+  and the time from "open the app" to "start cook" for someone who skips everything
+  optional does not increase.
 
 ---
 
@@ -294,9 +443,19 @@ Not optional, and not "tests exist" — these specific properties:
 - **Feeding `ovenActualF` into the runtime projection.** R3.3.
 - **A spatial model.** `lengthCm` is recorded, not modelled. R1.3.
 - **Fridge-out time.** R2.
-- **Bone-in / boneless / tied as model inputs.** `meatCut` is already captured and
-  currently only selects a preset. Whether it should reach the physics is a
-  question for a cook with data, not a guess to encode now.
+- **A coefficient for bone-in, fan-forced or foil.** R6 and R7 capture and export
+  them and deliberately apply nothing. There is no cook measured that could justify
+  a number, and inventing one is the failure this whole line of work has been
+  correcting.
+- **Poultry.** `MEAT_PRESETS` has five entries and none of them is a bird, so a
+  chicken or turkey falls through to a neutral shape factor — while
+  `tools/oracle/fixtures/03-cylinder-24lb-175F` is described as "a 24 lb bird" and
+  the harness deck is entirely red meat. Adding poultry is not a preset entry: a
+  bird is a shell around a cavity rather than a solid mass, and the app's whole
+  pause-safety argument is built on `MIN_CORE_FOR_OVEN_OFF_F = 140`, which is
+  red-meat reasoning. See the open questions.
+- **A stall term in the model.** R8 is copy only. A real stall term needs the
+  endgame data the next real cook produces.
 - **Changing the oracle's geometry from a single cook's measurements.** Record the
   numbers; correcting the oracle is a separate, deliberate commit, and its
   parameters must keep coming from physical reality rather than from anything fitted
@@ -320,6 +479,16 @@ Not optional, and not "tests exist" — these specific properties:
 4. **Whether one thickness is enough for a tapered roast.** A leg of lamb is not a
    cylinder. Probably yes, with the residual absorbing it — but this is the kind of
    question one real cook answers and no amount of reasoning does.
+5. **Poultry — a whole separate decision, not a preset.** A bird is a shell around
+   a cavity, so a solid-body cascade is a poor description of it, and the food-safety
+   floor the pause logic rests on is red-meat reasoning at 140 °F. If poultry is
+   wanted, it needs its own thinking about both, and probably its own safety floor.
+   Until then, leaving it out of the presets is more honest than a shape factor that
+   implies the model understands it.
+6. **Should `ovenIsFanForced` be per-oven or per-cook?** Specified as per-oven in
+   R7.1 on the grounds that people own one oven. A cook who roasts at someone
+   else's house would disagree. A remembered default with a per-cook override is
+   the likely answer; confirm before building.
 
 ---
 

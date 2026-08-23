@@ -12,124 +12,86 @@ Read the first half before the cook. Hand the second half to the new chat.
 
 # Part 1 — What to bring back
 
-The app's export is necessary and not sufficient. Several of the things worth
-measuring have nowhere to live in the app as data the tooling can read — the free-text
-`Notes` field will hold them, but nothing parses it — so they have to be written down
-as you go or they are gone.
+**This assumes Phase 8 has been built** — see
+`Docs/Development Plan/PHASE_8_MEASURED_INPUTS.md`. Under Phase 8 everything the
+model needs is an app field, asked once at setup, and it all lands in the export.
+There is no clipboard.
 
-## 1. The export (`Export JSON` in Settings)
+If Phase 8 has *not* been built when you cook, see **the fallback** at the end of
+this part. Check before you start; it is one `git log` away.
 
-This carries: every reading with its timestamp, every oven event including
-off/restart, the whole config, and the settings in force. It is the backbone —
-everything else below hangs off its timestamps.
+## Fill in the setup form completely — that is the whole job
 
-**Two config fields to check before you start, because they are the ones the
-reference cook is missing:**
+Every field below is optional as far as the app is concerned, and every one of them
+retires a guess. None of it is work during the cook; it is two minutes before the
+roast goes in.
 
-| field | why | where |
-|---|---|---|
-| **Weight** | The prior on how fast the roast heats scales as `weight^(-2/3)`. The existing reference cook's weight is `null`, so the 6 lb figure everything descends from is an assumption. | Session setup — "The roast" |
-| **Type and cut** | Selects the shape factor (a tenderloin and a shoulder of equal weight do not heat alike). | Session setup |
+| field | why it matters |
+|---|---|
+| **Type** and **cut** | Type selects the shape factor. Cut is captured and exported but deliberately reaches no physics yet — it accumulates so that a future cook can test whether bone-in deserves a coefficient. |
+| **Weight**, to 0.1 lb | The prior scales as `weight^(-2/3)`. The existing reference cook's weight is `null`, so the 6 lb figure everything descends from is an assumption. |
+| **Thickness** through the thickest part, the short way | The strongest single input. It replaces *both* the weight→length inference and the per-cut shape fudge with a measurement, because the prior is really `k ∝ α/L²`. One tape measure. |
+| **Length** | Free while the tape measure is out. Corrects the independent oracle's assumed 1.5-diameter aspect ratio — it does not touch the app's own projection. |
+| **Starting reading** | Becomes `readings[0]`, so the projection starts from a measured state rather than an assumed one. |
+| **Starting oven setting** | Already required. |
+| **Fan-forced or conventional** | Remembered per oven, so once ever. `BIOT = 8` is hardcoded as "natural convection" and a fan oven is not that. |
+| **Covered / foil / open** | A lidded pot is a different thermal problem from an open tray. |
+| **Kitchen ambient**, if it is unusual | Matters mostly for the rest, which is where carryover comes from. A rest in a 12 °C kitchen is not a rest in a 24 °C one. Skip it if the kitchen is ordinary. |
+| **Notes** | Anything odd. Free text, comes through in the export. |
 
-Enter the weight to **0.1 lb**. It is one number and it retires a guess.
+## During the cook — two things, both optional
 
-> **Check `Docs/Development Plan/PHASE_8_MEASURED_INPUTS.md` before you cook.** It
-> specifies app fields for items 2, 3 and 4 below — an optional oven-temperature
-> input on the reading modal, and thickness/length at setup. If it has been built by
-> then, enter them in the app and skip the paper. If not, the paper fallback below
-> still works and is what the calibration code expects.
+**Oven temperature, whenever you glance at it.** The reading modal has an optional
+oven-thermometer field beside the core temperature. It is blank by default and never
+required. Fill it in when you happen to look; skip it when you do not. Even five
+values across a cook constrain `tauOvenHeatMin`, `tauOvenCoolMin` and
+`cycleAmplitudeF`, three constants currently resting on nothing.
 
-## 2. The oven-thermometer sheet — **the app cannot store this yet**
+**One deliberate 20–30 minute oven-off**, somewhere in the middle. Log it with
+**Pause cooking** and log the restart. This single interval is the only thing that
+would ever constrain `tauOvenCoolMin`. Pausing by hand is unrestricted — the 140 °F
+floor governs what the app *suggests*, not what you do.
 
-`tools/sim/calibrate.js` reads an `ovenActualF` field off each reading and will
-fit the oven's own behaviour against it. **Nothing in the app ever writes that
-field** — `AddReadingModal` has two inputs, internal temperature and time, and
-there is no oven-temperature input anywhere. So this has to be a piece of paper.
+## The readings, and the part that actually matters
 
-Put a dial thermometer on the shelf beside the roast and record, at every probe
-reading:
+- **Every 10 minutes** from the moment it goes in.
+- **Every 5 minutes once the core passes 110 °F.**
+- **Keep logging through the pull, the whole rest, and the first slice.**
 
-```
-time        oven thermometer
-14:31       208
-14:41       214
-14:51       196
-...
-```
-
-Clock time is enough — it gets matched to the readings by timestamp afterwards.
-This is what pins `tauOvenHeatMin`, `tauOvenCoolMin` and `cycleAmplitudeF`, three
-constants currently resting on nothing.
-
-## 3. The roast's dimensions — **the app cannot store these either**
-
-- **Shortest cross-section, in cm.** Heat travels the shortest path, so this is
-  the length the physics actually scales with — more informative than the weight.
-- **Length, in cm.** The independent oracle
-  (`tools/oracle/conductionModel.js`) currently *assumes* a roast is 1.5
-  diameters long. It assumed four diameters until 2026-08-23 (commit `60cddf6`),
-  which made every accuracy figure the oracle certified wrong by roughly a factor
-  of two. One real measurement replaces the assumption.
-
-A tape measure across the thickest part before it goes in. Ten seconds.
-
-## 4. The starting reading — already an app field, so use it
-
-Enter the core temperature in **Starting reading** at setup. It becomes
-`readings[0]`, so the projection starts from a measured state instead of an assumed
-one.
-
-This replaces the "fridge-out time" an earlier draft of the protocol asked for. A
-measured core is strictly better than a time from which a core would have to be
-guessed. The one thing it does not capture is the *gradient* — a roast that sat out
-for two hours has a warm surface over a cool core, and a single core reading cannot
-tell that apart from one straight out of the fridge. That is second-order, the
-residuals will show it, and it is not worth a field.
-
-The `Notes` field is a fine place for the dimensions and anything else in this list
-until Phase 8 gives them somewhere structured to live — it comes through in the
-export, it is just not machine-readable.
-
-## 5. The rest block — the one measurement nothing else can give
-
-**Keep logging readings after the meat comes out**, every 5 minutes, through the
-whole rest and up to the first slice.
-
-This is the only possible source of a **measured carryover**. The app currently
-ships a straight-line guess: +3 °F at a 175 °F oven rising to +8 °F at 300 °F, so
-about +4 °F at a typical 200 °F oven. That number has never been measured, and an
-evaporation-free solve of the app's own model disagrees with instrumented
-measurements of the same cut class by a factor of three. The measurement itself
-needs no fitting at all:
+That last line is the one irreplaceable thing in this document. It is the only
+possible source of a **measured carryover**, and the measurement needs no fitting at
+all:
 
 > **carryover = highest core reached during the rest − core at the moment of the pull**
 
-Two numbers off your own sheet.
+Two numbers off your own data. The app currently ships a straight-line guess — about
++4 °F at a 200 °F oven — that has never been measured against anything, and an
+evaporation-free solve of the app's own model disagrees with published instrumented
+measurements of the same cut class by a factor of three.
 
 **Log an oven-off event at the moment you pull the meat.** It is the closest thing
-the app can represent to "the roast is now on a board", and without it the
-timeline thinks the roast is still in a hot oven. See the caveat in Part 2 — it is
-not a perfect proxy and the rest block should be read by hand rather than fitted.
+the app can represent to "the roast is now on a board". See the caveat in Part 2 — it
+is not a perfect proxy, and the rest block should be read by hand rather than fitted.
 
-## 6. Two things about the outcome
+## Two things about the outcome, in Notes or in your own words
 
-- **Was it how you wanted it?** Over, under, or right. The whole app exists to
-  land this, and there is currently no record anywhere of whether it ever has.
-- **Anything unusual.** Door opened, foil on, tray moved, oven struggling, a
-  reading you think was wrong and why. A note costs nothing and an unexplained
-  outlier costs an afternoon.
+- **Was it how you wanted it?** Over, under, or right. The whole app exists to land
+  this, and there is no record anywhere of whether it ever has.
+- **Anything unusual.** Door opened, foil added part way, tray moved, oven
+  struggling, a reading you think was wrong and why. A note costs nothing and an
+  unexplained outlier costs an afternoon.
 
 ## If it does not all happen
 
-It is still worth bringing back. Ranked by what is irreplaceable:
+Still worth bringing back. Ranked by what is irreplaceable:
 
 1. **Readings through the pull and rest** — carryover. Nothing else can produce it.
-2. **Weight and shortest cross-section** — retires two standing assumptions.
-3. **One deliberate 20–30 min oven-off** — `tauOvenCoolMin` is constrained by
-   nothing whatsoever today.
-4. **Oven-thermometer sheet** — three fabricated constants.
-5. **Two dial moves 45+ min apart** — nice to have; the deck already covers this
-   shape.
+2. **Thickness, and weight** — retires the two standing geometry assumptions.
+3. **One deliberate oven-off** — `tauOvenCoolMin` is constrained by nothing today.
+4. **A few oven-thermometer values** — three fabricated constants.
+5. **Fan / covering** — cheap, and without them a fitted `k` cannot be compared
+   against anyone else's cook.
+6. **Two dial moves 45+ min apart** — nice to have; the deck already covers this shape.
 
 A cook with items 1 and 2 and nothing else is a large improvement on what exists.
 
@@ -137,16 +99,29 @@ A cook with items 1 and 2 and nothing else is a large improvement on what exists
 
 You no longer need to log a reading the instant the roast goes in. The projection
 used to start its timeline at the *first reading* and silently discard everything
-before it, which inverted its own verdict — the same roast read "38 min late" with
-a reading at t=0 and "30 min early" with the first reading half an hour later.
-That is fixed: the timeline now anchors on the oven event, which `startSession`
-writes automatically.
+before it, which inverted its own verdict — the same roast read "38 min late" with a
+reading at t=0 and "30 min early" with the first reading half an hour later. That is
+fixed: the timeline now anchors on the oven event, which `startSession` writes
+automatically.
 
 **So: start the session when the roast goes in, and take the first probe reading
-whenever you get to it.** Just don't start the session late — that is the case
+whenever you get to it.** Just do not start the *session* late — that is the case
 that is still an approximation.
 
----
+## The fallback, if Phase 8 was never built
+
+Everything above still applies except that four of the inputs have nowhere to live.
+Write these down and hand them over as a separate note:
+
+- **Oven-thermometer readings**, as `time → temperature` pairs. `calibrate.js`
+  already reads an `ovenActualF` field off each reading and weights it at 0.25; the
+  app just never writes it, so the values have to be merged into the JSON by hand
+  afterwards.
+- **Thickness and length in cm.**
+- **Fan-forced or conventional, and whether it was covered.**
+
+Weight, cut, type and the starting reading are app fields today, so those go in the
+app either way.
 
 # Part 2 — Context for the new chat
 
@@ -157,9 +132,10 @@ pasted or pointed at.
 
 > I've done the instrumented calibration cook described in
 > `Docs/calibration-cook.md`. Read `Docs/next-cook-handover.md` first — Part 2 is
-> written for you. The export is at `Docs/Reference/<filename>.json` and my
-> hand-recorded oven-thermometer readings and measurements are [pasted below /
-> in `Docs/Reference/<filename>-notes.md`].
+> written for you. The export is at `Docs/Reference/<filename>.json`. It should
+> carry the roast's dimensions, the oven's character and whatever oven-thermometer
+> values I entered; if any of that is missing, my notes are [pasted below / in
+> `Docs/Reference/<filename>-notes.md`].
 >
 > Work out what this data changes. I'd rather know that a constant was already
 > right than have it adjusted to fit one cook.
@@ -201,7 +177,10 @@ data, and a `null` weight.
 | `cycleAmplitudeF` = 10.8 | `meatModel.js` | **assumed** |
 | `evapMaxF` = 0.42 | same | **explicitly fabricated**; the reference cook never reaches the stall band |
 | carryover +3 → +8 °F | `src/services/carryoverService.js` | **a visible placeholder**, never measured |
-| oracle aspect ratio 1.5 | `tools/oracle/conductionModel.js` | assumed from what a rib roast measures |
+| oracle aspect ratio 1.5 | `tools/oracle/conductionModel.js` | assumed from what a rib roast measures — `config.lengthCm` is what replaces it |
+| `BIOT` = 8 | same | **assumed**, and documented as "natural convection" — a fan oven is not that |
+| bone-in coefficient | — | **none**; `meatCut` is captured and exported and reaches no physics by design |
+| stall term | — | **none in the app at all**; the rate-agreement gate discovers a stall reactively each cook |
 
 ## The numbers as they stand — the before picture
 
@@ -235,13 +214,21 @@ an oven-off period — a fitted `tauOvenCoolMin`. Then:
 3. `npm run sim:baseline` and commit the baseline **in the same commit** as the
    constants. A stale baseline is a hard failure by design.
 
-To get the oven-thermometer readings into the fit, add an `ovenActualF` to the
-matching readings in the JSON by hand — `calibrate.js` already reads it, weighted
-at 0.25 relative to a core residual:
+Oven-thermometer values should already be on the readings as `ovenActualF`, which
+`calibrate.js` reads and weights at 0.25 relative to a core residual:
 
 ```json
 { "temp": 91.9, "timestamp": "2026-08-22T03:27:00.000Z", "ovenActualF": 244 }
 ```
+
+If they are on paper instead — Phase 8 not built, or built after the cook — merge
+them onto the matching readings by timestamp before running the fit.
+
+**Check the new config fields before trusting a fitted `k`.** A fitted constant from
+a fan-forced covered cook and one from an open conventional cook are not the same
+measurement, and neither is comparable to the reference export, which records
+neither. `config.thicknessCm`, `config.ovenIsFanForced` (or `settings.`) and
+`config.covering` are what make the number interpretable.
 
 ## Traps, in the order they will come up
 
