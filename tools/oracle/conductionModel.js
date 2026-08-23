@@ -130,8 +130,33 @@ export function radiusForWeightCm(weightLb, geometry = 'cylinder') {
     // volume = (6h)·(6h)·(2h) = 72h³
     return Math.cbrt(cm3 / 72);
   }
-  // cylinder: volume = pi·r²·(8r) = 8·pi·r³
-  return Math.cbrt(cm3 / (8 * Math.PI));
+  /**
+   * cylinder: volume = pi·r²·(3r) = 3·pi·r³, i.e. length = 1.5 diameters.
+   *
+   * It was 8r - length four times the diameter - which for a 6 lb roast is 3.7 in
+   * across and 14.8 in long. That is a tenderloin. A bone-in prime rib of that
+   * weight is about 5 in across and 8 in long, and the difference is not cosmetic:
+   * the conduction length is the radius, so a wrong aspect ratio is a wrong roast
+   * at the same weight, and every error figure this oracle certifies is measured
+   * on it.
+   *
+   * Against the repo's one real instrumented cook - a 6 lb bone-in prime rib from
+   * 46.4 F, replayed through its actual dial history of 212 then 266 F - the truth
+   * is 59.9 F at +44 min and 91.9 F at +89:
+   *
+   *   L/D    radius    dimensions        +44 min   +89 min
+   *   4.0    4.69 cm   3.7 in x 14.8 in      94.4     167.7
+   *   1.5    6.50 cm   5.1 in x  7.7 in      56.5     100.5
+   *
+   * 1.5 is chosen from what a rib roast measures, not fitted to that cook - the
+   * agreement is corroboration, and it has to be, or this stops being an
+   * independent engine and becomes a second copy of the app's calibration.
+   *
+   * The solver is 1-D radial, so it still ignores heat entering through the ends.
+   * At this aspect ratio that is no longer negligible, and it biases the oracle
+   * SLOW - which is the safe direction for something used as a hard target.
+   */
+  return Math.cbrt(cm3 / (3 * Math.PI));
 }
 
 /**

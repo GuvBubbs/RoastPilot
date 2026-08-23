@@ -282,3 +282,70 @@ describe('the two engines agree about the oven', () => {
       .toBeCloseTo(1 - Math.exp(-1), 2);
   });
 });
+
+describe('the cylinder has a real roast\'s proportions', () => {
+  /**
+   * The solver is validated against analytic series solutions above - that is
+   * whether the MATHS is right. This is whether the PARAMETERS describe a roast,
+   * which is a different question and was not being asked. `radiusForWeightCm`
+   * assumed a cylinder four diameters long, which at 6 lb is 3.7 in across and
+   * 14.8 in long: a tenderloin. The conduction length is the radius, so that is a
+   * different roast at the same weight, and every error figure this oracle
+   * certified was measured on it.
+   *
+   * Checked against a real physical measurement rather than against the model this
+   * oracle exists to judge. That distinction is the whole point: agreeing with the
+   * app's calibration would make this a second copy of it.
+   */
+  const REAL_COOK = {
+    weightLb: 6,
+    startCoreF: 46.4,
+    ovenTimeline: [{ atMin: 0, setF: 212 }, { atMin: 44, setF: 266 }],
+    readings: [{ atMin: 44, tempF: 59.9 }, { atMin: 89, tempF: 91.9 }]
+  };
+
+  function replayRealCook() {
+    const model = createConductionModel({
+      weightLb: REAL_COOK.weightLb,
+      geometry: 'cylinder',
+      startCoreF: REAL_COOK.startCoreF,
+      ovenSetF: REAL_COOK.ovenTimeline[0].setF
+    });
+    const seen = [];
+    let next = 1;
+    const last = REAL_COOK.readings[REAL_COOK.readings.length - 1].atMin;
+    for (let minute = 0; minute <= last; minute++) {
+      while (next < REAL_COOK.ovenTimeline.length
+             && REAL_COOK.ovenTimeline[next].atMin === minute) {
+        model.setOven(REAL_COOK.ovenTimeline[next].setF);
+        next++;
+      }
+      const reading = REAL_COOK.readings.find((r) => r.atMin === minute);
+      if (reading) seen.push({ ...reading, oracleF: model.coreF });
+      model.step(1);
+    }
+    return seen;
+  }
+
+  it('lands within 10 F of the one real cook in this repository', () => {
+    /**
+     * A sanity bound, not a fit. Ten degrees over an hour and a half is loose on
+     * purpose - the roast's weight was never recorded (the export's weight field is
+     * null, so 6 lb is an assumption), the solver is 1-D radial and ignores heat
+     * entering through the ends, and one cook is not a calibration set. What it
+     * catches is the failure that was there: the old geometry was out by 34 F at
+     * the first reading and 76 F at the second.
+     */
+    for (const { atMin, tempF, oracleF } of replayRealCook()) {
+      expect(Math.abs(oracleF - tempF), `at +${atMin} min`).toBeLessThan(10);
+    }
+  });
+
+  it('gives a 6 lb roast the dimensions a rib roast actually has', () => {
+    const radiusCm = radiusForWeightCm(6, 'cylinder');
+    const diameterInches = (2 * radiusCm) / 2.54;
+    // Five inches across, give or take - not three, and not eight.
+    expect(diameterInches).toBeGreaterThan(4.5);
+    expect(diameterInches).toBeLessThan(5.5);
+  });
+});

@@ -14,7 +14,7 @@ app says is scored against it.
 |---|---|---|
 | `01-cylinder-6lb-200F` | 1-D conduction, cylinder | the ordinary case |
 | `02-cylinder-3lb-250F` | 1-D conduction, cylinder | small and fast; `k` is 4× case 01, so the weight prior must not anchor the answer |
-| `03-cylinder-24lb-175F` | 1-D conduction, cylinder | eleven hours, and only 25 °F of headroom over the target |
+| `03-cylinder-24lb-175F` | 1-D conduction, cylinder | close to ten hours, and only 25 °F of headroom over the target |
 | `04-cylinder-dial-moved` | 1-D conduction, cylinder | two dial changes mid-cook |
 | `05-cylinder-paused` | 1-D conduction, cylinder | a 40 min oven-off period; the readings across it are *cooling* |
 | `06-slab-6lb-200F` | 1-D conduction, slab | same weight as 01, different geometry, different spectrum |
@@ -24,8 +24,16 @@ app says is scored against it.
 ## Why a cylinder is the primary geometry
 
 A roast is not a sphere. A prime rib, a pork loin, a leg of lamb and a
-tenderloin are all cylinders to a first approximation; a rib roast is closer to
-a slab. That matters more than it sounds, because the best cascade length is a
+tenderloin are all cylinders to a first approximation; a flat cut is closer to
+a slab.
+
+The cylinder's **proportions** matter as much as its shape, because the
+conduction length is the radius. `radiusForWeightCm` assumes a length of 1.5
+diameters, which is what a bone-in rib roast measures — about 5 in across and 8 in
+long at 6 lb. It assumed four diameters until this was checked, which is a
+tenderloin's shape, and at 6 lb produced a 3.7 in × 14.8 in roast that heated more
+than twice as fast as the real cook in this repository. Every error figure the
+oracle certified was measured on it. That matters more than it sounds, because the best cascade length is a
 property of the geometry — rms error of the normalised step response over the
 5 %-to-95 % span of the climb:
 

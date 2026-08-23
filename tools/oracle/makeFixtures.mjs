@@ -66,7 +66,7 @@ function conductionFixture({ name, what, geometry, weightLb, ovenF, startCoreF, 
 const FIXTURES = [
   conductionFixture({
     name: '01-cylinder-6lb-200F',
-    what: 'The ordinary case: a 6 lb prime rib at 200 F. A cylinder, which is what a roast is.',
+    what: 'The ordinary case: a 6 lb prime rib at 200 F. A cylinder about 5 in across and 8 in long, which is what a rib roast measures.',
     geometry: 'cylinder', weightLb: 6, ovenF: 200, startCoreF: 48, pullTempF: 125,
     readAt: cadence(10, 200)
   }),
@@ -78,7 +78,7 @@ const FIXTURES = [
   }),
   conductionFixture({
     name: '03-cylinder-24lb-175F',
-    what: 'A 24 lb bird at a low oven: eleven hours, and only 25 F of headroom over the target.',
+    what: 'A 24 lb bird at a low oven: close to ten hours, and only 25 F of headroom over the target.',
     geometry: 'cylinder', weightLb: 24, ovenF: 175, startCoreF: 42, pullTempF: 150,
     readAt: cadence(30, 700)
   }),
@@ -98,7 +98,7 @@ const FIXTURES = [
   }),
   conductionFixture({
     name: '06-slab-6lb-200F',
-    what: 'The same weight as 01 but a slab: a rib roast rather than a rolled one. A different spectrum again, and a different time scale.',
+    what: 'The same weight as 01 but a slab - a flat cut rather than a round one, so the heat comes in from two faces instead of all round. A different spectrum again, and a different time scale.',
     geometry: 'slab', weightLb: 6, ovenF: 200, startCoreF: 48, pullTempF: 125,
     readAt: cadence(8, 160)
   }),
