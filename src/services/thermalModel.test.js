@@ -2,6 +2,11 @@ import { describe, it, expect } from 'vitest';
 import {
   advance,
   projectToTarget,
+  cookStartISO,
+  buildTimeline,
+  fitThermalModel,
+  clearFitCache,
+  kPrior,
   PROJECTION_HORIZON_MINUTES,
   AMBIENT_F
 } from './thermalModel.js';
@@ -109,5 +114,83 @@ describe('projectToTarget', () => {
     const projection = projectToTarget({ state, k, setPointF: 200, targetF: 195 });
     expect(projection.minutes).toBe(0);
     expect(projection.reason).toBeNull();
+  });
+});
+
+describe('the anchor, when the roast went in before anyone measured it', () => {
+  const BASE = Date.parse('2026-08-22T12:00:00.000Z');
+  const at = (minutes) => new Date(BASE + minutes * 60_000).toISOString();
+
+  it('starts the timeline at the oven, not at the first reading', () => {
+    const readings = [{ temp: 45, timestamp: at(30) }, { temp: 60, timestamp: at(70) }];
+    const ovenEvents = [{ setTemp: 250, timestamp: at(0), isOff: false }];
+    expect(cookStartISO(readings, ovenEvents)).toBe(at(0));
+  });
+
+  it('falls back to the first reading when nothing precedes it', () => {
+    const readings = [{ temp: 45, timestamp: at(0) }];
+    expect(cookStartISO(readings, [{ setTemp: 250, timestamp: at(0), isOff: false }]))
+      .toBe(at(0));
+    expect(cookStartISO(readings, [])).toBe(at(0));
+    // An oven event AFTER the first reading is not a head start.
+    expect(cookStartISO(readings, [{ setTemp: 250, timestamp: at(10), isOff: false }]))
+      .toBe(at(0));
+  });
+
+  it('makes a delayed first reading a residual rather than an initial condition', () => {
+    const readings = [
+      { temp: 45, timestamp: at(30) },
+      { temp: 60, timestamp: at(70) },
+      { temp: 78, timestamp: at(110) }
+    ];
+    const ovenEvents = [{ setTemp: 250, timestamp: at(0), isOff: false }];
+
+    const anchored = buildTimeline(readings, ovenEvents, at(110), at(0));
+    expect(anchored.marks.filter((m) => m.kind === 'reading')).toHaveLength(3);
+
+    // With no head start the first reading states the initial condition, exactly
+    // as it always did.
+    const flush = buildTimeline(readings, ovenEvents, at(110), at(30));
+    expect(flush.marks.filter((m) => m.kind === 'reading')).toHaveLength(2);
+  });
+
+  it('stops the head start from inverting the fitted rate', () => {
+    /**
+     * The defect this exists for. The pre-reading minutes under a hot dial were
+     * never integrated, so the model believed the roast entered the oven at the
+     * first reading with its surface and core equal. The only way to explain the
+     * rise that followed without that stored gradient is to inflate k - so the
+     * projection ran fast, said "early", and advised LOWERING a roast that was
+     * late.
+     *
+     * Here the same three observations are presented twice against the same oven
+     * history: once as a cook that started when the readings did, and once as one
+     * whose oven had been on for half an hour first. The second is a slower roast
+     * - the core is further along than its own readings suggest - so its fitted k
+     * must come out LOWER, not higher.
+     */
+    const ovenEvents = [{ setTemp: 250, timestamp: at(0), isOff: false }];
+    const readings = [
+      { temp: 45, timestamp: at(30) },
+      { temp: 62, timestamp: at(70) },
+      { temp: 82, timestamp: at(110) }
+    ];
+    const prior = kPrior({ weightLb: 14, meatType: 'Pork Shoulder' });
+
+    clearFitCache();
+    const withHeadStart = fitThermalModel({ readings, ovenEvents, prior });
+    clearFitCache();
+    const withoutHeadStart = fitThermalModel({
+      readings,
+      // The same dial, declared at the first reading instead of half an hour
+      // earlier: no head start to account for.
+      ovenEvents: [{ setTemp: 250, timestamp: at(30), isOff: false }],
+      prior
+    });
+
+    expect(withHeadStart.k).toBeLessThan(withoutHeadStart.k);
+    // And the head-start fit sees one more observation, because its first reading
+    // is something to explain rather than a free initial condition.
+    expect(withHeadStart.residuals.length).toBe(withoutHeadStart.residuals.length + 1);
   });
 });

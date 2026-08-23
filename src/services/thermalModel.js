@@ -226,25 +226,72 @@ export function advance(state, { minutes, setPointF }, k) {
 }
 
 /**
+ * When the cook began, as far as the model is concerned.
+ *
+ * The earliest oven event before the first reading, if there is one - otherwise
+ * the first reading itself.
+ *
+ * THIS IS THE FIX FOR A DEFECT THAT INVERTED THE ADVICE ON MOST COOKS. The
+ * timeline used to start at the first PROBE READING, and every oven event at or
+ * before it was folded into an opening dial setting and otherwise discarded. So
+ * the minutes between the roast going into a hot oven and the cook getting round
+ * to logging a temperature were never integrated: the model was told the roast
+ * entered the oven at the moment of that first reading, with its surface and core
+ * equal. In reality the surface is already a long way ahead of the core by then,
+ * and the only way to explain the rise that follows without that stored gradient
+ * is to inflate k - so the projection ran fast, reported "early", and advised
+ * LOWERING a roast that was late.
+ *
+ * Measured against the 1-D conduction oracle on a 20 lb shoulder at 250 F, truth
+ * 230 min, three readings in: a first reading at t=0 gave +38 min and "late"; the
+ * same roast with the first reading at t=30 gave -30 min and "early". Opposite
+ * advice from the same cook.
+ *
+ * It was not an edge case. The starting reading in SessionSetupModal is optional,
+ * and with no readings at all the reading schedule falls back to prompting 30
+ * minutes after the session was created - so the app itself asked for the first
+ * reading in the middle of the worst case. Neither verification layer could see
+ * it: every scenario in the deck and every oracle case began with a reading at
+ * t=0.
+ */
+export function cookStartISO(readings, ovenEvents) {
+  const firstReading = Date.parse(readings[0].timestamp);
+  let earliest = null;
+  for (const event of ovenEvents ?? []) {
+    const t = Date.parse(event.timestamp);
+    if (!Number.isFinite(t) || t >= firstReading) continue;
+    if (earliest === null || t < earliest) earliest = t;
+  }
+  return earliest === null ? readings[0].timestamp : new Date(earliest).toISOString();
+}
+
+/**
  * Turn a reading and oven-event history into the segment list the model walks.
  *
- * Anchored at the FIRST reading: that is the earliest instant the app knows
- * anything about the meat, and the model's initial state is stated there.
+ * Anchored at `startISO` - see cookStartISO. Every reading strictly after the
+ * anchor becomes a residual, so a cook with a head start contributes one MORE
+ * observation than it used to rather than one fewer: the first reading stops
+ * being an exact initial condition and becomes something the fit has to explain.
  *
  * @param {Array<{timestamp: string, temp: number}>} readings - Chronological
  * @param {Array<{timestamp: string, setTemp: number, isOff: boolean}>} ovenEvents
  * @param {string} untilISO - Walk the timeline out to here
+ * @param {string} [startISO] - The anchor; defaults to the first reading
  * @returns {{startISO: string, marks: Array<Object>}}
  */
-export function buildTimeline(readings, ovenEvents, untilISO) {
-  const startISO = readings[0].timestamp;
+export function buildTimeline(readings, ovenEvents, untilISO, startISO = readings[0].timestamp) {
   const start = Date.parse(startISO);
   const at = (iso) => (Date.parse(iso) - start) / 60_000;
 
   const marks = [];
 
-  for (let i = 1; i < readings.length; i++) {
-    marks.push({ minutes: at(readings[i].timestamp), kind: 'reading', temp: readings[i].temp, index: i });
+  for (let i = 0; i < readings.length; i++) {
+    // A reading sitting exactly on the anchor states the initial condition
+    // rather than testing it - which with no head start is readings[0], exactly
+    // as before.
+    const minutes = at(readings[i].timestamp);
+    if (minutes <= 0) continue;
+    marks.push({ minutes, kind: 'reading', temp: readings[i].temp, index: i });
   }
   for (const event of ovenEvents) {
     const minutes = at(event.timestamp);
@@ -267,9 +314,9 @@ export function buildTimeline(readings, ovenEvents, untilISO) {
   return { startISO, marks };
 }
 
-/** The dial setting in force at the first reading. */
-export function initialSetPoint(readings, ovenEvents) {
-  const start = Date.parse(readings[0].timestamp);
+/** The dial setting in force at the anchor (by default, the first reading). */
+export function initialSetPoint(readings, ovenEvents, startISO = readings[0].timestamp) {
+  const start = Date.parse(startISO);
   let setPointF = null;
   let found = false;
   for (const event of ovenEvents) {
@@ -457,10 +504,23 @@ function computeFit({ readings, ovenEvents = [], prior, nowISO = null }) {
   if (!readings || readings.length < 2) return null;
 
   const untilISO = nowISO ?? readings[readings.length - 1].timestamp;
-  const timeline = buildTimeline(readings, ovenEvents, untilISO);
-  const actual = readings.slice(1).map((r) => r.temp);
+  const startISO = cookStartISO(readings, ovenEvents);
+  const timeline = buildTimeline(readings, ovenEvents, untilISO, startISO);
+  /**
+   * The observations, taken FROM THE MARKS rather than from `readings.slice(1)`.
+   *
+   * `replay` emits one prediction per reading mark, and the two lists have to
+   * line up element for element. A slice happens to agree with the marks when the
+   * anchor is the first reading and silently disagrees when it is not - an
+   * off-by-one in the residuals, which is the one place in this file where being
+   * wrong is invisible: every residual would be compared against the wrong
+   * reading, the fit would still converge, and it would converge on nonsense.
+   */
+  const actual = timeline.marks
+    .filter((m) => m.kind === 'reading')
+    .map((m) => m.temp);
 
-  const opening = initialSetPoint(readings, ovenEvents);
+  const opening = initialSetPoint(readings, ovenEvents, startISO);
   // With no oven event at or before the first reading there is nothing to say the
   // oven was doing anything; the earliest event the cook did log is the best
   // available statement of what the oven was set to.
@@ -469,16 +529,25 @@ function computeFit({ readings, ovenEvents = [], prior, nowISO = null }) {
     : (ovenEvents.find((e) => e.isOff !== true)?.setTemp ?? null);
 
   /**
-   * Initial state. The cook preheated, so the oven starts AT its set point; the
-   * meat came out of the fridge, so surface and core start together at the first
-   * reading.
+   * Initial state, stated at the anchor. The cook preheated, so the oven starts AT
+   * its set point; the meat came out of the fridge, so surface and core start
+   * together.
    *
-   * `Ts(0) = Tc(0)` is false for a session started mid-cook, and the fit
-   * cannot recover from it - it inflates k, projects too fast, and reports
-   * "early", which is the opposite of the old failure direction and so will not
-   * look wrong to anyone eyeballing it. Not fixable by fitting Ts(0) as well:
-   * that is not identifiable from three readings. Detected and flagged instead -
-   * see the warm-start check in projectCook.
+   * The temperature used is the first reading's. When the anchor is that reading
+   * this is exact. When the anchor is earlier - the roast went into the oven
+   * before anyone logged a temperature - it is an approximation, and a biased one:
+   * the roast was slightly COLDER going in than it was when first measured. The
+   * bias is small (a roast big enough to have a meaningful head start is also one
+   * whose core has barely moved in it) and it is in the safe direction, because
+   * understating the starting temperature understates how far the core has already
+   * come. Fitting the initial temperature as a second free parameter is the
+   * principled alternative and is not identifiable at three readings.
+   *
+   * `Ts(0) = Tc(0)` is still false for a session started mid-cook - the app is
+   * opened with a roast already an hour in and no oven event to anchor to. That
+   * case inflates k, projects too fast, and reports "early", which is the opposite
+   * of the old failure direction and so will not look wrong to anyone eyeballing
+   * it. Detected and flagged rather than fitted - see the warm-start check.
    */
   const initial = {
     ovenF: openingSetPointF ?? AMBIENT_F,

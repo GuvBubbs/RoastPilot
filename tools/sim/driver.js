@@ -96,7 +96,14 @@ export async function runScenario(scenario, deps) {
     // its own.
     restMinutes: scenario.config.restMinutes ?? 0,
     units,
-    startingTemp: openingProbeF,
+    /**
+     * A scenario can decline the opening reading with `noStartingReading`, which
+     * is what the setup modal's optional starting temperature does in the app.
+     * Every cook in the deck used to pass one, so the minutes between the roast
+     * going into a hot oven and the first logged temperature were never
+     * exercised - the interval where the projection was most wrong.
+     */
+    startingTemp: scenario.noStartingReading ? null : openingProbeF,
     desiredServeTime: new Date(startMs + scenario.config.serveAfterMin * 60_000).toISOString(),
     initialOvenTemp: scenario.config.initialOvenTemp,
     meatType: scenario.config.meatType,

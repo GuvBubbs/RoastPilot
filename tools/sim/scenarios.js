@@ -36,12 +36,18 @@ const quantise = (minutes) => Math.round(minutes / TICK_MINUTES) * TICK_MINUTES;
  * @param {Array<{afterMin: number, gapMin: number}>} [params.gaps] - Force a
  *   stretch with no readings at all, starting after the first reading at or
  *   past `afterMin`
- * @returns {number[]} Ascending minute offsets, first always 0
+ * @param {number} [params.firstAtMin] - When the FIRST reading lands. Defaults to
+ *   0, which was the only thing this could do and was a hole in the deck: every
+ *   cook here, and every oracle case, began with a reading the instant the roast
+ *   went in. The minutes between a roast entering a hot oven and the cook
+ *   remembering to log a temperature were therefore never exercised anywhere,
+ *   while the app's own reading prompt asks for that first reading 30 minutes in.
+ * @returns {number[]} Ascending minute offsets
  */
-export function cadence({ seed, everyMin, jitterMin, untilMin, gaps = [] }) {
+export function cadence({ seed, everyMin, jitterMin, untilMin, gaps = [], firstAtMin = 0 }) {
   const rand = mulberry32(seed);
-  const out = [0];
-  let t = 0;
+  const out = [firstAtMin];
+  let t = firstAtMin;
   while (t < untilMin) {
     let step = everyMin + (rand() * 2 - 1) * jitterMin;
     const gap = gaps.find((g) => t >= g.afterMin && !g.used);
@@ -521,6 +527,44 @@ export const SCENARIOS = [
     model: { ...PRIME_RIB_6LB, ovenSetF: 200 },
     readingsAt: cadence({ seed: 1515, everyMin: 120, jitterMin: 10, untilMin: 400 }),
     maxMinutes: 420
+  },
+  {
+    name: '16-late-first-reading',
+    title: 'Nobody logged a temperature for the first half hour',
+    what:
+      'A 14 lb shoulder that went into a 250 F oven at t=0 and whose cook did ' +
+      'not log a temperature until t=35. No opening reading at all, which is ' +
+      'what the setup modal allows and what the reading prompt then produces: ' +
+      'with no readings it asks for the first one thirty minutes after the ' +
+      'session was created.',
+    caveat:
+      'This is the hole every other cook in this deck shared, and the oracle ' +
+      'cases with it. All of them handed the app a reading at t=0, so the ' +
+      'projection was never asked about a roast with a head start - the one ' +
+      'interval where it inverted its own verdict. Measured against the ' +
+      'conduction oracle before the timeline was re-anchored, a 20 lb shoulder ' +
+      'with a 30-minute head start read 30 min EARLY where the same roast read ' +
+      '38 min late with no head start, so the app advised lowering a roast that ' +
+      'was running behind. What this scenario watches is the direction of the ' +
+      'advice, not a tighter ETA.',
+    seed: 1616,
+    noStartingReading: true,
+    config: {
+      targetTemp: 195,
+      units: 'F',
+      startingTemp: 40,
+      initialOvenTemp: 250,
+      serveAfterMin: 400,
+      meatType: 'Pork Shoulder',
+      meatCut: 'Boneless',
+      weight: 14,
+      notes: null
+    },
+    model: { weightLb: 14, cut: 'pork-shoulder', startCoreF: 40, ovenSetF: 250 },
+    readingsAt: cadence({
+      seed: 1616, everyMin: 40, jitterMin: 5, untilMin: 500, firstAtMin: 35
+    }),
+    maxMinutes: 560
   },
 
   {

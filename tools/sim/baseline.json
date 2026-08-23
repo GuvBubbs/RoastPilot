@@ -131,6 +131,14 @@
       "noAdviceMinutes": 60,
       "reversals": 0
     },
+    "16-late-first-reading": {
+      "convergenceAbs": 55,
+      "overshootF": 3.9,
+      "blindMinutes": 5,
+      "blockedMinutes": 100,
+      "noAdviceMinutes": 100,
+      "reversals": 0
+    },
     "14-dst-cook": {
       "convergenceAbs": null,
       "overshootF": -0.6,
