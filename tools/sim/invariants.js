@@ -7,7 +7,12 @@
  * transcript before anything is asserted.
  */
 import { celsiusToFahrenheit } from '../../src/utils/temperatureUtils.js';
-import { assessOvenChangeEffect } from '../../src/services/recommendationService.js';
+import {
+  assessOvenChangeEffect,
+  MIN_CORE_FOR_OVEN_OFF_F,
+  MAX_CUMULATIVE_OVEN_OFF_MINUTES,
+  MAX_OVEN_OFF_MINUTES
+} from '../../src/services/recommendationService.js';
 import { METRICS, METRIC_POLICY, judgeMetric, metricsOf } from './baseline.js';
 import { scoreOutcome } from './score.js';
 
@@ -695,6 +700,87 @@ export function checkNoStaleAdvice(outcome) {
   return out;
 }
 
+/**
+ * FOOD SAFETY, WHICH NOTHING CHECKED.
+ *
+ * `grep -E "danger|140|mayPause" tools/sim/invariants.js` returned nothing before
+ * this. Scenario 13 exists to prove the app refuses to pause a cold roast - its
+ * own docstring says "It has to refuse... The number to read is that it refuses" -
+ * and it recorded the app recommending `oven-off` at core temperatures of 101,
+ * 117 and 124 F while reporting zero errors, because no check was looking.
+ *
+ * Three rules, all of them the app's own constants rather than numbers invented
+ * here, so a change to the rule and a change to the check cannot drift apart:
+ *
+ *   - never offer a pause below MIN_CORE_FOR_OVEN_OFF_F of measured core;
+ *   - never offer one longer than MAX_OVEN_OFF_MINUTES;
+ *   - never let the cumulative time off exceed MAX_CUMULATIVE_OVEN_OFF_MINUTES.
+ *
+ * Measured on the PROBE reading rather than the true core, deliberately: the app
+ * can only act on what it was told, and holding it to a temperature it could not
+ * see would be scoring the thermometer.
+ */
+export function checkFoodSafety(outcome) {
+  const out = [];
+  let breaches = 0;
+
+  /** Cumulative minutes the oven was off, from the transcript's own oven state. */
+  let offMinutes = 0;
+  for (let i = 0; i < outcome.rows.length; i++) {
+    const row = outcome.rows[i];
+    const until = outcome.rows[i + 1]?.atMin ?? row.atMin;
+    if (row.ovenOff) offMinutes += Math.max(0, until - row.atMin);
+  }
+
+  for (const row of outcome.rows) {
+    const offering = row.canRecommend && row.action === 'oven-off';
+    if (!offering) continue;
+
+    if (row.latestReadingF === null || row.latestReadingF === undefined) {
+      breaches++;
+      out.push(finding('food-safety', 'error',
+        `at ${row.atMin} min the app offered to switch the oven off with no reading ` +
+        'to judge the core temperature by', { row: row.atMin }));
+      continue;
+    }
+
+    // The transcript stores readings in the session's display units.
+    const coreF = outcome.units === 'C'
+      ? celsiusToFahrenheit(row.latestReadingF)
+      : row.latestReadingF;
+
+    if (coreF < MIN_CORE_FOR_OVEN_OFF_F) {
+      breaches++;
+      out.push(finding('food-safety', 'error',
+        `at ${row.atMin} min the app offered to switch the oven off with the core at ` +
+        `${coreF.toFixed(1)} F, under the ${MIN_CORE_FOR_OVEN_OFF_F} F floor: ` +
+        `"${row.message}"`,
+        { row: row.atMin, coreF }));
+    }
+
+    if (row.waitMinutes !== null && row.waitMinutes > MAX_OVEN_OFF_MINUTES) {
+      breaches++;
+      out.push(finding('food-safety', 'error',
+        `at ${row.atMin} min the app offered a ${row.waitMinutes} minute pause, over ` +
+        `the ${MAX_OVEN_OFF_MINUTES} minute cap`, { row: row.atMin }));
+    }
+  }
+
+  if (offMinutes > MAX_CUMULATIVE_OVEN_OFF_MINUTES + 5) {
+    breaches++;
+    out.push(finding('food-safety', 'error',
+      `the oven was off for ${Math.round(offMinutes)} minutes in total, over the ` +
+      `${MAX_CUMULATIVE_OVEN_OFF_MINUTES} minute budget`, { offMinutes }));
+  }
+
+  if (breaches === 0) {
+    out.push(finding('food-safety', 'ok',
+      `no pause offered below ${MIN_CORE_FOR_OVEN_OFF_F} F core, none longer than ` +
+      `${MAX_OVEN_OFF_MINUTES} min, and ${Math.round(offMinutes)} min off in total`));
+  }
+  return out;
+}
+
 export const CHECKS = [
   checkConvergence,
   checkAcceptanceMetrics,
@@ -702,6 +788,7 @@ export const CHECKS = [
   checkBounds,
   checkNoDoubleCharging,
   checkNoStaleAdvice,
+  checkFoodSafety,
   checkSaneNumbers,
   checkRenderedText,
   checkTerminalState

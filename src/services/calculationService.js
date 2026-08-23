@@ -740,13 +740,25 @@ export function projectScheduleUnderOven({
     config.desiredServeTime,
     config.restMinutes ?? 0
   );
-  if (!latestPullTime || !prediction.targetTime) {
-    return {
-      scheduleVarianceMinutes: null,
-      scheduleStatus: 'unknown',
-      predictedTargetTime: prediction.targetTime
-    };
-  }
+  /**
+   * NULL, not a truthy 'unknown'.
+   *
+   * The caller prefers this over the main variance whenever it is truthy, so
+   * returning `{ scheduleStatus: 'unknown' }` threw away a healthy projection and
+   * put "Unable to determine schedule status." on screen with canRecommend TRUE -
+   * a non-answer presented as advice. Reproduced: a cook told "the oven is not hot
+   * enough, raise it" raises 175 to 250 and logs a reading; the main projection is
+   * fine (339 minutes early) but the projection under the set point the READINGS
+   * still describe is `unreachable`, because 175 never reaches a 195 F pull. So
+   * this function had nothing to contribute and said so in a way that overrode
+   * everything else.
+   *
+   * Null means "no opinion", which is the truth, and lets the caller fall back to
+   * the main variance. What the cook then sees is the settling state - the change
+   * has been made, a reading will confirm it - which is the right thing to say
+   * about an oven that moved thirty seconds ago.
+   */
+  if (!latestPullTime || !prediction.targetTime) return null;
 
   const variance = calculateScheduleVarianceWithThreshold(
     prediction.targetTime,

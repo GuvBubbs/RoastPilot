@@ -8,6 +8,7 @@ import {
   computeSessionCalculations,
   computeLatestPullTime,
   assessPullProgress,
+  projectScheduleUnderOven,
   APPROACHING_BAND_F,
   OVERSHOOT_BAND_F
 } from './calculationService.js';
@@ -813,3 +814,66 @@ describe('computeSessionCalculations', () => {
   });
 });
 
+
+describe('projectScheduleUnderOven', () => {
+  const BASE = Date.parse('2026-08-22T18:30:00.000Z');
+  const at = (minutes) => new Date(BASE + minutes * 60_000).toISOString();
+
+  /**
+   * It exists for one thing: while a dial change is unmeasured, the recommendation
+   * is computed from the set point the READINGS describe, and the variance it is
+   * judged against has to describe the same oven or the two disagree and the
+   * advice reverses.
+   *
+   * The caller prefers its answer over the main variance whenever it is truthy, so
+   * "I could not work one out" has to be null and not an object.
+   */
+  const base = (overrides = {}) => ({
+    readings: [
+      { temp: 60, timestamp: at(0) },
+      { temp: 88, timestamp: at(45) },
+      { temp: 112, timestamp: at(90) },
+      { temp: 132, timestamp: at(135) }
+    ],
+    ovenEvents: [{ setTemp: 175, timestamp: at(-5), isOff: false }],
+    setPointF: 175,
+    config: {
+      pullTempF: 195,
+      desiredServeTime: at(600),
+      restMinutes: 0,
+      weight: 9,
+      meatType: 'Pork Shoulder'
+    },
+    settings: { onTrackThresholdMinutes: 10 },
+    now: at(135),
+    ...overrides
+  });
+
+  it('returns null when the evidence oven cannot reach the target', () => {
+    /**
+     * The reproduced case, and why this matters. A cook told "the oven is not hot
+     * enough, raise it" raises 175 to 250 and logs a reading. The main projection
+     * is healthy, but under 175 - the set point the readings still describe - the
+     * pull is unreachable. This used to return `{ scheduleStatus: 'unknown' }`,
+     * which being truthy overrode the healthy projection and put "Unable to
+     * determine schedule status." on screen with canRecommend TRUE.
+     */
+    expect(projectScheduleUnderOven(base())).toBeNull();
+  });
+
+  it('returns null with no serve time to measure against', () => {
+    expect(projectScheduleUnderOven(base({
+      config: { ...base().config, desiredServeTime: null }
+    }))).toBeNull();
+  });
+
+  it('returns a variance when the evidence oven does reach the target', () => {
+    // The case it exists for still works: a reachable set point gives a real
+    // verdict, in the oven the readings describe.
+    const result = projectScheduleUnderOven(base({ setPointF: 250 }));
+    expect(result).not.toBeNull();
+    expect(result.scheduleStatus).not.toBe('unknown');
+    expect(result.predictedTargetTime).toBeTruthy();
+    expect(Number.isFinite(result.scheduleVarianceMinutes)).toBe(true);
+  });
+});
