@@ -66,8 +66,12 @@ restart. This single interval is what pins `tauOvenCoolMin`, which is otherwise 
 guess, and `calibrate.js` now fits it whenever the export contains a pause.
 
 Do it once the core is past 140 °F if you would rather not think about the danger
-zone — the app's own pause advice will not offer it below that unless the roast is
-in its final approach.
+zone. Note that the app will not *suggest* a pause below 140 °F core at all any
+more — the "final approach" exemption that used to allow it was removed, because it
+permitted pauses at 96–105 °F for every default red-meat target while the
+justification in its own comment ("about to leave the zone for good") was false for
+every cook it fired on. Pausing by hand from **Pause cooking** is unrestricted; the
+floor governs advice, not you.
 
 ### Two dial moves, at least 45 minutes apart
 
@@ -118,4 +122,14 @@ Three defects in `calibrate.js` would have corrupted the results, and are fixed:
   not have improved anything.
 
 It also now reads an `ovenActualF` field off each reading, if your export carries
-one, and fits the oven's own behaviour against it.
+one, and fits the oven's own behaviour against it. **The app never writes that
+field** — there is no oven-temperature input anywhere in the UI — so the
+thermometer readings have to be recorded on paper and added to the JSON by hand
+afterwards.
+
+## Before the day, and after it
+
+`next-cook-handover.md` is the companion to this file: a checklist of what to bring
+back (including the three things the app cannot store), and a briefing for the chat
+session that will process the data months from now. Read its first half alongside
+this protocol.
