@@ -559,6 +559,36 @@ export function checkAcceptanceMetrics(outcome) {
  * here, so raising the setting cannot silently widen the window this check
  * allows.
  */
+/**
+ * How far the TRUE core may drift, in degrees, between the reading a piece of
+ * advice rests on and the moment that advice is given.
+ *
+ * Owned by the harness, deliberately not by the app. The minutes half of this
+ * check reads `settings.staleReadingMinutes`, which makes it a consistency
+ * assertion - the app must respect its own limit - and NOT an independent one: a
+ * scenario configuring `staleReadingMinutes: 600` passed while the app advised
+ * off a ten-hour-old reading, because the check widened with the setting it was
+ * supposed to be policing. A degree limit cannot be widened by configuration, and
+ * it is measured against the simulated roast's true core, which the app cannot
+ * see. It is also the right question: a 180-minute-old reading on an overnight
+ * shoulder is fine, and a 60-minute-old one in the endgame is not.
+ *
+ * BOTH conditions have to hold: the reading has to be older than
+ * MAX_ADVICE_AGE_MIN *and* the roast has to have outrun it by MAX_ADVICE_DRIFT_F.
+ * Either alone is wrong. Age alone punishes an overnight shoulder for a
+ * three-hour gap in which the core moved 2 F, which is not staleness. Drift alone
+ * punishes a 3 lb tenderloin for a ten-minute-old reading, because the app's
+ * reading schedule has a deliberate 10-minute floor and a roast climbing at
+ * 124 F/hr will always outrun it - that is the floor's cost, not a stale-advice
+ * bug.
+ *
+ * 20 F is two and a half times the 8 F the app's own reading schedule tries to
+ * keep between readings. 45 min is the shipped default `staleReadingMinutes`, so
+ * a scenario cannot configure itself more lenient than the product ships.
+ */
+export const MAX_ADVICE_DRIFT_F = 20;
+export const MAX_ADVICE_AGE_MIN = 45;
+
 export function checkNoStaleAdvice(outcome) {
   const out = [];
   const staleAfter = outcome.settings.staleReadingMinutes ?? 45;
@@ -584,9 +614,49 @@ export function checkNoStaleAdvice(outcome) {
     }
   }
 
-  if (breaches === 0) {
+  /**
+   * The independent half: how much did the roast actually move since the reading
+   * the advice rested on? The true core at that instant is taken from the nearest
+   * transcript row, which is ground truth in Fahrenheit regardless of the
+   * session's display units.
+   */
+  let driftBreaches = 0;
+  const trueCoreAt = (iso) => {
+    const target = Date.parse(iso);
+    let best = null;
+    let bestGap = Infinity;
+    for (const row of outcome.rows) {
+      const gap = Math.abs(Date.parse(row.atISO) - target);
+      if (gap < bestGap) { bestGap = gap; best = row; }
+    }
+    // Only trust it if a row actually sits near that instant.
+    return bestGap <= 6 * 60_000 ? best?.trueCoreF ?? null : null;
+  };
+
+  for (const r of outcome.rows) {
+    if (!r.canRecommend || !PROJECTION_ADVICE.includes(r.action)) continue;
+    if (!r.latestReadingISO) continue;
+    const coreThen = trueCoreAt(r.latestReadingISO);
+    if (coreThen === null) continue;
+    const drift = r.trueCoreF - coreThen;
+    const age = minutesBetween(r.latestReadingISO, r.atISO);
+    if (drift > MAX_ADVICE_DRIFT_F && age > MAX_ADVICE_AGE_MIN) {
+      driftBreaches++;
+      out.push(finding('no-stale-advice', 'error',
+        `at ${r.atMin} min the app advised "${r.action}" (${r.scheduleStatus}) from a ` +
+        `reading ${age.toFixed(0)} min old, by which time the true core had moved ` +
+        `${drift.toFixed(1)} F - past both the ${MAX_ADVICE_AGE_MIN} min and the ` +
+        `${MAX_ADVICE_DRIFT_F} F the harness allows, whatever staleReadingMinutes ` +
+        'is set to',
+        { row: r.atMin, ageMinutes: age, driftF: drift }));
+    }
+  }
+
+  if (breaches === 0 && driftBreaches === 0) {
     out.push(finding('no-stale-advice', 'ok',
-      `no advice given from a reading older than ${staleAfter} min`));
+      `no advice given from a reading older than ${staleAfter} min, and none from ` +
+      `one over ${MAX_ADVICE_AGE_MIN} min old that the true core had outrun by ` +
+      `${MAX_ADVICE_DRIFT_F} F`));
   }
   return out;
 }

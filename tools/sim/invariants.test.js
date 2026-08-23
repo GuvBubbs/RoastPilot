@@ -10,6 +10,8 @@ import { describe, it, expect } from 'vitest';
 import { createDefaultSettings } from '../../src/models/dataModels.js';
 import { assessOvenChangeEffect } from '../../src/services/recommendationService.js';
 import { checkNoDoubleCharging, checkNoStaleAdvice, checkNoFlapping } from './invariants.js';
+import { countReversals, overshoot } from './score.js';
+import { judgeMetric } from './baseline.js';
 
 const START = Date.parse('2026-08-22T18:00:00.000Z');
 const at = (min) => new Date(START + min * 60_000).toISOString();
@@ -195,10 +197,80 @@ describe('checkNoStaleAdvice', () => {
     }
   });
 
-  it('reads the limit from the app settings, not from a restatement', () => {
+  it('reads the minutes limit from the app settings, not from a restatement', () => {
     const loose = advising(180);
     loose.settings = { ...loose.settings, staleReadingMinutes: 240 };
     expect(checkNoStaleAdvice(loose).filter((f) => f.severity === 'error')).toEqual([]);
+  });
+
+  describe('the drift half, which no setting can widen', () => {
+    /**
+     * The minutes check above is a CONSISTENCY assertion: the app must respect the
+     * limit it is configured with. On its own that made this whole check vacuous -
+     * `staleReadingMinutes: 600` bought silence from the very thing meant to be
+     * policing it. So there is a second half, measured on the simulated roast's
+     * TRUE core, which the app cannot see and no setting can move.
+     */
+    const withTruth = ({ ageMinutes, coreThenF, coreNowF, staleReadingMinutes }) => ({
+      scenario: 'fixture',
+      units: 'F',
+      settings: { ...createDefaultSettings(), staleReadingMinutes },
+      serveISO: at(300),
+      pullDeadlineISO: at(300),
+      applied: [],
+      rows: [
+        {
+          kind: 'tick',
+          atMin: 200 - ageMinutes,
+          atISO: at(200 - ageMinutes),
+          action: 'hold',
+          scheduleStatus: 'on-track',
+          canRecommend: true,
+          trueCoreF: coreThenF,
+          latestReadingISO: at(200 - ageMinutes)
+        },
+        {
+          kind: 'tick',
+          atMin: 200,
+          atISO: at(200),
+          action: 'hold',
+          scheduleStatus: 'on-track',
+          canRecommend: true,
+          trueCoreF: coreNowF,
+          latestReadingISO: at(200 - ageMinutes)
+        }
+      ]
+    });
+
+    const errorsOf = (o) => checkNoStaleAdvice(o).filter((f) => f.severity === 'error');
+
+    it('fires however generous staleReadingMinutes is', () => {
+      const o = withTruth({
+        ageMinutes: 120, coreThenF: 100, coreNowF: 140, staleReadingMinutes: 600
+      });
+      const errors = errorsOf(o);
+      expect(errors).toHaveLength(1);
+      expect(errors[0].message).toMatch(/40\.0 F/);
+      expect(errors[0].message).toMatch(/whatever staleReadingMinutes is set to/);
+    });
+
+    it('forgives a long gap the roast barely moved through', () => {
+      // The overnight shoulder: three hours between readings, and the stall means
+      // the core went almost nowhere. Age alone would call that stale advice; it
+      // is not.
+      expect(errorsOf(withTruth({
+        ageMinutes: 180, coreThenF: 150, coreNowF: 152, staleReadingMinutes: 180
+      }))).toEqual([]);
+    });
+
+    it('forgives a fast roast whose reading is genuinely fresh', () => {
+      // A 3 lb tenderloin climbing at over 100 F/hr outruns 20 F inside the
+      // reading schedule's own 10-minute floor. That is the floor's cost, not
+      // stale advice, so drift alone must not condemn it.
+      expect(errorsOf(withTruth({
+        ageMinutes: 10, coreThenF: 100, coreNowF: 121, staleReadingMinutes: 45
+      }))).toEqual([]);
+    });
   });
 });
 
@@ -230,5 +302,85 @@ describe('checkNoFlapping', () => {
       ]
     }));
     expect(findings.filter((f) => f.severity === 'error')).toEqual([]);
+  });
+});
+
+describe('countReversals', () => {
+  it('sees the oven going off and on as the direction change it is', () => {
+    /**
+     * It used to filter for `raise` and `lower` only, so six alternating
+     * off/restart instructions scored a flawless `{ moves: 0, reversals: 0 }` -
+     * for a cook who had been sent to the oven six times. Switching the oven off
+     * is the strongest lower there is.
+     */
+    const alternating = [];
+    for (let i = 0; i < 3; i++) {
+      alternating.push({ action: 'oven-off' }, { action: 'restart' });
+    }
+    expect(countReversals(alternating)).toEqual({ moves: 6, reversals: 5 });
+  });
+
+  it('mixes dial moves and pauses on one direction axis', () => {
+    expect(countReversals([
+      { action: 'raise' }, { action: 'oven-off' }, { action: 'restart' }
+    ])).toEqual({ moves: 3, reversals: 2 });
+  });
+
+  it('does not charge the app for the scenario cook\'s own moves', () => {
+    expect(countReversals([
+      { action: 'cook-set-oven' }, { action: 'cook-oven-off' }
+    ])).toEqual({ moves: 0, reversals: 0 });
+  });
+});
+
+describe('judgeMetric floors', () => {
+  it('refuses to pass an overshoot the probe cannot explain', () => {
+    /**
+     * `judgeMetric('x', 'overshootF', -40)` scored "ok - within the 8 F
+     * tolerance". Negative overshoot is the app calling at-target on meat that is
+     * BELOW target: the worse of the two failures, passed as the better one.
+     */
+    expect(judgeMetric('fixture', 'overshootF', -40).severity).toBe('error');
+    expect(judgeMetric('fixture', 'overshootF', -40).message).toMatch(/below the/);
+  });
+
+  it('allows the under-call the probe bias accounts for', () => {
+    // The app calls at-target off the probe, which carries up to 2.7 F of
+    // placement bias; the metric is measured on the true core. A couple of degrees
+    // under is the thermometer, not the projection.
+    expect(judgeMetric('fixture', 'overshootF', -1.7).severity).toBe('ok');
+  });
+
+  it('rejects counts that cannot be negative', () => {
+    expect(judgeMetric('fixture', 'reversals', -1).severity).toBe('error');
+    expect(judgeMetric('fixture', 'blindMinutes', -5).severity).toBe('error');
+    expect(judgeMetric('fixture', 'convergenceAbs', -3).severity).toBe('error');
+  });
+});
+
+describe('overshoot', () => {
+  const cook = ({ calledAtTarget, targetF = 125, finalCoreF = 118 }) => ({
+    targetF,
+    finalCoreF,
+    rows: [
+      { atMin: 0, atISO: at(0), action: 'hold', trueCoreF: 60 },
+      calledAtTarget
+        ? { atMin: 100, atISO: at(100), action: 'at-target', trueCoreF: 130 }
+        : { atMin: 100, atISO: at(100), action: 'hold', trueCoreF: finalCoreF }
+    ]
+  });
+
+  it('is null when the app never called at-target', () => {
+    /**
+     * It used to fall back to the final core temperature, so a cook that simply
+     * ran out of scenario while still climbing produced a NEGATIVE overshoot -
+     * indistinguishable from the app declaring raw meat done, and averaged into
+     * the acceptance mean, where a cook ending short IMPROVED the headline.
+     */
+    expect(overshoot(cook({ calledAtTarget: false })).overshootF).toBeNull();
+  });
+
+  it('is signed when it was actually called', () => {
+    expect(overshoot(cook({ calledAtTarget: true })).overshootF).toBe(5);
   });
 });

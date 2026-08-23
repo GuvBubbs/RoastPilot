@@ -211,7 +211,9 @@ export function writeSummary(results) {
     const blocked = blockedMinutes(outcome.rows);
     lines.push(`| [${outcome.scenario}](./${outcome.scenario}.md) | ` +
       `${outcome.endedAtMin} min | ` +
-      `${over.overshootF > 0 ? `+${num(over.overshootF, 1)} F` : '--'} | ` +
+      `${over.overshootF === null
+        ? '--'
+        : `${over.overshootF > 0 ? '+' : ''}${num(over.overshootF, 1)} F`} | ` +
       `${over.blindMinutes === null ? '--' : `${num(over.blindMinutes)} min`} | ` +
       `${num(blocked)} min | ${num(noAdviceMinutes(outcome.rows))} min | ` +
       `${num(budget.get('settling') ?? 0)} min | ` +
@@ -244,6 +246,20 @@ export function writeSummary(results) {
     const mean = (values) => (values.length
       ? Math.round((values.reduce((a, b) => a + b, 0) / values.length) * 10) / 10
       : null);
+    /**
+     * Only the cooks where the quantity exists. A null used to fall into the
+     * reduce as a zero and be divided by the full scenario count, so every cook
+     * that never reached its target quietly pulled the mean overshoot and the mean
+     * blind minutes DOWN - the headline numbers improving because a cook failed.
+     * The count is printed alongside so a shrinking denominator cannot pass for a
+     * falling mean.
+     */
+    const measured = (key) => scores.map((s) => s[key]).filter((v) => v !== null && v !== undefined);
+    const overshoots = measured('overshootF');
+    const blinds = measured('blindMinutes');
+    const over = (values, unit) => (values.length
+      ? `${num(mean(values), 1)} | ${num(Math.max(...values), 1)}`
+      : `-- | --`);
 
     lines.push(`## Acceptance — ${representative.length} representative cooks`);
     lines.push('');
@@ -251,10 +267,10 @@ export function writeSummary(results) {
     lines.push('|---|---|---|---|');
     lines.push(`| \`|convergence|\` (min) | ${num(mean(convergences), 1)} | ` +
       `${num(Math.max(...convergences))} | |`);
-    lines.push(`| overshoot (F) | ${num(mean(scores.map((s) => s.overshootF)), 1)} | ` +
-      `${num(Math.max(...scores.map((s) => s.overshootF)), 1)} | |`);
-    lines.push(`| blind (min) | ${num(mean(scores.map((s) => s.blindMinutes)), 1)} | ` +
-      `${num(Math.max(...scores.map((s) => s.blindMinutes)))} | |`);
+    lines.push(`| overshoot (F) | ${over(overshoots)} | ` +
+      `${overshoots.length}/${scores.length} measured |`);
+    lines.push(`| blind (min) | ${over(blinds)} | ` +
+      `${blinds.length}/${scores.length} measured |`);
     lines.push(`| blocked (min) | | | ${num(scores.reduce((n, s) => n + s.blockedMinutes, 0))} |`);
     lines.push(`| no advice (min) | | | ${num(scores.reduce((n, s) => n + s.noAdviceMinutes, 0))} |`);
     lines.push(`| reversals | | | ${num(scores.reduce((n, s) => n + s.reversals, 0))} |`);

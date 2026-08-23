@@ -81,7 +81,7 @@
       "blindMinutes": 10,
       "blockedMinutes": 40,
       "noAdviceMinutes": 40,
-      "reversals": 0
+      "reversals": 1
     },
     "09-rest-and-carryover": {
       "convergenceAbs": 5,

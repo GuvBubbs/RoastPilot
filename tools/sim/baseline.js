@@ -53,21 +53,46 @@ export const METRIC_POLICY = {
     unit: 'min',
     tolerance: 20,
     advisory: 1,
-    ratchet: 10
+    ratchet: 10,
+    // An absolute value. Negative means the derivation is broken, not that the
+    // cook went well.
+    floor: 0
   },
   overshootF: {
     label: 'overshoot',
     unit: 'F',
     tolerance: 8,
     advisory: 1,
-    ratchet: 4
+    ratchet: 4,
+    /**
+     * NOT a metric where lower is better without limit. Negative overshoot is the
+     * app calling at-target while the true core is BELOW it - raw meat declared
+     * done, which is the worse failure of the two and the one with a food-safety
+     * edge. The tolerance test alone scored -40 F as "within the 8 F tolerance": a
+     * perfect pass for a cook served 40 degrees under.
+     *
+     * The floor is not zero, though, because the app calls at-target off the
+     * PROBE and the metric is measured against the roast's true core - two things
+     * the harness deliberately keeps apart. meatModel's probe carries a constant
+     * bias of up to +/-2.7 F plus +/-0.54 F of noise, so a probe reading high can
+     * make the app call at-target with the true core up to ~3.2 F short, and that
+     * is the thermometer's error rather than the projection's. Anything past that
+     * the app cannot blame on the probe.
+     *
+     * Keep this in step with meatModel's probeBiasRangeF/probeNoiseF by hand:
+     * importing them would let a noisier simulator quietly relax an acceptance
+     * floor, which is the wrong direction for that dependency to run.
+     */
+    floor: -3.5
   },
   blindMinutes: {
     label: 'blind minutes',
     unit: 'min',
     tolerance: 10,
     advisory: 1,
-    ratchet: 5
+    ratchet: 5,
+    // Minutes the meat was done before the app noticed. It cannot notice first.
+    floor: 0
   },
   blockedMinutes: {
     label: 'blocked minutes',
@@ -78,7 +103,8 @@ export const METRIC_POLICY = {
     // simply ok - it always reports against the baseline.
     tolerance: null,
     advisory: 5,
-    ratchet: 60
+    ratchet: 60,
+    floor: 0
   },
   noAdviceMinutes: {
     label: 'no-advice minutes',
@@ -89,14 +115,16 @@ export const METRIC_POLICY = {
     // like a regression. Same both-directions treatment, same reasoning.
     tolerance: null,
     advisory: 5,
-    ratchet: 60
+    ratchet: 60,
+    floor: 0
   },
   reversals: {
     label: 'reversals',
     unit: '',
     tolerance: 2,
     advisory: 0,
-    ratchet: 1
+    ratchet: 1,
+    floor: 0
   }
 };
 
@@ -167,6 +195,25 @@ export function judgeMetric(scenario, metric, actual) {
     return {
       severity: 'advisory',
       message: `${policy.label} not measurable in this cook`
+    };
+  }
+
+  /**
+   * THE FLOOR, CHECKED FIRST.
+   *
+   * Every metric here is one where lower is better, and the tolerance test alone
+   * read that as "and there is no such thing as too low". There is:
+   * `judgeMetric(s, 'overshootF', -40)` scored `ok - within the 8 F tolerance`,
+   * for a cook whose meat was called done 40 degrees under. A value below the
+   * floor is either that failure or a broken derivation, and both are errors.
+   */
+  if (policy.floor !== undefined && actual < policy.floor) {
+    return {
+      severity: 'error',
+      message: `${policy.label} ${show(actual)} is below the ${show(policy.floor)} ` +
+        'floor, which this metric cannot legitimately be. The app called the cook ' +
+        'the wrong side of its target, or the measurement is wrong; a tolerance ' +
+        'on the other side is not a licence to pass it.'
     };
   }
 
