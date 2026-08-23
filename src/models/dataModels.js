@@ -277,9 +277,42 @@ export function migrateSessionToV2(session) {
     config.restMinutes = 0;
   }
   
-  delete config.targetTemp;
+  /**
+   * The legacy key stays, as a shadow of pullTempF. See legacyCompatConfig.
+   */
+  config.targetTemp = config.pullTempF;
   
   return session;
+}
+
+/**
+ * A config with the pre-v2 key written alongside the v2 ones, for anything
+ * reading this session with an older build.
+ *
+ * ROLLBACK SAFETY. The migration used to `delete config.targetTemp` and
+ * createSession never wrote it, so a session written by this build carried no key
+ * the previous build could read: `targetTemp` came back undefined, went into
+ * arithmetic, and reached `new Date(NaN)` - "RangeError: Invalid time value",
+ * thrown inside a computed during render. The ErrorBoundary that catches it offers
+ * "Try again", which throws again, directly above "Erase saved cook and reset".
+ * So a rollback did not degrade a running cook, it destroyed it, and
+ * `registerType: 'autoUpdate'` in vite.config.js means a rollback reaches every
+ * client on its own without anyone choosing it.
+ *
+ * The old key means exactly what pullTempF means - the temperature the cook stops
+ * at - so the shadow is a rename, not a guess. Written at the persistence boundary
+ * rather than maintained across every config mutation, because localStorage IS the
+ * rollback surface and one choke point cannot drift out of sync.
+ *
+ * Drop this in a v3 migration one release after v2 has stopped being rolled back
+ * to. The property name is confined to this file, which is the point of the
+ * exercise: the ambiguous name was the original defect.
+ */
+export function legacyCompatConfig(config) {
+  if (!config) return config;
+  return Number.isFinite(config.pullTempF)
+    ? { ...config, targetTemp: config.pullTempF }
+    : { ...config };
 }
 
 /**

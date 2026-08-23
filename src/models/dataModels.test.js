@@ -99,7 +99,15 @@ describe('migrateSessionToV2', () => {
     expect(config.pullTempF).toBe(125);
     expect(config.carryoverF).toBe(4);
     expect(config.servingTempF).toBe(129);
-    expect('targetTemp' in config).toBe(false);
+    /**
+     * The legacy key is KEPT, as a shadow of pullTempF rather than as a second
+     * source of truth. It was deleted here until a rollback was tried: a session
+     * this build wrote carried no key the previous build could read, so it came
+     * back undefined and reached `new Date(NaN)` inside a render. See
+     * legacyCompatConfig, and the backward-compatibility block in
+     * storageCompat.test.js which runs the actual previous build against it.
+     */
+    expect(config.targetTemp).toBe(config.pullTempF);
   });
 
   it('gives a migrated cook ZERO rest', () => {

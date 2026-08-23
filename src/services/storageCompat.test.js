@@ -106,8 +106,15 @@ describe('forward compatibility with a pre-redesign stored session', () => {
     expect(stored.config.servingTempF).toBe(129); // 125 + 4 carryover at 200 °F
     expect(stored.config.carryoverF).toBe(4);
     expect(stored.config.carryoverIsUserSet).toBe(false);
-    // Gone, so nothing downstream can read the ambiguous key again.
-    expect('targetTemp' in stored.config).toBe(false);
+    /**
+     * The legacy key stays in STORAGE, as a shadow of pullTempF, so a rolled-back
+     * build can still read this cook - see legacyCompatConfig. It was deleted
+     * outright until a rollback was actually tried, at which point the old build
+     * threw a RangeError inside a render. What matters is that nothing downstream
+     * reads it: the ambiguous name is confined to dataModels.js, and the live
+     * config below does not carry it.
+     */
+    expect(stored.config.targetTemp).toBe(stored.config.pullTempF);
   });
 
   it('gives a migrated cook ZERO rest, not the new-session default', () => {
@@ -354,5 +361,114 @@ describe('forward compatibility with a pre-redesign stored session', () => {
 
     expect(hasActiveSession.value).toBe(true);
     expect(readings.value).toHaveLength(4);
+  });
+});
+
+/**
+ * BACKWARD compatibility: the previous build reading storage THIS build wrote.
+ *
+ * The suite above only ever went forwards. A rollback goes the other way, and
+ * `registerType: 'autoUpdate'` in vite.config.js means a rollback reaches every
+ * client on its own - nobody chooses it, and nobody gets warned. The v2 migration
+ * used to `delete config.targetTemp` while createSession never wrote it, so a
+ * session written here carried no key the old build could read: it came back
+ * undefined, went into arithmetic, and reached `new Date(NaN)`. The RangeError
+ * lands inside a computed during render, so ErrorBoundary offers "Try again" -
+ * which throws again - directly above "Erase saved cook and reset". A rollback did
+ * not degrade a cook in progress, it destroyed it.
+ *
+ * `tools/rollback/calculationService.previous.js` is the real previous-build
+ * module, taken from `main` and committed so this test cannot quietly stop testing
+ * the thing it names. It lives under tools/ rather than src/ so it can never reach
+ * the bundle.
+ */
+describe('backward compatibility with the build this one replaced', () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  const oldBuild = () => import('../../tools/rollback/calculationService.previous.js');
+
+  it('writes the legacy key the old build reads', () => {
+    const session = useSession();
+    session.startSession({
+      units: 'F', pullTempF: 125, servingTempF: 129, initialOvenTemp: 200, weight: 6
+    });
+    session.addReading(48);
+
+    const stored = JSON.parse(localStorage.getItem(STORAGE_KEYS.CURRENT_SESSION));
+    expect(stored.config.targetTemp).toBe(125);
+    expect(stored.config.pullTempF).toBe(125);
+    session.endSession();
+  });
+
+  it('keeps the shadow in step when the cook moves the pull temperature', () => {
+    const session = useSession();
+    session.startSession({
+      units: 'F', pullTempF: 125, servingTempF: 129, initialOvenTemp: 200, weight: 6
+    });
+    session.updateConfig({ pullTempF: 137 });
+
+    const stored = JSON.parse(localStorage.getItem(STORAGE_KEYS.CURRENT_SESSION));
+    expect(stored.config.targetTemp).toBe(137);
+    session.endSession();
+  });
+
+  it('does not write the legacy key into the live config', () => {
+    // The shadow exists for the wire, not for the app. Leaking it back into the
+    // session object would resurrect the ambiguous name the split removed.
+    const session = useSession();
+    session.startSession({
+      units: 'F', pullTempF: 125, servingTempF: 129, initialOvenTemp: 200, weight: 6
+    });
+    expect('targetTemp' in session.config.value).toBe(false);
+    session.endSession();
+  });
+
+  it('the previous build projects from it instead of throwing', async () => {
+    const session = useSession();
+    const start = Date.parse('2026-08-22T12:00:00.000Z');
+    const at = (m) => new Date(start + m * 60_000).toISOString();
+    session.startSession({
+      units: 'F', pullTempF: 125, servingTempF: 129, initialOvenTemp: 200, weight: 6
+    });
+    session.addReading(48, at(0));
+    session.addReading(74, at(45));
+    session.addReading(96, at(90));
+
+    const stored = JSON.parse(localStorage.getItem(STORAGE_KEYS.CURRENT_SESSION));
+    const { computeSessionCalculations: oldCompute } = await oldBuild();
+
+    // Exactly the call the old build's useCalculations makes.
+    const result = oldCompute({
+      readings: stored.readings,
+      targetTemp: stored.config.targetTemp,
+      desiredServeTime: stored.config.desiredServeTime,
+      settings: { onTrackThresholdMinutes: 10, smoothingWindowReadings: 3 },
+      now: at(90)
+    });
+
+    expect(Number.isFinite(result.predictedMinutesToTarget)).toBe(true);
+    // The thing that used to throw: turning that projection into a clock time.
+    expect(() => new Date(result.predictedTargetTime).toISOString()).not.toThrow();
+    session.endSession();
+  });
+
+  it('and without the shadow it does throw - the regression this pins', async () => {
+    const { computeSessionCalculations: oldCompute } = await oldBuild();
+    const start = Date.parse('2026-08-22T12:00:00.000Z');
+    const at = (m) => new Date(start + m * 60_000).toISOString();
+
+    expect(() => oldCompute({
+      readings: [
+        { temp: 48, timestamp: at(0) },
+        { temp: 74, timestamp: at(45) },
+        { temp: 96, timestamp: at(90) }
+      ],
+      targetTemp: undefined, // what a v2-written session used to hand it
+      desiredServeTime: null,
+      settings: { onTrackThresholdMinutes: 10, smoothingWindowReadings: 3 },
+      now: at(90)
+    })).toThrow(RangeError);
   });
 });

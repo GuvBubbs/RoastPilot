@@ -31,9 +31,10 @@ describe('storageService', () => {
       const stored = JSON.parse(localStorage.getItem(SESSION_KEY));
 
       // The legacy `targetTemp` was where the cook STOPS, so it lands on
-      // pullTempF - and the ambiguous key does not survive into storage.
+      // pullTempF. It is also written back out beside it, as a shadow, so a
+      // rolled-back build can still read this cook - see legacyCompatConfig.
       expect(stored.config.pullTempF).toBe(130);
-      expect('targetTemp' in stored.config).toBe(false);
+      expect(stored.config.targetTemp).toBe(130);
       expect(stored.config.updatedAt).not.toBe('2020-01-01T00:00:00.000Z');
       expect(Number.isNaN(Date.parse(stored.config.updatedAt))).toBe(false);
       expect(stored.readings).toEqual([]);

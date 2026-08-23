@@ -1,4 +1,6 @@
-import { createDefaultSettings, migrateSessionToV2 } from '../models/dataModels.js';
+import {
+  createDefaultSettings, migrateSessionToV2, legacyCompatConfig
+} from '../models/dataModels.js';
 
 const STORAGE_KEYS = {
   CURRENT_SESSION: 'rstt_current_session',
@@ -111,9 +113,12 @@ export const storageService = {
       // Stamp updatedAt onto a copy, never onto the caller's object. The
       // autosave watcher in useSession watches the reactive session deeply, so
       // writing to it from here would retrigger the watcher that called us.
+      // legacyCompatConfig writes the pre-v2 `targetTemp` alongside the v2 keys
+      // so a rolled-back build can still read this session instead of throwing
+      // on it. See its docstring.
       const payload = {
         ...session,
-        config: { ...session.config, updatedAt: new Date().toISOString() }
+        config: { ...legacyCompatConfig(session.config), updatedAt: new Date().toISOString() }
       };
       
       const serialized = JSON.stringify(payload);
