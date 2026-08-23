@@ -60,17 +60,17 @@
       "reversals": 0
     },
     "05-overnight-shoulder": {
-      "convergenceAbs": 120,
-      "overshootF": 5.9,
-      "blindMinutes": 35,
-      "blockedMinutes": 515,
-      "noAdviceMinutes": 515,
-      "reversals": 0
+      "convergenceAbs": 100,
+      "overshootF": 4.6,
+      "blindMinutes": 15,
+      "blockedMinutes": 485,
+      "noAdviceMinutes": 485,
+      "reversals": 1
     },
     "06-reading-gap": {
-      "convergenceAbs": null,
-      "overshootF": -1.7,
-      "blindMinutes": null,
+      "convergenceAbs": 5,
+      "overshootF": 0.2,
+      "blindMinutes": 0,
       "blockedMinutes": 45,
       "noAdviceMinutes": 45,
       "reversals": 0
@@ -133,15 +133,15 @@
     },
     "16-late-first-reading": {
       "convergenceAbs": 55,
-      "overshootF": 3.9,
-      "blindMinutes": 5,
-      "blockedMinutes": 100,
-      "noAdviceMinutes": 100,
+      "overshootF": 1.9,
+      "blindMinutes": 0,
+      "blockedMinutes": 135,
+      "noAdviceMinutes": 135,
       "reversals": 0
     },
     "14-dst-cook": {
       "convergenceAbs": null,
-      "overshootF": -0.6,
+      "overshootF": -0.1,
       "blindMinutes": null,
       "blockedMinutes": 40,
       "noAdviceMinutes": 40,

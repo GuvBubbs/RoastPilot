@@ -224,7 +224,7 @@ describe('checkRecommendationEligibility', () => {
 
     for (const code of [
       'insufficient-readings', 'insufficient-span', 'insufficient-rise',
-      'insufficient-progress', 'poor-fit', 'unreachable', 'beyond-horizon'
+      'insufficient-progress', 'rate-disagrees', 'unreachable', 'beyond-horizon'
     ]) {
       const result = checkRecommendationEligibility({
         ...base, projectionRefusedReason: code
@@ -246,13 +246,13 @@ describe('checkRecommendationEligibility', () => {
       ovenEvents: [makeOvenEvent()],
       desiredServeTime: '2024-01-01T20:00:00.000Z',
       settings: createDefaultSettings(),
-      confidence: { level: 'insufficient', code: 'poor-fit', reason: 'Readings scatter' },
+      confidence: { level: 'insufficient', code: 'rate-disagrees', reason: 'Roast has slowed' },
       now: NOW
     });
 
     expect(result.canRecommend).toBe(false);
     expect(result.blockerType).toBe('no_projection');
-    expect(result.blockerCode).toBe('poor-fit');
+    expect(result.blockerCode).toBe('rate-disagrees');
   });
 
   it('allows a recommendation when every condition is met', () => {

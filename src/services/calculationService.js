@@ -6,6 +6,7 @@ import {
   projectToTarget,
   instantaneousRate,
   assessDeadTimeGate,
+  assessRateAgreement,
   confidenceFromFit,
   MIN_READINGS_FOR_FIT,
   WARM_START_THRESHOLD_F
@@ -537,7 +538,9 @@ export function computeSessionCalculations({
    * roast then finished early. There is no fit clever enough to fix that, because
    * the information is not in the readings yet. Silence is the correct answer.
    */
-  const gate = assessDeadTimeGate({ readings, k: fit.k, pullTempF });
+  // The PRIOR, not fit.k: this gate decides whether the fit can be trusted, so
+  // handing it the fit's own k is circular - see G3 in assessDeadTimeGate.
+  const gate = assessDeadTimeGate({ readings, k: fit.prior, pullTempF });
   if (!gate.passed) {
     return refuse(gate.code, {
       level: 'insufficient',
@@ -549,7 +552,11 @@ export function computeSessionCalculations({
   
   const warmStart = readings[0].temp > WARM_START_THRESHOLD_F;
   const confidence = confidenceFromFit({
-    rmsResidual: fit.rmsResidual,
+    // The RECENT residual, not the whole history's. The projection extrapolates
+    // from the newest reading, so what decides whether it can be trusted is
+    // whether the model describes the roast now - and judging it over every
+    // reading ever made refusal permanent. See CONFIDENCE_WINDOW_READINGS.
+    rmsResidual: fit.recentRmsResidual,
     dof: fit.dof,
     warmStart
   });
@@ -557,6 +564,36 @@ export function computeSessionCalculations({
   // A fit the model itself does not believe is not a projection with a caveat.
   if (confidence.level === 'insufficient') {
     return refuse(confidence.code, confidence);
+  }
+
+  /**
+   * Does the model's rate agree with the rate the readings actually show?
+   *
+   * This is the gate that decides whether there is a projection at all, and it
+   * replaced the residual in that job - see confidenceFromFit and
+   * assessRateAgreement for why. A residual describes the past; a roast that has
+   * stalled, or been opened, or hit a plateau the model cannot represent, is a
+   * statement about right now.
+   */
+  const rateCheck = assessRateAgreement({
+    readings,
+    ovenEvents,
+    anchorState: fit.anchorState,
+    k: fit.k
+  });
+  if (!rateCheck.agrees) {
+    const observed = rateCheck.detail.observedRate;
+    const modelled = rateCheck.detail.modelRate;
+    return refuse(rateCheck.code, {
+      level: 'insufficient',
+      code: rateCheck.code,
+      reason:
+        `This roast has slowed to ${observed.toFixed(1)}°F per hour, well under the ` +
+        `${modelled.toFixed(1)}°F the curve so far predicts, so a finish time from it ` +
+        'would be wrong. This is normal in the middle of a large cut. Timing advice ' +
+        'comes back as soon as it picks up again.',
+      detail: rateCheck.detail
+    });
   }
   
   /**
@@ -639,6 +676,9 @@ export function computeSessionCalculations({
       k: fit.k,
       prior: fit.prior,
       rmsResidual: fit.rmsResidual,
+      // What confidence was actually decided on, so the harness and the chart can
+      // see the same number the gate saw.
+      recentRmsResidual: fit.recentRmsResidual,
       dof: fit.dof,
       residuals: fit.residuals,
       anchorState: fit.anchorState,
@@ -683,7 +723,7 @@ export function projectScheduleUnderOven({
     nowISO: now
   });
   if (!fit) return null;
-  if (!assessDeadTimeGate({ readings, k: fit.k, pullTempF: config.pullTempF }).passed) {
+  if (!assessDeadTimeGate({ readings, k: fit.prior, pullTempF: config.pullTempF }).passed) {
     return null;
   }
 
@@ -725,7 +765,8 @@ const GATE_REASONS = {
   'insufficient-readings': `Need at least ${MIN_READINGS_FOR_FIT} readings before a finish time means anything.`,
   'insufficient-span': 'The readings are too close together to tell how fast this roast is heating.',
   'insufficient-rise': 'The core has barely moved yet. Check the probe is seated in the thickest part.',
-  'insufficient-progress': 'Too early in the cook to project a finish time - the first stretch of a roast tells you almost nothing about the rest of it.'
+  'insufficient-progress': 'Too early in the cook to project a finish time - the first stretch of a roast tells you almost nothing about the rest of it.',
+  'target-below-readings': 'Every reading is at or above your target temperature. Either the probe is not in the thickest part of the roast, or the target needs raising.'
 };
 
 /**

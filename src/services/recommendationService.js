@@ -46,6 +46,32 @@ const PROJECTION_REFUSAL_REASONS = {
   'insufficient-progress':
     'Too early to project a finish time. The first stretch of a roast says almost ' +
     'nothing about the rest of it - a reading or two more will settle it.',
+  /**
+   * Not a "too early" state at all, which is why it has its own line. A pull
+   * temperature at or below the coldest reading cannot be true of a roast being
+   * heated towards it, and the old arithmetic reported it as `insufficient-progress`
+   * - "too early in the cook" about a roast already past its target.
+   */
+  'target-below-readings':
+    'Every reading is at or above your target temperature. Either the probe is not ' +
+    'in the thickest part of the roast, or the target needs raising.',
+
+  /**
+   * Not a data problem - a physical one, and the reason there is no longer a
+   * 'poor-fit' entry here.
+   *
+   * The refusal used to key off the fit's RMS residual, which describes the PAST.
+   * On the stall - a pork shoulder giving up moisture through 150-165 F genuinely
+   * does not follow a single heating curve, because evaporation takes heat the
+   * model has no term for - that residual never leaves, so the app fell silent for
+   * hours and stayed silent long after the roast started climbing again. The
+   * message even promised otherwise ("resumes once they line up again"), which the
+   * arithmetic could not deliver. This asks about now instead: has the roast
+   * stopped climbing at the rate the curve predicts. It comes back on its own.
+   */
+  'rate-disagrees':
+    'This roast has slowed right down, which is normal in the middle of a large ' +
+    'cut. Timing advice comes back as soon as it picks up again.',
 
   // --- the fit itself ------------------------------------------------------
   /**
@@ -55,14 +81,9 @@ const PROJECTION_REFUSAL_REASONS = {
    * A probe that has shifted is the common one on a small cut. On a big one it is
    * usually the stall: a pork shoulder giving up moisture through 150-165 °F
    * genuinely does not follow a single heating curve, because evaporation is
-   * taking heat the model has no term for. The refusal is right either way; the
-   * old wording sent a cook to check a probe that was fine.
+   * taking heat the model has no term for. That case is now caught by
+   * 'rate-disagrees' below rather than by the residual - see its note.
    */
-  'poor-fit':
-    'These readings do not follow one heating curve - either the probe has ' +
-    'shifted, or the roast has hit a stall. Log another reading; timing advice ' +
-    'resumes once they line up again.',
-
   /**
    * The genuinely new one. A straight line always got to the target eventually,
    * however low the oven was set - it had no notion of a temperature the roast
@@ -328,8 +349,9 @@ export function checkRecommendationEligibility({
    * and R² over a three-point window cannot fall below about 0.75 - so the
    * `unstable_rate` blocker and the "readings are fluctuating" message had never
    * once been reached. The equivalent condition IS detectable now, from the RMS
-   * residual of the curved fit in degrees, and the projection refuses on it
-   * upstream with code 'poor-fit' - which is why there is no branch for it here.
+   * residual of the curved fit in degrees, and the projection refuses upstream on
+   * a rate that has stopped matching the readings ('rate-disagrees') - which is
+   * why there is no branch for it here.
    *
    * `insufficient` now means the projection refused, and that has already been
    * caught by the no_projection gate above with a reason specific to the cause.

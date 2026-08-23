@@ -549,10 +549,27 @@ function computeFit({ readings, ovenEvents = [], prior, nowISO = null }) {
    * of the old failure direction and so will not look wrong to anyone eyeballing
    * it. Detected and flagged rather than fitted - see the warm-start check.
    */
+  /**
+   * THE COLDEST READING, not the first one. A roast only heats, so the coldest
+   * observation is the better estimate of where it started - and unlike the first
+   * reading, no single spurious value can move it upwards.
+   *
+   * This is not a refinement, it is the difference between a working fit and a
+   * destroyed one. The initial temperature is not just another residual: it is the
+   * INITIAL CONDITION, so a first reading of 150 F told the model the roast began
+   * at 150 and then had to explain readings below that. No value of k can produce
+   * a falling core in a hot oven, so the search ran to the bottom of its bracket -
+   * k collapsed from 0.00692 to 0.00035, twenty times too small and pinned at the
+   * floor - and every subsequent residual came out near 100 F. That is why the
+   * cook stayed mute: not because one reading was wrong, but because one reading
+   * being wrong made every other reading look wrong too.
+   */
+  const startingTempF = Math.min(...readings.map((r) => r.temp));
+
   const initial = {
     ovenF: openingSetPointF ?? AMBIENT_F,
-    surfaceF: readings[0].temp,
-    coreF: readings[0].temp
+    surfaceF: startingTempF,
+    coreF: startingTempF
   };
 
   const evaluate = (k) =>
@@ -648,6 +665,11 @@ function computeFit({ readings, ovenEvents = [], prior, nowISO = null }) {
     sse: chosen.sse,
     residuals: chosen.residuals,
     rmsResidual: Math.sqrt(chosen.sse / Math.max(1, residualCount)),
+    /**
+     * The same thing over the most recent readings only, and it is this one that
+     * decides confidence. See CONFIDENCE_WINDOW_READINGS.
+     */
+    recentRmsResidual: rmsOfRecent(chosen.residuals),
     dof,
     timeline,
     initial,
@@ -782,6 +804,7 @@ export function instantaneousRate(state, k) {
  * @returns {{passed: boolean, code: string|null, detail: Object}}
  */
 export function assessDeadTimeGate({ readings, k, pullTempF }) {
+  // `k` here is the prior - see G3.
   const count = readings.length;
 
   // G1 - enough readings for the fit to be a fit.
@@ -798,6 +821,34 @@ export function assessDeadTimeGate({ readings, k, pullTempF }) {
   const spanMinutes = (Date.parse(last.timestamp) - Date.parse(first.timestamp)) / 60_000;
 
   /**
+   * THE BASELINE IS THE COLDEST READING, NOT THE FIRST ONE.
+   *
+   * Both the rise test and the progress test measure from where the roast
+   * started, and using readings[0] for that made a single bad first reading
+   * permanently fatal. The first reading is also the one most likely to be wrong -
+   * it is taken while the cook is still getting the probe seated, and a probe
+   * resting against the pan reads hot.
+   *
+   * With an honest opening reading of 48 F and the rest at 60/72/84, the gate
+   * opens. Replace that first reading with 150 F, change nothing else, and the
+   * gate shuts with `insufficient-rise` (rise -66 F) and never reopens however
+   * many honest readings follow, because every one of them is still measured
+   * against the 150. The app then says "The core has barely moved. Check the probe
+   * is seated in the thickest part." for the whole cook - blaming the probe for
+   * the one reading it got right - and only changes its excuse as the other gates
+   * take over in turn: insufficient-rise, then insufficient-span, then
+   * insufficient-progress. Recovery required the cook to find and delete that
+   * reading in the log, and nothing anywhere hinted at it.
+   *
+   * A roast only heats, so the coldest observation is the better estimate of where
+   * it started, and it is robust to any number of spuriously HIGH readings. It is
+   * not robust to a spuriously low one, which would open the gate slightly early -
+   * a much cheaper error than never opening it, and one the fit's own residual
+   * still reports as poor confidence.
+   */
+  const baselineF = Math.min(...readings.map((r) => r.temp));
+
+  /**
    * G2 - the core has to have actually moved. A probe sitting in the air, or one
    * that fell out of the roast, produces a beautifully consistent flat line.
    *
@@ -808,7 +859,7 @@ export function assessDeadTimeGate({ readings, k, pullTempF }) {
    * and false. The rise check is the honest diagnosis of that data, and it is the
    * cheaper test.
    */
-  const riseF = last.temp - first.temp;
+  const riseF = last.temp - baselineF;
   if (riseF < MIN_RISE_F) {
     return { passed: false, code: 'insufficient-rise', detail: { riseF, required: MIN_RISE_F } };
   }
@@ -820,6 +871,14 @@ export function assessDeadTimeGate({ readings, k, pullTempF }) {
    * scale-free: 15 minutes is plenty of a 3 lb tenderloin's curvature and nothing
    * at all of a 9 lb shoulder's. A fixed minute count is right for exactly one
    * size of roast.
+   *
+   * The k used is the WEIGHT-DERIVED PRIOR, not the fitted one, and the difference
+   * matters. This gate exists to decide whether the fit can be trusted; gating it
+   * on the fit's own output is circular, and the circularity has teeth. Feed the
+   * cook one spurious 150 F first reading and the fit collapses to a tiny k, which
+   * makes `0.25 / k` enormous, which shuts the gate on `insufficient-span` for the
+   * rest of the cook - a corrupted fit voting itself unfalsifiable. The prior
+   * comes from the weight and the cut and no reading can move it.
    */
   const requiredSpan = Math.max(MIN_SPAN_MINUTES, 0.25 / k);
   if (spanMinutes < requiredSpan) {
@@ -854,8 +913,27 @@ export function assessDeadTimeGate({ readings, k, pullTempF }) {
    * before it, scenario 04's first advice was "raise" on a roast that finishes
    * 110 minutes early.
    */
-  const progress = (last.temp - first.temp) / (pullTempF - first.temp);
-  if (Number.isFinite(progress) && progress < MIN_PROGRESS_FRACTION) {
+  /**
+   * A pull temperature at or below where the roast started is not "too early in
+   * the cook" - it is a statement that cannot be true of a roast being heated
+   * towards it, so it gets its own answer rather than a share of G4's.
+   *
+   * The old arithmetic turned it into a permanent lock: readings of 148/160/172/184
+   * against a 120 F pull gave `progress: -1.29`, which is below any threshold, so
+   * the gate reported `insufficient-progress` about a roast 64 degrees PAST its
+   * target. Either the probe is in the wrong place or the target is, and both are
+   * worth saying out loud; "not far enough into the cook" is neither.
+   */
+  if (pullTempF <= baselineF) {
+    return {
+      passed: false,
+      code: 'target-below-readings',
+      detail: { pullTempF, baselineF }
+    };
+  }
+
+  const progress = (last.temp - baselineF) / (pullTempF - baselineF);
+  if (progress < MIN_PROGRESS_FRACTION) {
     return {
       passed: false,
       code: 'insufficient-progress',
@@ -863,7 +941,7 @@ export function assessDeadTimeGate({ readings, k, pullTempF }) {
     };
   }
 
-  return { passed: true, code: null, detail: { spanMinutes, riseF, progress } };
+  return { passed: true, code: null, detail: { spanMinutes, riseF, progress, baselineF } };
 }
 
 export const MIN_READINGS_FOR_FIT = 3;
@@ -889,6 +967,45 @@ export const MIN_PROGRESS_FRACTION = 0.12;
 export const CONFIDENCE_BANDS = { high: 2.5, medium: 6, low: 12 };
 
 /**
+ * How many of the most recent readings the confidence residual is taken over.
+ *
+ * THE FIT STILL USES EVERY READING - that is deliberate and unchanged, because
+ * the early readings carry the curvature that identifies k and throwing them away
+ * leaves the fit unable to tell an accelerating roast from a decelerating one.
+ * This window governs only the JUDGEMENT of the fit, and those are different
+ * questions. The projection starts at the newest reading and extrapolates, so what
+ * matters for whether it can be trusted is whether the model describes the roast's
+ * RECENT behaviour. A reading from three hours ago that the model never explained
+ * says nothing about that.
+ *
+ * Judging it over the whole history made refusal permanent, and permanent in a way
+ * the copy explicitly denied: "timing advice resumes once they line up again" was
+ * unreachable. One spurious 150 F first reading on a 12 lb roast left an RMS above
+ * the 12 F refusal band for the entire cook - a residual of that size contributes
+ * roughly 100/sqrt(n), so it would have taken about seventy readings to decay out,
+ * and the app stayed mute from the fifth reading to the end while the probe climbed
+ * past the pull temperature. The overnight shoulder's stall did the same thing for
+ * 410 minutes with the serve deadline inside the silence.
+ *
+ * This does NOT make the gate toothless. A model that has stopped describing the
+ * roast - the stall, a probe that has shifted - produces large residuals on exactly
+ * the recent readings this looks at, so it still refuses, and now it refuses for as
+ * long as the disagreement lasts rather than for ever afterwards.
+ *
+ * Five: enough that one bad reading cannot dominate, few enough to still be about
+ * "now" on any cadence the app permits.
+ */
+export const CONFIDENCE_WINDOW_READINGS = 5;
+
+/** RMS of the last CONFIDENCE_WINDOW_READINGS residuals. */
+function rmsOfRecent(residuals) {
+  if (!residuals || residuals.length === 0) return 0;
+  const window = residuals.slice(-CONFIDENCE_WINDOW_READINGS);
+  const sse = window.reduce((total, r) => total + r * r, 0);
+  return Math.sqrt(sse / window.length);
+}
+
+/**
  * Confidence level and machine-readable code for a fit.
  *
  * The code is the point. The eligibility gate used to decide what to do by
@@ -903,11 +1020,28 @@ export const CONFIDENCE_BANDS = { high: 2.5, medium: 6, low: 12 };
  * @returns {{level: string, code: string, reason: string}}
  */
 export function confidenceFromFit({ rmsResidual, dof, warmStart = false }) {
+  /**
+   * A large residual no longer REFUSES, it caps confidence at low.
+   *
+   * The residual describes the past; refusing on it silenced the app about a
+   * present it was getting right. On the overnight shoulder the stall is
+   * permanently in the residual and can never leave it, so the app stayed mute for
+   * 410 minutes with the serve deadline inside the silence - and still mute at
+   * 194 F with the pull one degree away, on a projection accurate to half an hour.
+   * Meanwhile the same threshold let it speak confidently at the START of the
+   * stall, when the residual was still only 6.2 and the projection was 330 minutes
+   * out.
+   *
+   * Whether to speak at all is now decided by assessRateAgreement, which asks
+   * about now rather than about the whole history and separates those two cases
+   * cleanly. The residual keeps the job it is good at: saying how much to trust
+   * what is said.
+   */
   if (rmsResidual >= CONFIDENCE_BANDS.low) {
     return {
-      level: 'insufficient',
-      code: 'poor-fit',
-      reason: `The readings do not fit any single heating curve (off by ${rmsResidual.toFixed(1)}°F on average). Check the probe has not moved.`
+      level: 'low',
+      code: 'loose-fit',
+      reason: `These readings do not all sit on one heating curve - the fit is off by ${rmsResidual.toFixed(1)}°F on average - so treat the timing as approximate. If the probe has been moved, the readings before the move are the ones pulling it.`
     };
   }
 
@@ -964,4 +1098,107 @@ export function confidenceFromFit({ rmsResidual, dof, warmStart = false }) {
 }
 
 /** Core temperature above which a first reading means the cook started warm. */
+/**
+ * How many readings the observed slope is measured over, and how far the model's
+ * own rate may differ from it before the projection is refused.
+ *
+ * WHY THIS EXISTS, AND WHY THE RESIDUAL COULD NOT DO IT. The confidence residual
+ * asks "has the model explained the readings so far". The projection asks "will
+ * the model describe the next few hours". Through a stall those two questions have
+ * opposite answers, and the residual gets both of them wrong:
+ *
+ *   t     probe   model rate   observed rate   ratio   projection error   recentRms
+ *   345   152.5      22.4           2.5         8.9        -330 min          6.2
+ *   400   153.3      22.7           0.1       189.2        -278 min         13.4
+ *   700   156.6      19.7           0.8        24.6         +32 min         40.0
+ *   770   177.6      12.9          20.1         0.6         +30 min         36.1
+ *   845   193.4       8.4          12.0         0.7         +17 min         22.9
+ *
+ * (Real numbers, from the overnight-shoulder cook's own 40 readings.)
+ *
+ * At t=345 the residual was 6.2 - inside the band that speaks - so the app said
+ * "running early" and offered to lower the oven, while the probe was moving at
+ * 2.5 F/hr against a claimed 22.4 and the roast went on to finish two hours late.
+ * At t=770 the residual was 36.1, far past the refusal band, so the app said
+ * nothing at all - about a projection that was accurate to half an hour. The stall
+ * is permanently in the residual and can never leave it; the app was mute for 410
+ * minutes with the serve deadline inside that silence, and still mute at 194 F
+ * with the pull one degree away.
+ *
+ * Comparing the model's instantaneous rate against the slope the readings actually
+ * show separates the two cases cleanly - the ratio is 1.0 or 0.6-0.8 when the
+ * projection is good and 9 to 189 when it is not - because it asks about NOW
+ * rather than about the whole history.
+ *
+ * Only the "roast has slowed" direction refuses. A model running slower than the
+ * readings is the ordinary state just after the oven comes up, and the settling
+ * machinery already owns that window.
+ */
+export const RATE_WINDOW_READINGS = 3;
+export const MAX_RATE_OVERSTATEMENT = 2.5;
+/**
+ * Below this the ratio is meaningless. A probe reading +/-0.54 F of noise, sampled
+ * across a 40-minute window, carries about 1.6 F/hr of slope noise on its own, so
+ * a model claiming 1.0 F/hr against an observed 0.3 is not evidence of anything.
+ */
+export const MIN_RATE_DISAGREEMENT_F_PER_HR = 4;
+
+/**
+ * Does the model's rate agree with the rate the readings show?
+ *
+ * @returns {{agrees: boolean, code: string|null, detail: Object}}
+ */
+export function assessRateAgreement({ readings, ovenEvents = [], anchorState, k }) {
+  if (!readings || readings.length < RATE_WINDOW_READINGS) {
+    return { agrees: true, code: 'not-assessable', detail: { readings: readings?.length ?? 0 } };
+  }
+
+  const window = readings.slice(-RATE_WINDOW_READINGS);
+  const spanHours =
+    (Date.parse(window[window.length - 1].timestamp) - Date.parse(window[0].timestamp)) / 3_600_000;
+  if (!(spanHours > 0)) {
+    return { agrees: true, code: 'not-assessable', detail: { spanHours } };
+  }
+
+  /**
+   * A window straddling a dial change describes two different ovens, and its
+   * slope is a blend of both. Same reasoning as excluding pause-straddling
+   * readings from the fit: without this, every raise would look like a roast that
+   * had suddenly slowed, because the observed slope is still the old oven's.
+   */
+  const from = Date.parse(window[0].timestamp);
+  const to = Date.parse(window[window.length - 1].timestamp);
+  const straddles = (ovenEvents ?? []).some((e) => {
+    const t = Date.parse(e.timestamp);
+    return t > from && t < to;
+  });
+  if (straddles) {
+    return { agrees: true, code: 'not-assessable', detail: { straddlesOvenChange: true } };
+  }
+
+  const observedRate = (window[window.length - 1].temp - window[0].temp) / spanHours;
+  const modelRate = instantaneousRate(anchorState, k);
+  const excess = modelRate - observedRate;
+
+  if (excess > MIN_RATE_DISAGREEMENT_F_PER_HR
+      && observedRate > 0
+      && modelRate > observedRate * MAX_RATE_OVERSTATEMENT) {
+    return {
+      agrees: false,
+      code: 'rate-disagrees',
+      detail: { modelRate, observedRate, spanHours }
+    };
+  }
+  // A roast that has stopped moving at all, while the model says it is climbing.
+  if (observedRate <= 0 && excess > MIN_RATE_DISAGREEMENT_F_PER_HR) {
+    return {
+      agrees: false,
+      code: 'rate-disagrees',
+      detail: { modelRate, observedRate, spanHours }
+    };
+  }
+
+  return { agrees: true, code: null, detail: { modelRate, observedRate } };
+}
+
 export const WARM_START_THRESHOLD_F = 90;

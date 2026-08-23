@@ -7,6 +7,11 @@ import {
   fitThermalModel,
   clearFitCache,
   kPrior,
+  assessRateAgreement,
+  assessDeadTimeGate,
+  confidenceFromFit,
+  instantaneousRate,
+  CONFIDENCE_BANDS,
   PROJECTION_HORIZON_MINUTES,
   AMBIENT_F
 } from './thermalModel.js';
@@ -192,5 +197,212 @@ describe('the anchor, when the roast went in before anyone measured it', () => {
     // And the head-start fit sees one more observation, because its first reading
     // is something to explain rather than a free initial condition.
     expect(withHeadStart.residuals.length).toBe(withoutHeadStart.residuals.length + 1);
+  });
+});
+
+describe('the dead-time gate, against a bad first reading', () => {
+  const BASE = Date.parse('2026-08-22T12:00:00.000Z');
+  const at = (minutes) => new Date(BASE + minutes * 60_000).toISOString();
+  const mk = (temps) => temps.map((temp, i) => ({ temp, timestamp: at(i * 25) }));
+  const gate = (temps, pullTempF) =>
+    assessDeadTimeGate({ readings: mk(temps), k: 0.011, pullTempF });
+
+  it('is not shut for the whole cook by one spurious reading', () => {
+    /**
+     * The rise and progress tests measured from readings[0], so a probe resting
+     * against the pan on the first reading was permanently fatal: with 48/60/72/84
+     * the gate opens, and with 150/60/72/84 it shuts on `insufficient-rise` (rise
+     * -66 F) and never reopens however many honest readings follow. The app said
+     * "The core has barely moved. Check the probe is seated in the thickest part."
+     * for the whole cook - blaming the probe for the one reading it got right.
+     */
+    expect(gate([48, 60, 72, 84], 121).passed).toBe(true);
+    expect(gate([150, 60, 72, 84], 121).passed).toBe(true);
+  });
+
+  it('still shuts on a roast that genuinely has not moved', () => {
+    // The case the gate exists for: a probe in the air, or one that fell out.
+    const shut = gate([48, 49, 50, 51], 121);
+    expect(shut.passed).toBe(false);
+    expect(shut.code).toBe('insufficient-rise');
+  });
+
+  it('still shuts on a cook that is genuinely too young', () => {
+    const shut = gate([48, 52, 56, 60], 195);
+    expect(shut.passed).toBe(false);
+    expect(shut.code).toBe('insufficient-progress');
+  });
+
+  it('says what is wrong when the target is below every reading', () => {
+    /**
+     * The old arithmetic gave `progress: -1.29` here and reported
+     * `insufficient-progress` - "too early in the cook" about a roast 64 degrees
+     * PAST its target. A negative denominator was a permanent lock.
+     */
+    const shut = gate([148, 160, 172, 184], 120);
+    expect(shut.passed).toBe(false);
+    expect(shut.code).toBe('target-below-readings');
+  });
+});
+
+describe('assessRateAgreement', () => {
+  const BASE = Date.parse('2026-08-22T12:00:00.000Z');
+  const at = (minutes) => new Date(BASE + minutes * 60_000).toISOString();
+  const readingsAt = (temps) => temps.map((temp, i) => ({ temp, timestamp: at(i * 25) }));
+
+  it('refuses when the roast has stalled and the model has not', () => {
+    /**
+     * The overnight shoulder, in miniature. The model's rate comes from the
+     * surface-to-core gradient and says the core should be climbing; the readings
+     * say it has stopped. Extrapolating the model through that produced errors of
+     * 330 minutes in the EARLY direction, so the app offered to lower the oven on
+     * a roast that finished two hours late.
+     */
+    const anchorState = { ovenF: 225, surfaceF: 210, coreF: 155 };
+    expect(instantaneousRate(anchorState, 0.007)).toBeGreaterThan(20);
+
+    const check = assessRateAgreement({
+      readings: readingsAt([154.5, 154.8, 155.0]),
+      ovenEvents: [{ setTemp: 225, timestamp: at(-10), isOff: false }],
+      anchorState,
+      k: 0.007
+    });
+    expect(check.agrees).toBe(false);
+    expect(check.code).toBe('rate-disagrees');
+  });
+
+  it('agrees when the readings and the model tell the same story', () => {
+    const anchorState = { ovenF: 225, surfaceF: 190, coreF: 120 };
+    const modelRate = instantaneousRate(anchorState, 0.007);
+    // Readings climbing at roughly the modelled rate.
+    const perReading = (modelRate / 60) * 25;
+    const check = assessRateAgreement({
+      readings: readingsAt([120 - 2 * perReading, 120 - perReading, 120]),
+      ovenEvents: [{ setTemp: 225, timestamp: at(-10), isOff: false }],
+      anchorState,
+      k: 0.007
+    });
+    expect(check.agrees).toBe(true);
+    expect(check.code).toBeNull();
+  });
+
+  it('does not fire on a roast climbing FASTER than modelled', () => {
+    // That is the ordinary state just after the oven comes up, and the settling
+    // machinery owns it. Refusing here would silence every dial change.
+    const anchorState = { ovenF: 300, surfaceF: 200, coreF: 120 };
+    const check = assessRateAgreement({
+      readings: readingsAt([90, 105, 120]),
+      ovenEvents: [{ setTemp: 300, timestamp: at(-10), isOff: false }],
+      anchorState,
+      k: 0.007
+    });
+    expect(check.agrees).toBe(true);
+  });
+
+  it('declines to judge a window that straddles a dial change', () => {
+    /**
+     * The window would be describing two different ovens, and its slope a blend of
+     * both. Without this every raise looks like a roast that has suddenly slowed,
+     * because the observed slope is still the old oven's.
+     */
+    const check = assessRateAgreement({
+      readings: readingsAt([154.5, 154.8, 155.0]),
+      ovenEvents: [
+        { setTemp: 225, timestamp: at(-10), isOff: false },
+        { setTemp: 300, timestamp: at(30), isOff: false }
+      ],
+      anchorState: { ovenF: 300, surfaceF: 260, coreF: 155 },
+      k: 0.007
+    });
+    expect(check.agrees).toBe(true);
+    expect(check.code).toBe('not-assessable');
+  });
+
+  it('ignores a disagreement too small to be more than probe noise', () => {
+    // A probe carrying half a degree of noise across a 50-minute window is worth
+    // about 1.6 F/hr of slope on its own.
+    const anchorState = { ovenF: 200, surfaceF: 196, coreF: 194 };
+    expect(instantaneousRate(anchorState, 0.007)).toBeLessThan(4);
+    const check = assessRateAgreement({
+      readings: readingsAt([193.9, 193.9, 194.0]),
+      ovenEvents: [{ setTemp: 200, timestamp: at(-10), isOff: false }],
+      anchorState,
+      k: 0.007
+    });
+    expect(check.agrees).toBe(true);
+  });
+});
+
+describe('confidenceFromFit', () => {
+  it('caps a large residual at low confidence rather than refusing', () => {
+    /**
+     * It used to return `insufficient` above 12 F, which silenced the app. The
+     * residual describes the PAST: the shoulder's stall is permanently in it and
+     * can never leave, so the app stayed mute for 410 minutes with the serve
+     * deadline inside the silence, and was still mute at 194 F on a projection
+     * accurate to half an hour. Whether to speak is assessRateAgreement's job now.
+     */
+    const verdict = confidenceFromFit({ rmsResidual: 30, dof: 8 });
+    expect(verdict.level).toBe('low');
+    expect(verdict.code).toBe('loose-fit');
+  });
+
+  it('still grades a good fit as good', () => {
+    expect(confidenceFromFit({ rmsResidual: 1.0, dof: 8 }).level).toBe('high');
+    expect(confidenceFromFit({ rmsResidual: 4.0, dof: 8 }).level).toBe('medium');
+    expect(confidenceFromFit({ rmsResidual: CONFIDENCE_BANDS.medium + 1, dof: 8 }).level)
+      .toBe('low');
+  });
+});
+
+describe('the fit, against a bad first reading', () => {
+  const BASE = Date.parse('2026-08-22T12:00:00.000Z');
+  const at = (minutes) => new Date(BASE + minutes * 60_000).toISOString();
+
+  it('takes its starting temperature from the coldest reading', () => {
+    /**
+     * The initial temperature is not just another residual - it is the INITIAL
+     * CONDITION. A first reading of 150 F told the model the roast began at 150 and
+     * then had to explain readings below it, which no value of k can do in a hot
+     * oven, so the search ran to the bottom of its bracket: k collapsed from
+     * 0.00692 to 0.00035, twenty times too small, and every later residual came out
+     * near 100 F. One wrong reading made every other reading look wrong.
+     */
+    const ovenEvents = [{ setTemp: 225, timestamp: at(-5), isOff: false }];
+    const honest = [48, 57, 66, 75, 84, 92];
+    const readings = (temps) => temps.map((temp, i) => ({ temp, timestamp: at(i * 25) }));
+    const prior = kPrior({ weightLb: 12, meatType: 'Prime Rib' });
+
+    clearFitCache();
+    const clean = fitThermalModel({ readings: readings(honest), ovenEvents, prior });
+    clearFitCache();
+    const poisoned = fitThermalModel({
+      readings: readings([150, ...honest.slice(1)]), ovenEvents, prior
+    });
+
+    // Within a factor of two of the clean fit, rather than at the bracket floor.
+    expect(poisoned.k).toBeGreaterThan(clean.k / 2);
+    expect(poisoned.k).toBeLessThan(clean.k * 2);
+    // And the whole-history residual still reports the bad reading honestly.
+    expect(poisoned.rmsResidual).toBeGreaterThan(10);
+  });
+
+  it('lets the recent residual recover as honest readings accumulate', () => {
+    const ovenEvents = [{ setTemp: 225, timestamp: at(-5), isOff: false }];
+    const prior = kPrior({ weightLb: 12, meatType: 'Prime Rib' });
+    const curve = [48, 57, 66, 75, 84, 92, 100, 108, 115];
+    const poison = (n) => curve.slice(0, n)
+      .map((temp, i) => ({ temp: i === 0 ? 150 : temp, timestamp: at(i * 25) }));
+
+    clearFitCache();
+    const early = fitThermalModel({ readings: poison(5), ovenEvents, prior });
+    clearFitCache();
+    const later = fitThermalModel({ readings: poison(9), ovenEvents, prior });
+
+    // The window has moved past the bad reading, so the number confidence is
+    // judged on comes back down while the full history keeps reporting it.
+    expect(later.recentRmsResidual).toBeLessThan(early.recentRmsResidual);
+    expect(later.recentRmsResidual).toBeLessThan(CONFIDENCE_BANDS.low);
+    expect(later.rmsResidual).toBeGreaterThan(CONFIDENCE_BANDS.low);
   });
 });

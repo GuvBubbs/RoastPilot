@@ -84,7 +84,7 @@ import { estimateCarryoverF, pullTempFor, servingTempFor } from '../services/car
  *   'insufficient_readings' | 'insufficient_time' | 'no_oven_data' |
  *   'stale_reading' | 'no_serve_time' | 'no_projection' | 'no_session'
  * @property {string|null} blockerCode - When blockerType is 'no_projection', the
- *   specific cause: a dead-time gate code, 'poor-fit', 'unreachable',
+ *   specific cause: a dead-time gate code, 'rate-disagrees', 'unreachable',
  *   'beyond-horizon'. The UI needs it because "raise the oven" is the right
  *   suggestion for one of those and nonsense for the rest.
  * @property {{current: number, required: number, message: string}|null} progress -
