@@ -18,6 +18,18 @@ const isInitialized = ref(false);
 let persistedSettings = null;
 // A ref, not a plain let: `preferredUnits` is exposed to templates.
 const persistedUnits = ref(null);
+/**
+ * The cook's own oven, as last recorded. A ref for the same reason as the units
+ * above: the setup sheet reads it before any session exists.
+ *
+ * It has to be its own cache rather than `settings.value.ovenIsFanForced`,
+ * because that computed falls back to createDefaultSettings() with no session -
+ * so between cooks it would answer `false` no matter what the cook told it, and
+ * the "remembered default" would be remembered only for as long as a cook was
+ * running. Exactly the shape of the persistedUnits problem, which is why it gets
+ * the same treatment.
+ */
+const persistedFanForced = ref(null);
 
 /**
  * Save current session to storage
@@ -145,6 +157,9 @@ export function useSession() {
     
     persistedSettings = storedSettings ?? session.value?.settings ?? createDefaultSettings();
     persistedUnits.value = storageService.loadUnits();
+    persistedFanForced.value = typeof persistedSettings.ovenIsFanForced === 'boolean'
+      ? persistedSettings.ovenIsFanForced
+      : null;
     
     isInitialized.value = true;
   }
@@ -234,6 +249,32 @@ export function useSession() {
   // for every fresh install and every user upgrading from the old build.
   const preferredUnits = computed(() => persistedUnits.value ?? SESSION_DEFAULTS.UNITS);
   
+  /**
+   * Whether to assume a fan-forced oven for a *new* session, before any config
+   * exists. Nothing in the model reads it - it seeds config.ovenIsFanForced so an
+   * export can state which oven the cook was in.
+   */
+  const preferredOvenIsFanForced = computed(() => persistedFanForced.value ?? false);
+  
+  /**
+   * Remember the cook's oven, whether or not a session is running.
+   *
+   * Not updateSettings: that returns early when session.value is null, and the
+   * one moment this is asked is during setup, when it always is. So the standing
+   * preference is written to the module cache and to storage directly, and the
+   * live session's settings are brought along only if there is one.
+   */
+  function rememberOvenIsFanForced(value) {
+    const next = value === true;
+    persistedFanForced.value = next;
+    persistedSettings = { ...(persistedSettings ?? createDefaultSettings()), ovenIsFanForced: next };
+    storageService.saveSettings(persistedSettings);
+    if (session.value) {
+      session.value.settings = { ...session.value.settings, ovenIsFanForced: next };
+      saveSession();
+    }
+  }
+  
   const displayUnits = computed(() => {
     return config.value?.units ?? 'F';
   });
@@ -309,14 +350,22 @@ export function useSession() {
    * Add a new internal temperature reading
    * @param {number} temp - Temperature in display units
    * @param {string} [timestamp] - Optional timestamp, defaults to now
+   * @param {number|null} [ovenActualF] - Optional oven thermometer reading, in
+   *   DISPLAY units; converted here alongside the core temperature. Stored and
+   *   exported, never fed to the projection - see InternalReading.
    */
-  function addReading(temp, timestamp = null) {
+  function addReading(temp, timestamp = null, ovenActualF = null) {
     if (!session.value) return;
     
     // Convert to storage unit (Fahrenheit)
     const tempF = toStorageUnit(temp, displayUnits.value);
+    // Same conversion, same reason. An oven reading typed in °C and stored raw
+    // would look like an oven at 110 °F to the offline fitter.
+    const ovenF = Number.isFinite(ovenActualF)
+      ? toStorageUnit(ovenActualF, displayUnits.value)
+      : null;
     
-    session.value.readings.push(createReading(tempF, timestamp));
+    session.value.readings.push(createReading(tempF, timestamp, ovenF));
     
     // A back-dated reading has to land in its chronological slot, and every
     // delta after it changes as a result
@@ -478,6 +527,22 @@ export function useSession() {
     persistedSettings = { ...session.value.settings };
     storageService.saveSettings(persistedSettings);
     
+    /**
+     * And keep the standing fan-forced cache in step, because there are now TWO
+     * writers of that value and only one of them used to know about the other.
+     *
+     * SettingsPanel's "Reset defaults" Object.assigns createDefaultSettings() -
+     * which carries ovenIsFanForced: false - and saves the whole object through
+     * here. Without this line storage said false while persistedFanForced still
+     * said true, so the next setup sheet in that page load seeded
+     * config.ovenIsFanForced from a value the user had just reset, visible only
+     * inside a collapsed fold. It reaches no coefficient, but it is the flag the
+     * export uses to state which oven the cook was in, so it has to be true.
+     */
+    if (typeof updates.ovenIsFanForced === 'boolean') {
+      persistedFanForced.value = updates.ovenIsFanForced;
+    }
+    
     saveSession();
   }
   
@@ -519,6 +584,8 @@ export function useSession() {
     currentOvenTemp,
     displayUnits,
     preferredUnits,
+    preferredOvenIsFanForced,
+    rememberOvenIsFanForced,
     lastActiveOvenTemp,
     
     // Methods

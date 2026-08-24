@@ -35,6 +35,11 @@ export function useCalculations() {
       // show/don't-show decision lives in the gate.
       weightLb: config.value.weight,
       meatType: config.value.meatType,
+      // A measured thickness supersedes both of the above - it states the
+      // conduction length the other two only estimate. Absent on every cook that
+      // does not fill it in, and kPrior falls back unchanged.
+      thicknessCm: config.value.thicknessCm ?? null,
+      meatCut: config.value.meatCut ?? null,
       // The projection is judged against the latest PULL time, not the serve
       // time: the meat has to be out of the oven early enough to rest.
       restMinutes: config.value.restMinutes ?? 0,

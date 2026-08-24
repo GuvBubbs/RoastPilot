@@ -128,7 +128,10 @@ describe('exportToCSV field integrity', () => {
     const rows = parseCSV(exportToCSV(makeSession()));
     const readings = section(rows, '## Internal Temperature Readings');
 
-    expect(readings.header).toHaveLength(6);
+    // SEVEN since Phase 8 added the oven-thermometer column. The count is
+    // asserted rather than derived so that a column silently disappearing is a
+    // failure and not just a differently shaped table.
+    expect(readings.header).toHaveLength(7);
     expect(readings.rows).toHaveLength(2);
     readings.rows.forEach(row => {
       expect(row).toHaveLength(readings.header.length);
@@ -240,7 +243,7 @@ describe('exportToCSV field integrity', () => {
       const start = rows.findIndex(r => r[0] === heading);
       expect(start, heading).toBeGreaterThan(-1);
     });
-    expect(section(rows, '## Internal Temperature Readings').header).toHaveLength(6);
+    expect(section(rows, '## Internal Temperature Readings').header).toHaveLength(7);
     expect(section(rows, '## Oven Temperature Events').header).toHaveLength(5);
   });
 });

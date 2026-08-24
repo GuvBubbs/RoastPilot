@@ -117,6 +117,33 @@ const PROJECTION_REFUSAL_REASONS = {
   default: 'There is no projection to advise from yet.'
 };
 
+/**
+ * The same refusal, when the stall is what is actually happening.
+ *
+ * Same code, same arithmetic, same gate - only the sentence differs. The generic
+ * wording above is right for a prime rib, where an unexplained slowdown really
+ * might be a probe that has worked its way out of the thickest part and is worth
+ * checking. On a pork shoulder IN THE STALL BAND it is almost certainly the stall,
+ * and telling that cook to go and re-seat a probe at 2 a.m. is worse than telling
+ * them nothing.
+ *
+ * On a pork shoulder OUTSIDE the band it is not the stall, and this sentence must
+ * not be shown - it would state a temperature range the reading beside it
+ * contradicts. thermalModel.stallExplainsSlowdown is where both conditions live,
+ * so the two copy sites cannot drift apart on the question.
+ *
+ * {stallBand} rather than "150-165 °F", because this string reaches the screen
+ * through useRecommendations' substitution layer and a Celsius cook must not be
+ * shown Fahrenheit. That is the `rendered-text` invariant's other half, and the
+ * three sentences it was written for made exactly this mistake.
+ *
+ * Keyed separately rather than as a new blockerCode: the UI branches on the code
+ * and recommendationService.test.js asserts on it. Only the string varies.
+ */
+const STALL_REFUSAL_REASON =
+  'This is the stall - normal for a shoulder around {stallBand}. Timing advice ' +
+  'comes back when it picks up again.';
+
 /** One dial increment expressed in Fahrenheit. */
 function dialStepF(units) {
   const step = DIAL_STEP[units] ?? DIAL_STEP.F;
@@ -178,6 +205,11 @@ export function buildRecommendationResult(fields) {
  * @param {Object} params.confidence - Confidence assessment from calculation service
  * @param {string|null} [params.projectionRefusedReason] - Why the projection was
  *   refused, if it was. See predictTimeToTarget.
+ * @param {boolean} [params.stallExplains] - Whether the stall explains this
+ *   slowdown: the cut stalls AND the roast is in the stall band. See
+ *   thermalModel.stallExplainsSlowdown - the cut alone is not enough. Changes ONE
+ *   sentence and no arithmetic; defaulted false so every existing caller keeps
+ *   today's wording.
  * @returns {{canRecommend: boolean, blockerReason: string|null, blockerType: string|null, progress: Object|null}}
  */
 export function checkRecommendationEligibility({
@@ -187,6 +219,7 @@ export function checkRecommendationEligibility({
   settings,
   confidence,
   projectionRefusedReason = null,
+  stallExplains = false,
   now = new Date().toISOString()
 }) {
   // Check minimum readings requirement
@@ -315,8 +348,11 @@ export function checkRecommendationEligibility({
   if (projectionRefusedReason) {
     return {
       canRecommend: false,
-      blockerReason: PROJECTION_REFUSAL_REASONS[projectionRefusedReason]
-        ?? PROJECTION_REFUSAL_REASONS.default,
+      // The one code whose wording varies. Same code either way.
+      blockerReason: (projectionRefusedReason === 'rate-disagrees' && stallExplains)
+        ? STALL_REFUSAL_REASON
+        : PROJECTION_REFUSAL_REASONS[projectionRefusedReason]
+          ?? PROJECTION_REFUSAL_REASONS.default,
       blockerType: 'no_projection',
       // The specific cause, so the UI can offer the right control - "raise the
       // oven" for `unreachable` is a very different suggestion from "wait".
@@ -1248,6 +1284,10 @@ export function reconcileWithOvenChange({
  * @param {string|null} [params.projectionRefusedReason] - Why there is no
  *   projection, if there is none
  * @param {'F'|'C'} [params.displayUnits] - Unit the user's oven dial is marked in
+ * @param {boolean} [params.stallExplains] - Whether the stall explains this
+ *   slowdown - the cut stalls AND the roast is in the band. Copy only: it selects
+ *   which sentence a 'rate-disagrees' refusal reads as, and touches nothing the
+ *   app computes.
  * @returns {Recommendation}
  */
 export function generateRecommendation({
@@ -1264,6 +1304,7 @@ export function generateRecommendation({
   currentRate,
   projectionRefusedReason = null,
   displayUnits = 'F',
+  stallExplains = false,
   now = new Date().toISOString()
 }) {
   const latestReading = readings.length > 0 ? readings[readings.length - 1] : null;
@@ -1335,6 +1376,7 @@ export function generateRecommendation({
     settings,
     confidence,
     projectionRefusedReason,
+    stallExplains,
     now
   });
   

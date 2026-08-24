@@ -1,6 +1,7 @@
 # Phase 8 — Measured inputs
 
-**Status:** requirements only. Nothing here is built.
+**Status:** BUILT. R1–R9 are implemented; A1–A8 hold. See "How it was built" below
+for the four decisions taken and the three corrections to this document.
 
 Ask for everything about the roast and the oven that the thermal model or the
 simulator parameterises, once, at the start of a cook — and put all of it in the
@@ -463,32 +464,148 @@ Not optional, and not "tests exist" — these specific properties:
 
 ---
 
-## Open questions for whoever builds this
+## Open questions, and how they were answered
 
-1. **Thickness of a bone-in roast** — through the meat, or including the bone? Bone
-   conducts differently and the model has no term for it. Recommend measuring the
-   meat and letting the residual carry the rest; state the choice in the helper text
-   so two cooks measure the same thing.
-2. **Where thickness lives in the form.** It belongs next to Weight, but that
-   section already holds Type, Cut, Weight and a unit toggle. Worth a look at
-   320 px before committing to a layout — `StatusCards` has twice ruled against
-   crowding at that width.
-3. **Whether to show the derived prior back to the cook.** Tempting, and probably
-   not: it is an internal constant, and the app deliberately shows interpretation
-   (`confidence`) rather than raw fit output. Leave it out unless there is a reason.
-4. **Whether one thickness is enough for a tapered roast.** A leg of lamb is not a
-   cylinder. Probably yes, with the residual absorbing it — but this is the kind of
-   question one real cook answers and no amount of reasoning does.
-5. **Poultry — a whole separate decision, not a preset.** A bird is a shell around
-   a cavity, so a solid-body cascade is a poor description of it, and the food-safety
-   floor the pause logic rests on is red-meat reasoning at 140 °F. If poultry is
-   wanted, it needs its own thinking about both, and probably its own safety floor.
-   Until then, leaving it out of the presets is more honest than a shape factor that
-   implies the model understands it.
-6. **Should `ovenIsFanForced` be per-oven or per-cook?** Specified as per-oven in
-   R7.1 on the grounds that people own one oven. A cook who roasts at someone
-   else's house would disagree. A remembered default with a per-cook override is
-   the likely answer; confirm before building.
+1. **Thickness of a bone-in roast** — *answered:* through the **meat**, stated in
+   the helper text ("Measure through the meat, not the bone") so two cooks measure
+   the same thing. The residual carries the rest.
+2. **Where thickness lives in the form** — *answered:* behind a **collapsed
+   disclosure** in `The roast`, labelled "Measurements — optional", reusing the
+   `showMeatDetails` pattern. Collapsed by default is what makes A8 literally true
+   rather than merely intended, and it keeps the 320 px layout `StatusCards` has
+   twice ruled on. The oven's character got the same treatment in `Oven`.
+3. **Whether to show the derived prior back to the cook** — *answered:* no. Not
+   built. The app shows interpretation, not raw fit output.
+4. **Whether one thickness is enough for a tapered roast** — *still open*, and
+   deliberately: it is a question one real cook answers and no amount of reasoning
+   does. `lengthCm` is captured so that cook's data can be used on it.
+5. **Poultry** — *still open, and out of scope*, for the reasons stated. No preset,
+   no shape factor, and the `MIN_CORE_FOR_OVEN_OFF_F = 140` safety floor is
+   untouched red-meat reasoning that a bird would need revisited.
+6. **Per-oven or per-cook `ovenIsFanForced`** — *answered:* **both**, confirmed with
+   the user. `settings.ovenIsFanForced` is the remembered default, reached through
+   `useSession.preferredOvenIsFanForced` / `rememberOvenIsFanForced`;
+   `config.ovenIsFanForced` records what was true of *that* cook and is what the
+   export states. A cook roasting at someone else's house would otherwise export a
+   lie about their own oven, and A7 depends on the file being true.
+
+---
+
+## How it was built
+
+### Four decisions taken
+
+| question | decision |
+|---|---|
+| Scope | All of R1–R9, in one pass |
+| `ovenIsFanForced` | Remembered default **plus** per-cook record — see open question 6 |
+| cm/in preference (R4) | A **device preference** (`rstt_length_unit`, `storageService.loadLengthUnit`), mirroring `weightUnit`, rather than a `config.thicknessUnit`. A cook who thinks in centimetres thinks in centimetres for every roast; it is not a property of one roast, and the form needs it before any session exists. Confirmed with the user |
+| Form layout | Collapsed-by-default disclosures — see open question 2 |
+
+One further deviation, decided while building: **lengths are exported in canonical
+centimetres with a literal `cm`**, not converted to the display preference. R9 asks
+for "a length converter"; the intent of that instruction is *do not reuse
+`csvTemp`/`csvDelta` on an absolute length*, which this satisfies by needing no
+converter at all. It matches the established Weight row, which exports raw pounds
+with a `lbs` literal — and a file that always states centimetres serves A7 better
+than one whose units depend on a preference the file does not record. The length
+converter is still needed, and exists, for the UI.
+
+### Three corrections to this document
+
+1. **`BIOT = 8` and `ALPHA_CM2_PER_MIN` are not in the app.** They exist only in
+   `tools/oracle/conductionModel.js`. The app's runtime model
+   (`src/services/thermalModel.js`) is a lumped cascade with no Biot number and no
+   diffusivity term at all, so R7's framing ("the first stage of the cascade")
+   describes the *oracle*. This does not change R7, which is capture-export-do-not-
+   consume (R7.4) — but do not go looking for `BIOT` in `src/`.
+2. **The carryover/wrong-converter bug was already fixed** before this phase, at
+   `exportService.js` with regression tests beside it. R4 and R9 cite it as a
+   *precedent* for the class of error, not as outstanding work.
+3. **A6 was mostly already done.** `calibration-cook.md` had already retired
+   fridge-out time in favour of the starting reading and already asked for the
+   shortest cross-section in centimetres; `next-cook-handover.md` already assumed
+   this phase existed. The remaining doc work was narrow: the "app never writes that
+   field / record it on paper" paragraph, and the "if Phase 8 was never built"
+   fallback.
+
+### One trap worth stating
+
+**`AMBIENT_F = 70` *is* consumed by the runtime model** — the oven cool-down and
+`steadyStateF` both read it. R7.3 adds `config.ambientF` and R7.4 forbids consuming
+it, and that separation is load-bearing: wiring a measured kitchen temperature
+through would move the `07-pause-and-restart` and `13-oven-off-danger-zone`
+baselines and break A4. Captured; `AMBIENT_F` left alone.
+
+### Where the properties are asserted
+
+- `src/services/thermalModel.test.js` — `kPrior` is **bit-identical** to the old
+  weight-and-shape rule across every cut and 1–40 lb; the thickness path reproduces
+  R1.1's table; the shape factor is not double-counted; `expectsStall` is keyed the
+  way the config stores meat types.
+- `src/services/measuredInputs.test.js` — A4 at the unit level, against the **one
+  real cook** rather than a synthetic pair: length, covering, kitchen temperature,
+  fan, cut and per-reading `ovenActualF` are all inert, `thicknessCm` is the one
+  field that acts, and everything round-trips through save, load, export and
+  reimport in both unit systems.
+- `src/components/AddReadingModal.test.js` — the oven field is **never prefilled**,
+  and cannot block an ordinary save.
+- `src/utils/validationUtils.test.js` — every bound in both directions, the happy
+  path included, and the cross-field rule that a roast cannot be shorter than it is
+  thick.
+- `tools/sim/calibrate.test.js` — `sim:calibrate` fits a cook built through the real
+  `useSession` path and serialised by the real `exportToJSON`, with the oven
+  readings demonstrably reaching the objective (A3). The local reimplementation of
+  `timeline()` that dropped `ovenActualF` and filtered oven-off events is gone; the
+  production one is imported.
+- `tools/oracle/conductionModel.test.js` — `REFERENCE_RADIUS_CM` still equals
+  `radiusForWeightCm(6, 'cylinder')`, so the pinned literal cannot drift.
+- `tools/sim/appAgreement.test.js` — the app's `STALL_BAND_F` and
+  `STALLING_MEAT_TYPES` agree with the harness's `STALL_BAND_F` and `CUTS[*].stalls`,
+  in both directions.
+- `npm run sim` — 16 cooks, **no baseline moved**, no re-baselining performed.
+
+### What an adversarial review changed
+
+The implementation was reviewed by five independent readers — one each on A4
+neutrality, unit conversion, the data model, the two components, and whether the new
+tests could fail — with every finding then put to two skeptics, one asked to refute it
+and one to reproduce it. Nine defects survived. All nine are fixed; none of the fixes
+moved `tools/sim/baseline.json`.
+
+The two that mattered were both in R8, the part of this phase with the least
+arithmetic in it:
+
+1. **The stall sentence had no temperature condition.** `assessRateAgreement` has no
+   core-temperature term — it fires whenever the observed rate falls far enough below
+   the modelled one — so keyed on the cut alone, a shoulder whose probe had worked its
+   way out of the thickest part was told at 101 °F that it was in a 150–165 °F stall.
+   The sentence was falsified by the reading beside it, and it inverted the advice in
+   exactly the case the generic wording exists to cover. Fixed by
+   `thermalModel.stallExplainsSlowdown(meatType, coreF)`, which requires the cut *and*
+   the band, and which both copy sites now share so they cannot drift.
+2. **R8's entire user-visible deliverable had no test that could fail.** The test that
+   read as its coverage asserted only `typeof confidenceCode === 'string'`. Worse, the
+   helper it used passed `confidence.code` where `projectionRefusedReason` belongs — so
+   every arm of every test in that file compared the same generic "no projection"
+   blocker, and no wording difference could have shown up anywhere. Both copy sites
+   could be disabled with the whole suite green. Fixed with a synthetic stalling
+   shoulder driven through the real services, plus a Celsius `{stallBand}` assertion;
+   every new assertion was then mutation-tested.
+
+The rest: two ranges the form offered and the validator then refused (the length
+steppers' ceilings, and a kitchen temperature reachable only through the unit toggle);
+a non-consumption test that passed by construction because its helper never forwarded
+the four fields it claimed to guard; a blank oven-thermometer field that became a
+plausible `100 °F` on one stray tap, which is the one thing that field must not do; a
+second cache of `ovenIsFanForced` that desynced when the settings panel wrote it; a
+comment naming the wrong test file; and a missing `aria-pressed` on the fan-forced
+control.
+
+Worth recording for whoever reads this next: **the vacuous tests were not found by
+running the suite.** They were found by breaking the production code and watching the
+suite stay green. Any future claim that a behaviour here is covered should be checked
+the same way.
 
 ---
 

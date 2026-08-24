@@ -70,6 +70,26 @@
  * including it would only give the optimiser noise to chase.
  *
  * ---
+ * WHAT THE STARTING READING STATES, AND WHAT IT DOES NOT
+ *
+ * The first reading pins Tc(0), and the fit assumes Ts(0) = Tc(0) - a roast at
+ * uniform temperature throughout. So a roast that sat on the bench for two hours
+ * is indistinguishable, to this model, from one straight out of the fridge at the
+ * same core: the bench roast's surface is already warm, its shell node starts
+ * ahead of where the model puts it, and the first stretch of the climb is
+ * therefore under-predicted.
+ *
+ * That is second order and it is self-correcting - the residuals carry it, the
+ * fitted k absorbs what is left, and the extreme case (a core already well up
+ * before the oven has done anything) is what WARM_START_THRESHOLD_F is for.
+ *
+ * SO THERE IS NO FIELD FOR IT. A "how long was it out of the fridge" input would
+ * be a required-feeling question whose answer the model has nowhere to put, and
+ * asking it would imply a gradient term that does not exist. What buys the
+ * accuracy is the starting reading itself: with one, the projection starts from a
+ * known state instead of an assumed one.
+ *
+ * ---
  * CLOSED FORM, NOT EULER
  *
  * Every segment between two events is integrated exactly. With Tset constant
@@ -101,11 +121,37 @@ export const K_REFERENCE = 0.010991;
 /** Weight the reference constant belongs to, in pounds. */
 export const REFERENCE_WEIGHT_LB = 6;
 
+/**
+ * Radius of the reference roast, cm. This is radiusForWeightCm(6, 'cylinder')
+ * from tools/oracle/conductionModel.js, evaluated once and pinned here so the
+ * app never imports from tools/. Derivation:
+ *   (6 lb x 453.592 g/lb) / 1.05 g/cm3 = 2591.95 cm3, and for a cylinder of
+ *   length 1.5 diameters, volume = pi*r^2*(3r), so r = cbrt(V / 3pi).
+ * Seven significant figures, because the cross-check in
+ * tools/oracle/conductionModel.test.js asserts this constant still matches
+ * radiusForWeightCm to six decimal places - and a pinned constant nothing checks
+ * is a constant that drifts. This one has moved before: the oracle's aspect ratio
+ * was 4.0 until commit 60cddf6, which put the reference radius at 4.69 cm and
+ * made every accuracy figure it certifies wrong by about 2x.
+ */
+export const REFERENCE_RADIUS_CM = 6.5030746;
+
+/** Thickness bounds, cm. Clamp for use; never reject a measurement. */
+export const PRIOR_THICKNESS_BOUNDS = { minCm: 2, maxCm: 30 };
+
 /** Oven time constants, minutes. Fixed, never fitted. */
 export const TAU_OVEN_HEAT_MIN = 10;
 export const TAU_OVEN_COOL_MIN = 45;
 
-/** Kitchen temperature an oven with the element off decays towards, °F. */
+/**
+ * Kitchen temperature an oven with the element off decays towards, °F.
+ *
+ * ASSUMED, and deliberately still assumed. `config.ambientF` now records what the
+ * kitchen actually was, but nothing reads it: this constant is consumed by the
+ * oven cool-down and by steadyStateF, so wiring a measurement through would move
+ * the pause and oven-off projections of every existing cook. Captured for the
+ * offline fitter; left alone here until a cook exists that can justify the change.
+ */
 export const AMBIENT_F = 70;
 
 /**
@@ -120,6 +166,76 @@ export const SHAPE_FACTORS = {
   'pork shoulder': 0.85,
   'leg of lamb': 1.1
 };
+
+/**
+ * The stall, as something the app can NAME rather than model.
+ *
+ * A pork shoulder giving up moisture through 150-165 F genuinely stops following
+ * a single heating curve, because evaporation takes heat this model has no term
+ * for. assessRateAgreement already catches it and withholds timing advice, which
+ * is the correct behaviour; what it could not do was say WHY, so an expected
+ * stall and a probe that has slipped out of the thickest part read identically on
+ * screen.
+ *
+ * These two constants change no arithmetic. They decide which sentence the cook
+ * reads. A stall TERM in the model is much larger work and needs the endgame data
+ * a real instrumented cook produces - see Docs/calibration-cook.md.
+ */
+
+/** Stall band, °F. Mirrors STALL_BAND_F in tools/sim/meatModel.js. */
+export const STALL_BAND_F = [150, 165];
+
+/**
+ * Meat types whose cuts are known to stall. Mirrors CUTS[*].stalls.
+ *
+ * Keyed by the lowercased display string, because SHAPE_FACTORS above already is
+ * - the session config records "Pork Shoulder", while the sim keys its cuts by
+ * slug ('pork-shoulder'). A sim test asserts the two agree.
+ */
+export const STALLING_MEAT_TYPES = { 'pork shoulder': true };
+
+/**
+ * Does a cut of this type stall?
+ *
+ * @param {string|null} meatType - As the session config records it
+ * @returns {boolean}
+ */
+export function expectsStall(meatType) {
+  return STALLING_MEAT_TYPES[String(meatType ?? '').trim().toLowerCase()] === true;
+}
+
+/**
+ * Does the stall explain the slowdown on THIS roast, right now?
+ *
+ * THE CUT IS NOT ENOUGH, and getting that wrong is worse than saying nothing.
+ * assessRateAgreement has no temperature term at all - it fires whenever the
+ * observed rate falls far enough below the modelled one, which on a shoulder
+ * happens just as readily at 100 °F as at 155 °F. Keyed on the cut alone, the app
+ * told a cook reading 101 °F "this is the stall - normal for a shoulder around
+ * 150-165 °F": a specific claim about a band the roast was fifty degrees below,
+ * contradicted by the number on the same screen. Worse, it inverted the advice in
+ * exactly the case the generic wording exists to cover - a probe that has worked
+ * its way out of the thickest part reads as a slowdown too, and that one wants
+ * checking rather than waiting out.
+ *
+ * THE BAND, AND NOTHING WIDER. No margin is invented at either edge: the wording
+ * quotes 150-165 °F, so it is shown when the roast is in 150-165 °F and not
+ * otherwise. The upper bound matters as much as the lower - past the band a
+ * shoulder's moisture loss is largely done and a slowdown is the ordinary approach
+ * to the oven temperature, so "this is the stall" would be false there too. A
+ * roast a degree outside gets the generic sentence, which is less specific but
+ * never wrong, and which suggests checking the probe - advice that costs nothing
+ * if the stall is what is really happening.
+ *
+ * @param {string|null} meatType - As the session config records it
+ * @param {number|null} coreF - The latest reading, in Fahrenheit
+ * @returns {boolean}
+ */
+export function stallExplainsSlowdown(meatType, coreF) {
+  if (!expectsStall(meatType)) return false;
+  if (!Number.isFinite(coreF)) return false;
+  return coreF >= STALL_BAND_F[0] && coreF <= STALL_BAND_F[1];
+}
 
 /**
  * Weight to clamp the prior's weight into, in pounds.
@@ -154,17 +270,47 @@ export const PRIOR_LAMBDA = 0.05;
 export const NOISE_FLOOR_F = 1.6;
 
 /**
- * Expected k for a roast of this weight and shape.
+ * Expected k for a roast of this weight and shape, or of this measured thickness.
  *
  * The constants scale with how far heat has to travel, which is a length, so they
  * go as weight^(-2/3) for a fixed shape.
  *
+ * A MEASURED THICKNESS WINS, when there is one. Weight is a proxy for that
+ * length, and SHAPE_FACTORS is a correction for the proxy being wrong in a way
+ * that depends on the cut. A tape measure states the length outright, so both the
+ * proxy and its correction drop out - the two paths agree exactly at the
+ * reference geometry, and where they disagree it is the tape measure that is
+ * right. The equivalence is algebra rather than tolerance: radiusForWeightCm
+ * scales as w^(1/3), so (r_ref/r)^2 and (w_ref/w)^(2/3) are the same expression.
+ *
+ * lengthCm is deliberately NOT a parameter. The model is a lumped cascade with a
+ * single length in it, so an aspect ratio would imply a spatial model it does not
+ * have. Length is recorded and exported so the oracle's assumed 1.5-diameter
+ * proportion can one day become a measurement, which is a tools/ concern.
+ *
  * @param {Object} params
  * @param {number|null} [params.weightLb]
  * @param {string|null} [params.meatType]
+ * @param {number|null} [params.thicknessCm] - Shortest way through the meat,
+ *   measured. Takes precedence over weight when present.
+ * @param {string|null} [params.meatCut]
  * @returns {number} k in per-minute
  */
-export function kPrior({ weightLb = null, meatType = null } = {}) {
+export function kPrior({ weightLb = null, meatType = null, thicknessCm = null, meatCut = null } = {}) {
+  // meatCut is captured, exported, and deliberately not yet used: no cook has
+  // been measured that could justify a bone-in factor, and inventing one is the
+  // failure this whole line of work has been correcting. Present in the
+  // signature so a future calibration can test one without touching callers.
+  void meatCut;
+
+  if (Number.isFinite(thicknessCm)) {
+    const t = Math.min(PRIOR_THICKNESS_BOUNDS.maxCm, Math.max(PRIOR_THICKNESS_BOUNDS.minCm, thicknessCm));
+    // k ~ alpha / L^2, L being the conduction half-thickness. SHAPE_FACTORS
+    // exists only to approximate what this measurement states outright, so
+    // applying it here would double-count the shape.
+    return K_REFERENCE * (REFERENCE_RADIUS_CM / (t / 2)) ** 2;
+  }
+
   const shape = SHAPE_FACTORS[String(meatType ?? '').trim().toLowerCase()] ?? 1.0;
   const weight = Number.isFinite(weightLb)
     ? Math.min(PRIOR_WEIGHT_BOUNDS.maxLb, Math.max(PRIOR_WEIGHT_BOUNDS.minLb, weightLb))

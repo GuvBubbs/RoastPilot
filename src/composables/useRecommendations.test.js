@@ -180,3 +180,78 @@ describe('a cook that is genuinely running late', () => {
     expect(rec.suggestedTemp.value % 5).toBe(0);
   });
 });
+
+/**
+ * The stall band, rendered in the cook's own unit.
+ *
+ * STALL_REFUSAL_REASON carries a `{stallBand}` placeholder rather than a
+ * "150–165 °F" literal, and blockerReason is routed through useRecommendations'
+ * substitute() so it resolves. The `rendered-text` invariant in
+ * tools/sim/invariants.js checks that field for exactly two failures - an
+ * unsubstituted placeholder, and a Fahrenheit temperature shown to a Celsius cook -
+ * but no cook on the simulated deck ever reaches a rate disagreement, so neither
+ * half of that check has ever seen this sentence. It is asserted here instead.
+ */
+describe('a stalling shoulder, in each unit', () => {
+  let session;
+  let rec;
+
+  /**
+   * A shoulder whose readings flatten inside the stall band. The plateau has to be
+   * real - assessRateAgreement compares the observed slope against the model's, and
+   * the whole sentence is unreachable until it disagrees.
+   */
+  function stalling(units) {
+    localStorage.clear();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(at(20)));
+
+    session = useSession();
+    session.startSession({
+      units,
+      meatType: 'Pork Shoulder',
+      weight: 9,
+      pullTempF: 203,
+      servingTempF: 203,
+      carryoverF: 0,
+      restMinutes: 30,
+      initialOvenTemp: 250,
+      desiredServeTime: at(23)
+    });
+
+    const F = [45, 90, 130, 151, 154, 155, 155.2, 155.4];
+    F.forEach((tempF, i) => {
+      const shown = units === 'C' ? Math.round(((tempF - 32) * 5 / 9) * 10) / 10 : tempF;
+      session.addReading(shown, at(13 + i));
+    });
+
+    rec = useRecommendations();
+    return rec;
+  }
+
+  afterEach(() => {
+    session?.endSession();
+    vi.useRealTimers();
+    localStorage.clear();
+  });
+
+  it('names the stall and its band in Fahrenheit', () => {
+    const r = stalling('F');
+    // The guard: without the refusal there is no sentence to check.
+    expect(r.blockerType.value).toBe('no_projection');
+    expect(r.blockerReason.value).toMatch(/this is the stall/i);
+    expect(r.blockerReason.value).toContain('150–165°F');
+    expect(r.blockerReason.value).not.toContain('{stallBand}');
+  });
+
+  it('converts the band for a Celsius cook, rather than showing Fahrenheit', () => {
+    const r = stalling('C');
+    expect(r.blockerType.value).toBe('no_projection');
+    expect(r.blockerReason.value).toMatch(/this is the stall/i);
+    // 150-165 °F is 66-74 °C. A band left in °F here is the exact failure the
+    // rendered-text invariant's second half was written for.
+    expect(r.blockerReason.value).toContain('66–74°C');
+    expect(r.blockerReason.value).not.toMatch(/°\s?F/);
+    expect(r.blockerReason.value).not.toContain('{stallBand}');
+  });
+});

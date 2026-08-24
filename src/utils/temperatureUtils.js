@@ -191,3 +191,55 @@ export function weightToStorage(value, unit) {
   if (!Number.isFinite(value)) return null;
   return unit === 'kg' ? Math.round(kgToLb(value) * 100) / 100 : value;
 }
+
+/**
+ * Length conversion.
+ *
+ * Stored canonically in CENTIMETRES, because the conduction length in the
+ * thermal prior is expressed in cm and because the oracle's geometry is. The
+ * display unit is a separate, standing preference, exactly as weight's is: a cook
+ * who thinks in inches thinks in inches for every roast, so it belongs to the
+ * device rather than to the session.
+ *
+ * (This file is named for temperature and already houses weight. The precedent is
+ * the file's, not this block's.)
+ */
+export const CM_PER_IN = 2.54;
+
+/** @param {number} inches @returns {number} centimetres */
+export function inToCm(inches) {
+  return inches * CM_PER_IN;
+}
+
+/** @param {number} cm @returns {number} inches */
+export function cmToIn(cm) {
+  return cm / CM_PER_IN;
+}
+
+/**
+ * A stored centimetre length in the unit being displayed.
+ *
+ * One decimal place in both units: 0.1 in is 0.25 cm, so unlike the weight pair
+ * there is no resolution to lose either way at this precision - a roast measured
+ * to a tenth of an inch is measured more finely than the measurement deserves.
+ *
+ * @param {number|null} cm
+ * @param {'cm'|'in'} unit
+ * @returns {number|null}
+ */
+export function lengthToDisplay(cm, unit) {
+  if (!Number.isFinite(cm)) return null;
+  return unit === 'in' ? Math.round(cmToIn(cm) * 10) / 10 : Math.round(cm * 10) / 10;
+}
+
+/**
+ * A displayed length back to canonical centimetres.
+ *
+ * @param {number|null} value
+ * @param {'cm'|'in'} unit
+ * @returns {number|null}
+ */
+export function lengthToStorage(value, unit) {
+  if (!Number.isFinite(value)) return null;
+  return unit === 'in' ? Math.round(inToCm(value) * 100) / 100 : value;
+}

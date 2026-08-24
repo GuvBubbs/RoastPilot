@@ -12,13 +12,10 @@ Read the first half before the cook. Hand the second half to the new chat.
 
 # Part 1 — What to bring back
 
-**This assumes Phase 8 has been built** — see
-`Docs/Development Plan/PHASE_8_MEASURED_INPUTS.md`. Under Phase 8 everything the
-model needs is an app field, asked once at setup, and it all lands in the export.
-There is no clipboard.
-
-If Phase 8 has *not* been built when you cook, see **the fallback** at the end of
-this part. Check before you start; it is one `git log` away.
+**Phase 8 is built** — see `Docs/Development Plan/PHASE_8_MEASURED_INPUTS.md`.
+Everything the model needs is an app field: the dimensions and the oven's character
+asked once at setup, the oven thermometer optional on every reading, and all of it
+in the export. There is no clipboard and no paper step.
 
 ## Fill in the setup form completely — that is the whole job
 
@@ -34,7 +31,7 @@ roast goes in.
 | **Length** | Free while the tape measure is out. Corrects the independent oracle's assumed 1.5-diameter aspect ratio — it does not touch the app's own projection. |
 | **Starting reading** | Becomes `readings[0]`, so the projection starts from a measured state rather than an assumed one. |
 | **Starting oven setting** | Already required. |
-| **Fan-forced or conventional** | Remembered per oven, so once ever. `BIOT = 8` is hardcoded as "natural convection" and a fan oven is not that. |
+| **Fan-forced or conventional** | Remembered per oven, so asked once ever — and recorded per cook, so a roast at someone else's house does not export a lie. The oracle's `BIOT = 8` is hardcoded as "natural convection" and a fan oven is not that. |
 | **Covered / foil / open** | A lidded pot is a different thermal problem from an open tray. |
 | **Kitchen ambient**, if it is unusual | Matters mostly for the rest, which is where carryover comes from. A rest in a 12 °C kitchen is not a rest in a 24 °C one. Skip it if the kitchen is ordinary. |
 | **Notes** | Anything odd. Free text, comes through in the export. |
@@ -108,21 +105,6 @@ automatically.
 whenever you get to it.** Just do not start the *session* late — that is the case
 that is still an approximation.
 
-## The fallback, if Phase 8 was never built
-
-Everything above still applies except that four of the inputs have nowhere to live.
-Write these down and hand them over as a separate note:
-
-- **Oven-thermometer readings**, as `time → temperature` pairs. `calibrate.js`
-  already reads an `ovenActualF` field off each reading and weights it at 0.25; the
-  app just never writes it, so the values have to be merged into the JSON by hand
-  afterwards.
-- **Thickness and length in cm.**
-- **Fan-forced or conventional, and whether it was covered.**
-
-Weight, cut, type and the starting reading are app fields today, so those go in the
-app either way.
-
 # Part 2 — Context for the new chat
 
 Everything below is for the session that receives the data. It is written to be
@@ -177,10 +159,24 @@ data, and a `null` weight.
 | `cycleAmplitudeF` = 10.8 | `meatModel.js` | **assumed** |
 | `evapMaxF` = 0.42 | same | **explicitly fabricated**; the reference cook never reaches the stall band |
 | carryover +3 → +8 °F | `src/services/carryoverService.js` | **a visible placeholder**, never measured |
-| oracle aspect ratio 1.5 | `tools/oracle/conductionModel.js` | assumed from what a rib roast measures — `config.lengthCm` is what replaces it |
-| `BIOT` = 8 | same | **assumed**, and documented as "natural convection" — a fan oven is not that |
-| bone-in coefficient | — | **none**; `meatCut` is captured and exported and reaches no physics by design |
-| stall term | — | **none in the app at all**; the rate-agreement gate discovers a stall reactively each cook |
+| oracle aspect ratio 1.5 | `tools/oracle/conductionModel.js` | assumed from what a rib roast measures — `config.lengthCm` is now **captured**, and is what replaces it |
+| `BIOT` = 8 | same | **assumed**, and documented as "natural convection" — a fan oven is not that. `config.ovenIsFanForced` is now **captured**, and applied to nothing. Note it is an *oracle* constant: `src/` has no Biot number and no diffusivity term, because the app's model is a lumped cascade |
+| `AMBIENT_F` = 70 | `src/services/thermalModel.js` | **assumed, and still consumed** — the oven cool-down and `steadyStateF` read it. `config.ambientF` is **captured** and deliberately not wired in: doing so would move the pause and oven-off projections of cooks already running |
+| bone-in coefficient | — | **none**; `meatCut` is captured and exported and reaches no physics by design. It is now a `kPrior` parameter so one can be tested without touching a caller |
+| covering coefficient | — | **none**; `config.covering` is **captured** and applied to nothing |
+| stall term | — | **none in the app at all**; the rate-agreement gate discovers a stall reactively each cook. Phase 8 added COPY only: a refusal that names the stall, in the cook's own unit, when the cut is in `STALLING_MEAT_TYPES` **and** the latest reading is inside `STALL_BAND_F` — see `stallExplainsSlowdown`. Both conditions, because the rate gate has no temperature term and a shoulder at 101 °F trips it too. No arithmetic changed |
+
+**Captured, in that table, means: in the export, and reaching no coefficient.**
+That is the point rather than an omission — there is no measured cook that could
+justify a number for any of them, and inventing one is the failure this whole line
+of work has been correcting. What the fields buy is that the *next* fit can be
+interpreted: a fitted `k` from a fan-forced covered 13 cm roast and one from an open
+conventional 20 cm roast are not the same measurement.
+
+The one measured input that DOES act is `config.thicknessCm`. It replaces the
+weight-and-shape estimate of the conduction length in `kPrior`, exactly (the two
+agree at the reference geometry as algebra, not as a tolerance) — so a tape measure
+supersedes a proxy rather than being averaged with it.
 
 ## The numbers as they stand — the before picture
 
@@ -221,8 +217,9 @@ Oven-thermometer values should already be on the readings as `ovenActualF`, whic
 { "temp": 91.9, "timestamp": "2026-08-22T03:27:00.000Z", "ovenActualF": 244 }
 ```
 
-If they are on paper instead — Phase 8 not built, or built after the cook — merge
-them onto the matching readings by timestamp before running the fit.
+If a reading has none, the field is `null` rather than missing — that is deliberate,
+so that "no thermometer on the shelf" and "written by a build that could not record
+it" are distinguishable. `calibrate.js` skips a null and counts a number.
 
 **Check the new config fields before trusting a fitted `k`.** A fitted constant from
 a fan-forced covered cook and one from an open conventional cook are not the same

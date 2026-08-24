@@ -461,3 +461,75 @@ describe('useSession units preference', () => {
     expect(SESSION_DEFAULTS.UNITS).toBe('C');
   });
 });
+
+/**
+ * The remembered oven, which now has two writers.
+ *
+ * `preferredOvenIsFanForced` reads a module-level cache rather than
+ * `settings.ovenIsFanForced`, because that computed falls back to
+ * createDefaultSettings() when no session exists - so between cooks it would answer
+ * `false` whatever the cook had told it, and the setup sheet reads it before any
+ * session exists. Two caches of one value need both writers to keep them in step.
+ */
+describe('the remembered fan-forced oven', () => {
+  let session;
+
+  beforeEach(() => {
+    localStorage.clear();
+    session = useSession();
+  });
+
+  afterEach(() => {
+    session.endSession();
+    localStorage.clear();
+  });
+
+  it('defaults to a conventional oven when nothing has been said', () => {
+    expect(session.preferredOvenIsFanForced.value).toBe(false);
+  });
+
+  it('remembers a change made with no session running', () => {
+    // The one moment it is ever asked: during setup, before startSession. This is
+    // why it cannot go through updateSettings, which returns early without a session.
+    session.rememberOvenIsFanForced(true);
+
+    expect(session.preferredOvenIsFanForced.value).toBe(true);
+    expect(JSON.parse(localStorage.getItem(SETTINGS_KEY)).ovenIsFanForced).toBe(true);
+  });
+
+  it('seeds a new cook from it', () => {
+    session.rememberOvenIsFanForced(true);
+    session.startSession({ units: 'F', ovenIsFanForced: session.preferredOvenIsFanForced.value });
+
+    expect(session.config.value.ovenIsFanForced).toBe(true);
+    expect(session.settings.value.ovenIsFanForced).toBe(true);
+  });
+
+  it('stays in step when the settings panel writes it instead', () => {
+    /**
+     * THE DESYNC. SettingsPanel's "Reset defaults" Object.assigns
+     * createDefaultSettings() - which carries ovenIsFanForced: false - and saves the
+     * whole object through updateSettings. That writes storage and left the module
+     * cache alone, so storage said false while the next setup sheet in the same page
+     * load still seeded `true` from the stale cache, inside a collapsed fold where
+     * nothing showed it. It reaches no coefficient, but it is the flag the export
+     * uses to state which oven the cook was in.
+     */
+    session.rememberOvenIsFanForced(true);
+    session.startSession({ units: 'F' });
+
+    session.updateSettings({ ovenIsFanForced: false });
+
+    expect(session.preferredOvenIsFanForced.value).toBe(false);
+    expect(JSON.parse(localStorage.getItem(SETTINGS_KEY)).ovenIsFanForced).toBe(false);
+  });
+
+  it('is left alone by an unrelated settings change', () => {
+    session.rememberOvenIsFanForced(true);
+    session.startSession({ units: 'F' });
+
+    session.updateSettings({ onTrackThresholdMinutes: 15 });
+
+    expect(session.preferredOvenIsFanForced.value).toBe(true);
+  });
+});

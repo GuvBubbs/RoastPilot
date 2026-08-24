@@ -69,6 +69,62 @@ export function validateSessionConfig(config, units) {
     }
   }
   
+  /**
+   * The measured dimensions.
+   *
+   * ALWAYS CENTIMETRES, never converted here. Note the asymmetry above: the
+   * temperature fields arrive in display units and are converted, because they
+   * come straight off the form; `weight` arrives as canonical pounds and is
+   * checked as-is. Lengths follow weight, because the form converts them through
+   * lengthToStorage before submitting. Converting them a second time here would
+   * be the same class of bug as running carryover through the absolute
+   * temperature converter.
+   *
+   * Absent is VALID. Every field in this block is optional and nothing downstream
+   * requires it - see PHASE_8_MEASURED_INPUTS.md's A1.
+   *
+   * BOTH SCALES IN EVERY MESSAGE, like the temperature messages above. A cook
+   * measuring in inches sees a field whose suffix reads `in`, and a message quoting
+   * only centimetres cannot tell them whether the number they typed is the problem.
+   * The stepper ceilings in SessionSetupModal are derived from these same bounds -
+   * see lengthLimits there - so an in-range value can no longer be offered and then
+   * refused.
+   */
+  if (config.thicknessCm !== undefined && config.thicknessCm !== null) {
+    if (!Number.isFinite(config.thicknessCm) || config.thicknessCm < 2 || config.thicknessCm > 30) {
+      errors.thicknessCm = 'Thickness must be between 2 and 30 cm (0.8 and 11.8 in)';
+    }
+  }
+  
+  if (config.lengthCm !== undefined && config.lengthCm !== null) {
+    if (!Number.isFinite(config.lengthCm) || config.lengthCm < 3 || config.lengthCm > 100) {
+      errors.lengthCm = 'Length must be between 3 and 100 cm (1.2 and 39.4 in)';
+    } else if (Number.isFinite(config.thicknessCm) && config.lengthCm < config.thicknessCm) {
+      /**
+       * A roast cannot be shorter than it is thick, and this is the rule most
+       * likely to be lost. `validateSettings` carried exactly this class of
+       * cross-field check, was deleted as dead code, and its rule went unstated
+       * until someone noticed it missing - see the tombstone below.
+       *
+       * It also catches the realistic mistake: the two fields swapped.
+       */
+      errors.lengthCm = 'Length cannot be less than the thickness';
+    }
+  }
+  
+  if (config.covering !== undefined && config.covering !== null) {
+    if (!['open', 'foil', 'lid'].includes(config.covering)) {
+      errors.covering = 'Covering must be open, foil or lid';
+    }
+  }
+  
+  if (config.ambientF !== undefined && config.ambientF !== null) {
+    // Canonical °F, like weight and the lengths: the form converts on submit.
+    if (!Number.isFinite(config.ambientF) || config.ambientF < 32 || config.ambientF > 120) {
+      errors.ambientF = 'Kitchen temperature must be between 32°F and 120°F (0°C and 49°C)';
+    }
+  }
+  
   return {
     valid: Object.keys(errors).length === 0,
     errors

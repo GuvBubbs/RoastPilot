@@ -123,17 +123,22 @@ Three defects in `calibrate.js` would have corrupted the results, and are fixed:
 - it **fitted only two parameters** unconditionally, so a pause in the data could
   not have improved anything.
 
-It also now reads an `ovenActualF` field off each reading, if your export carries
-one, and fits the oven's own behaviour against it. **The app never writes that
-field** — there is no oven-temperature input anywhere in the UI — so the
-thermometer readings have to be recorded on paper and added to the JSON by hand
-afterwards.
+It also reads an `ovenActualF` field off each reading, if your export carries one,
+and fits the oven's own behaviour against it. **The app now writes that field.**
+Phase 8 added an optional "Oven thermometer" input to the Add reading sheet — blank
+by default and never prefilled, deliberately, since a field seeded with the dial
+setting would manufacture data indistinguishable from a measurement. So there is no
+paper step and no hand-editing: read the shelf thermometer when you log a
+temperature, type it in, and export at the end.
+
+The same is true of the dimensions, the covering, the kitchen temperature and
+whether the oven is fan-forced — all optional, all in the export, none of them
+applied to any coefficient (there is no measured cook that could justify one).
+`tools/sim/calibrate.test.js` builds a cook through the real app path, exports it,
+and fits the result, so "the CLI can read a file the app produced" is a test rather
+than a hope.
 
 ## Before the day, and after it
-
-`Docs/Development Plan/PHASE_8_MEASURED_INPUTS.md` specifies app fields for the
-oven thermometer and the dimensions, so that most of the paperwork here becomes
-typing. Check whether it has been built before you cook.
 
 `next-cook-handover.md` is the companion to this file: a checklist of what to bring
 back (including the three things the app cannot store), and a briefing for the chat

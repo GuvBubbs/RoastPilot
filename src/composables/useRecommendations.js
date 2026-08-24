@@ -7,6 +7,7 @@ import {
   assessOvenChangeEffect
 } from '../services/recommendationService.js';
 import { projectScheduleUnderOven } from '../services/calculationService.js';
+import { stallExplainsSlowdown, STALL_BAND_F } from '../services/thermalModel.js';
 import { toDisplayUnit, formatTemperature } from '../utils/temperatureUtils.js';
 
 export function useRecommendations() {
@@ -116,6 +117,17 @@ export function useRecommendations() {
       // The dial's markings depend on the unit on screen, so the service snaps
       // its suggestions in that unit rather than emitting 102°C.
       displayUnits: displayUnits.value,
+      // Copy only. Selects which sentence a 'rate-disagrees' refusal reads as -
+      // the stall, when the cut stalls AND the roast is in the band, or a slowdown
+      // worth investigating otherwise. Nothing the app computes depends on it.
+      //
+      // The LATEST reading, because that is the number on the screen beside the
+      // sentence: keyed on the cut alone, a shoulder at 101 °F was told it was in
+      // a 150-165 °F stall.
+      stallExplains: stallExplainsSlowdown(
+        config.value.meatType,
+        readings.value[readings.value.length - 1]?.temp ?? null
+      ),
       now: new Date().toISOString()
     });
   });
@@ -248,6 +260,21 @@ export function useRecommendations() {
       out = out.replace(/{waitMinutes}/g, raw.waitMinutes);
     }
     
+    /**
+     * The stall band, in the cook's own unit.
+     *
+     * A RANGE of absolute temperatures, so both ends take the 32-degree offset and
+     * neither is a delta - 150-165 °F is 66-74 °C, not 83-92. Whole degrees at
+     * both ends: the band is a description of where a shoulder tends to sit, not a
+     * threshold anything is compared against.
+     */
+    if (out.includes('{stallBand}')) {
+      const [lo, hi] = STALL_BAND_F.map(
+        (f) => Math.round(toDisplayUnit(f, displayUnits.value))
+      );
+      out = out.replace(/{stallBand}/g, `${lo}–${hi}°${displayUnits.value}`);
+    }
+    
     return out;
   }
   
@@ -264,7 +291,18 @@ export function useRecommendations() {
   /**
    * Reason why recommendation cannot be made
    */
-  const blockerReason = computed(() => rawRecommendation.value.blockerReason);
+  /**
+   * THROUGH substitute(), like every other string that reaches the screen.
+   *
+   * It was the one text field that was not, which was invisible for as long as no
+   * blocker reason carried a placeholder - and the stall wording needs one, because
+   * it names a temperature band and a Celsius cook must not be shown Fahrenheit.
+   * The `rendered-text` invariant checks this field for exactly both failures.
+   *
+   * A no-op for every other reason: substitute() leaves a string with no
+   * placeholders in it untouched, and returns null for null.
+   */
+  const blockerReason = computed(() => substitute(rawRecommendation.value.blockerReason));
   
   /**
    * Type of blocker for UI customization
