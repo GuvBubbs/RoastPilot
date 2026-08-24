@@ -172,6 +172,129 @@ describe('validateOvenTemp', () => {
   });
 });
 
+describe('validateSessionConfig, the measured inputs', () => {
+  /**
+   * BOTH DIRECTIONS, and the happy path matters more.
+   *
+   * A guard wired up with a wrong property name rejects everything and the build
+   * does not notice - that happened in SettingsPanel and was caught only because
+   * a test asserted the ordinary save still went through. So every bound below is
+   * checked against a value that must pass as well as one that must fail.
+   */
+  it('accepts a config that measures nothing at all', () => {
+    // A1: absent means unknown, and unknown is valid. This is the case for nearly
+    // every cook, because all of it sits behind a collapsed disclosure.
+    const result = validateSessionConfig(config(), 'F');
+    expect(result.errors).toEqual({});
+    expect(result.valid).toBe(true);
+  });
+
+  it('accepts a fully measured config', () => {
+    const result = validateSessionConfig(config({
+      thicknessCm: 13,
+      lengthCm: 20,
+      covering: 'foil',
+      ambientF: 68,
+      ovenIsFanForced: true
+    }), 'F');
+    expect(result.errors).toEqual({});
+    expect(result.valid).toBe(true);
+  });
+
+  it('accepts explicit nulls as readily as missing keys', () => {
+    const result = validateSessionConfig(config({
+      thicknessCm: null, lengthCm: null, covering: null, ambientF: null
+    }), 'F');
+    expect(result.errors).toEqual({});
+  });
+
+  it('bounds the thickness, and names the error after the config field', () => {
+    // The key has to be `thicknessCm`: SessionSetupModal maps validation error
+    // keys onto form fields by name and falls back to form.servingTemp on a miss,
+    // so a renamed key would land this message under the serving temperature.
+    expect(validateSessionConfig(config({ thicknessCm: 1.9 }), 'F').errors)
+      .toHaveProperty('thicknessCm');
+    expect(validateSessionConfig(config({ thicknessCm: 31 }), 'F').errors)
+      .toHaveProperty('thicknessCm');
+    expect(validateSessionConfig(config({ thicknessCm: 'thick' }), 'F').errors)
+      .toHaveProperty('thicknessCm');
+    // And the ends of the range are inside it.
+    expect(validateSessionConfig(config({ thicknessCm: 2 }), 'F').errors).toEqual({});
+    expect(validateSessionConfig(config({ thicknessCm: 30, lengthCm: 30 }), 'F').errors)
+      .toEqual({});
+  });
+
+  it('bounds the length', () => {
+    expect(validateSessionConfig(config({ lengthCm: 2 }), 'F').errors)
+      .toHaveProperty('lengthCm');
+    expect(validateSessionConfig(config({ lengthCm: 101 }), 'F').errors)
+      .toHaveProperty('lengthCm');
+    expect(validateSessionConfig(config({ lengthCm: 3 }), 'F').errors).toEqual({});
+    expect(validateSessionConfig(config({ lengthCm: 100 }), 'F').errors).toEqual({});
+  });
+
+  it('refuses a roast shorter than it is thick', () => {
+    /**
+     * The cross-field rule, which is the class most easily lost: validateSettings
+     * carried one, was deleted as dead code, and its rule went unstated until
+     * someone noticed it missing. It also catches the realistic mistake, which is
+     * the two fields entered the wrong way round.
+     */
+    expect(validateSessionConfig(config({ thicknessCm: 20, lengthCm: 12 }), 'F').errors)
+      .toHaveProperty('lengthCm');
+    // Equal is fine - a cube of a roast is odd, not impossible.
+    expect(validateSessionConfig(config({ thicknessCm: 15, lengthCm: 15 }), 'F').errors)
+      .toEqual({});
+  });
+
+  it('treats the lengths as centimetres in both unit systems', () => {
+    /**
+     * NEVER CONVERTED HERE. Note the asymmetry this file already documents: the
+     * temperature fields arrive in display units and are converted, `weight`
+     * arrives as canonical pounds and is not. The lengths follow weight, because
+     * SessionSetupModal runs them through lengthToStorage before submitting.
+     * Converting them again would be the carryover/wrong-converter bug in a new
+     * place.
+     */
+    // 13 cm is a valid thickness whatever the temperature scale on screen. Read
+    // as inches it would be 33 cm and refused; read as °C-to-°F it would be 55.
+    const measured = config({ thicknessCm: 13, lengthCm: 20 });
+    for (const units of ['F', 'C']) {
+      const { errors } = validateSessionConfig(measured, units);
+      expect(errors, units).not.toHaveProperty('thicknessCm');
+      expect(errors, units).not.toHaveProperty('lengthCm');
+    }
+    // And the bound bites identically in both.
+    for (const units of ['F', 'C']) {
+      const { errors } = validateSessionConfig(config({ thicknessCm: 40, lengthCm: 50 }), units);
+      expect(errors, units).toHaveProperty('thicknessCm');
+    }
+  });
+
+  it('allows only the three coverings it knows', () => {
+    for (const covering of ['open', 'foil', 'lid']) {
+      expect(validateSessionConfig(config({ covering }), 'F').errors, covering).toEqual({});
+    }
+    expect(validateSessionConfig(config({ covering: 'cling film' }), 'F').errors)
+      .toHaveProperty('covering');
+  });
+
+  it('bounds the kitchen temperature', () => {
+    expect(validateSessionConfig(config({ ambientF: 70 }), 'F').errors).toEqual({});
+    expect(validateSessionConfig(config({ ambientF: 31 }), 'F').errors)
+      .toHaveProperty('ambientF');
+    expect(validateSessionConfig(config({ ambientF: 121 }), 'F').errors)
+      .toHaveProperty('ambientF');
+  });
+
+  it('does not care what the oven is, only that it was stated', () => {
+    // Captured, exported, and applied to nothing - so there is no bound to check
+    // and neither answer may be refused.
+    expect(validateSessionConfig(config({ ovenIsFanForced: true }), 'F').errors).toEqual({});
+    expect(validateSessionConfig(config({ ovenIsFanForced: false }), 'F').errors).toEqual({});
+  });
+});
+
 describe('sanitizeString', () => {
   it('trims and truncates', () => {
     expect(sanitizeString('  prime rib  ')).toBe('prime rib');

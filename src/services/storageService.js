@@ -9,6 +9,9 @@ const STORAGE_KEYS = {
   // Separate from UNITS: weight has nothing to do with the temperature scale, and
   // a cook may well want pounds alongside Celsius.
   WEIGHT_UNIT: 'rstt_weight_unit',
+  // Same reasoning as WEIGHT_UNIT: a cook who measures in inches does so for
+  // every roast, so the choice belongs to the device and not to the session.
+  LENGTH_UNIT: 'rstt_length_unit',
   SCHEMA_VERSION: 'rstt_schema_version'
 };
 
@@ -311,6 +314,35 @@ export const storageService = {
       return stored === 'lb' || stored === 'kg' ? stored : null;
     } catch (error) {
       console.error('Failed to load weight unit:', error);
+      return null;
+    }
+  },
+
+  /**
+   * Save the preferred length unit
+   * @param {'cm'|'in'} unit
+   * @returns {boolean} Success
+   */
+  saveLengthUnit(unit) {
+    try {
+      localStorage.setItem(STORAGE_KEYS.LENGTH_UNIT, unit);
+      return true;
+    } catch (error) {
+      console.error('Failed to save length unit:', error);
+      return false;
+    }
+  },
+
+  /**
+   * Load the preferred length unit
+   * @returns {'cm'|'in'|null} null when nothing valid is stored
+   */
+  loadLengthUnit() {
+    try {
+      const stored = localStorage.getItem(STORAGE_KEYS.LENGTH_UNIT);
+      return stored === 'cm' || stored === 'in' ? stored : null;
+    } catch (error) {
+      console.error('Failed to load length unit:', error);
       return null;
     }
   },

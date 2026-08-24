@@ -155,6 +155,127 @@ describe('SessionSetupModal', () => {
     });
   });
 
+  /**
+   * The measured inputs, and the rule that governs all of them: a value the form
+   * offers must be a value the validator accepts. Every one of these tests exists
+   * because the two disagreed.
+   */
+  describe('the measured inputs', () => {
+    /** The unit toggle in a segmented group, addressed by its label. */
+    async function tapUnit(label) {
+      const button = [...document.querySelectorAll('button')]
+        .find((b) => b.textContent.trim() === label);
+      if (!button) throw new Error(`No "${label}" button rendered`);
+      button.click();
+      await nextTick();
+    }
+
+    it('never offers a dimension the validator will refuse', async () => {
+      /**
+       * The steppers used to cap thickness at 100 (or 40 in) and length at 40 in,
+       * against a validator that refuses thickness over 30 cm and length over
+       * 100 cm. So the thickness stepper's own maximum was always illegal, and
+       * long-pressing Length to 40 in produced "Length must be between 3 and
+       * 100 cm" on a field reading `40 in` - a number inside the range the message
+       * quoted, in a unit it did not mention, with Start cook doing nothing.
+       */
+      const wrapper = open();
+      const CM_PER_IN = 2.54;
+
+      for (const [unit, factor] of [['cm', 1], ['in', CM_PER_IN]]) {
+        await tapUnit(unit);
+        const thickness = stepper(wrapper, `Thickness in ${unit === 'in' ? 'inches' : 'centimetres'}`);
+        const length = stepper(wrapper, 'Length');
+
+        expect(thickness.props('max') * factor, `thickness max in ${unit}`)
+          .toBeLessThanOrEqual(30);
+        expect(length.props('max') * factor, `length max in ${unit}`)
+          .toBeLessThanOrEqual(100);
+      }
+    });
+
+    it('accepts a measured roast at the stepper ceiling', async () => {
+      // The half that matters more. A ceiling pulled tight enough to be legal is
+      // no use if an ordinary measurement is now refused.
+      const wrapper = open();
+      await chooseMeat(wrapper, 'Pork Shoulder');
+      await setStepper(wrapper, 'Thickness in centimetres', 30);
+      await setStepper(wrapper, 'Length', 100);
+      await submit();
+
+      const submitted = wrapper.emitted('submit');
+      expect(submitted, 'the sheet refused a roast at its own maximum').toBeTruthy();
+      expect(submitted[0][0].thicknessCm).toBe(30);
+      expect(submitted[0][0].lengthCm).toBe(100);
+    });
+
+    it('converts a measurement when the unit changes, rather than reinterpreting it', async () => {
+      const wrapper = open();
+      await setStepper(wrapper, 'Thickness in centimetres', 13);
+      await tapUnit('in');
+      // 13 cm is 5.1 in. Left at 13 it would be a 33 cm roast.
+      expect(shown(wrapper, 'Thickness in inches')).toBeCloseTo(5.1, 5);
+    });
+
+    it('still starts a cook with nothing measured', async () => {
+      // A1: none of this may become required or block starting a cook.
+      const wrapper = open();
+      await chooseMeat(wrapper, 'Pork Shoulder');
+      await submit();
+
+      const submitted = wrapper.emitted('submit');
+      expect(submitted).toBeTruthy();
+      expect(submitted[0][0].thicknessCm).toBeNull();
+      expect(submitted[0][0].lengthCm).toBeNull();
+      expect(submitted[0][0].ambientF).toBeNull();
+      expect(submitted[0][0].covering).toBe('open');
+    });
+
+    it('keeps a kitchen temperature submittable across a unit switch', async () => {
+      /**
+       * 120 °F is the stepper's own maximum, and the validator's ceiling. Switching
+       * the sheet to °C converted it with Math.round(48.888) = 49, which submits
+       * back as 120.2 °F - refused, with Start cook silently doing nothing over a
+       * value no stepper would let the cook type and that the message called valid.
+       * The toggle is the only way to reach it, so the clamp lives there.
+       */
+      const wrapper = open();
+      // The sheet opens in the app's default unit, which is Celsius - so switch to
+      // Fahrenheit first, or the °C tap below is a no-op and the test asserts
+      // nothing. (handleUnitChange returns early when the unit has not changed.)
+      await tapUnit('°F');
+      await chooseMeat(wrapper, 'Pork Shoulder');
+      await setStepper(wrapper, 'Kitchen temperature', 120);
+      await tapUnit('°C');
+      expect(shown(wrapper, 'Kitchen temperature')).toBeLessThanOrEqual(48);
+
+      await submit();
+      const submitted = wrapper.emitted('submit');
+      expect(submitted, 'a kitchen temperature reached by the unit toggle was refused')
+        .toBeTruthy();
+      expect(submitted[0][0].ambientF).toBeLessThanOrEqual(120);
+    });
+
+    it('records the oven this cook was in, and remembers it for the next', async () => {
+      const wrapper = open();
+      await chooseMeat(wrapper, 'Pork Shoulder');
+
+      const change = [...document.querySelectorAll('button')]
+        .find((b) => b.getAttribute('aria-label') === 'Fan-forced oven');
+      expect(change, 'the fan-forced control has no accessible name').toBeTruthy();
+      expect(change.getAttribute('aria-pressed')).toBe('false');
+
+      change.click();
+      await nextTick();
+      expect(change.getAttribute('aria-pressed')).toBe('true');
+
+      await submit();
+      expect(wrapper.emitted('submit')[0][0].ovenIsFanForced).toBe(true);
+      // And it is the default the next cook starts from.
+      expect(JSON.parse(localStorage.getItem('rstt_settings')).ovenIsFanForced).toBe(true);
+    });
+  });
+
   it('emits the rest time the cook actually chose', async () => {
     /**
      * The end of the chain, and why the field matters: restMinutes moves

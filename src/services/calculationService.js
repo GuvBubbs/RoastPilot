@@ -8,6 +8,7 @@ import {
   assessDeadTimeGate,
   assessRateAgreement,
   confidenceFromFit,
+  stallExplainsSlowdown,
   MIN_READINGS_FOR_FIT,
   WARM_START_THRESHOLD_F
 } from './thermalModel.js';
@@ -439,6 +440,10 @@ export function computeLatestPullTime(desiredServeTime, restMinutes = 0) {
  *   0.1% of the fit once three readings exist; what it buys is that the fit
  *   always returns, so the show/don't-show decision lives entirely in the gate.
  * @param {string|null} [params.meatType] - Feeds the shape factor of that prior
+ * @param {number|null} [params.thicknessCm] - A MEASURED shortest way through the
+ *   meat. Supersedes weight and shape in the prior when present; see kPrior.
+ * @param {string|null} [params.meatCut] - Captured and passed to kPrior, which
+ *   does not yet use it. No measured cook justifies a bone-in factor.
  * @param {string} [params.now] - ISO timestamp to measure countdowns from
  * @returns {CalculationResult}
  */
@@ -451,6 +456,8 @@ export function computeSessionCalculations({
   restMinutes = 0,
   weightLb = null,
   meatType = null,
+  thicknessCm = null,
+  meatCut = null,
   now = new Date().toISOString()
 }) {
   // Handle empty or insufficient readings
@@ -530,7 +537,7 @@ export function computeSessionCalculations({
   const fit = fitThermalModel({
     readings,
     ovenEvents,
-    prior: kPrior({ weightLb, meatType }),
+    prior: kPrior({ weightLb, meatType, thicknessCm, meatCut }),
     nowISO: now
   });
   
@@ -600,14 +607,44 @@ export function computeSessionCalculations({
   if (!rateCheck.agrees) {
     const observed = rateCheck.detail.observedRate;
     const modelled = rateCheck.detail.modelRate;
+    /**
+     * NAMING the stall, when the cut is one that stalls.
+     *
+     * No arithmetic changes here and none should: a stall term in the model needs
+     * endgame data no cook has yet produced. What changes is which sentence the
+     * cook reads, from information the app already holds - because "this roast has
+     * slowed right down" describes an expected stall on a shoulder and a probe
+     * that has slipped out of the thickest part of a prime rib identically, and
+     * those want opposite responses from the cook.
+     *
+     * Derived from meatType rather than passed in: the caller already supplies
+     * meatType for the shape factor, and a second parameter saying the same thing
+     * is a second thing to forget.
+     *
+     * GATED ON THE TEMPERATURE TOO, not just the cut - see stallExplainsSlowdown.
+     * assessRateAgreement has no temperature term, so a shoulder that slows at
+     * 100 °F trips it exactly as one stalling at 155 °F does, and naming the stall
+     * on the first is a claim the reading on the same screen contradicts.
+     *
+     * The 150-165 F band is deliberately NOT quoted here. This string already
+     * assembles its own °F literals - a pre-existing defect, and not one to widen:
+     * the band belongs where it can be stated in the cook's own unit, which is the
+     * recommendation blocker (see PROJECTION_REFUSAL_REASONS and useRecommendations'
+     * {stallBand}).
+     */
+    const stalling = stallExplainsSlowdown(meatType, readings[readings.length - 1]?.temp ?? null);
     return refuse(rateCheck.code, {
       level: 'insufficient',
       code: rateCheck.code,
-      reason:
-        `This roast has slowed to ${observed.toFixed(1)}°F per hour, well under the ` +
-        `${modelled.toFixed(1)}°F the curve so far predicts, so a finish time from it ` +
-        'would be wrong. This is normal in the middle of a large cut. Timing advice ' +
-        'comes back as soon as it picks up again.',
+      reason: stalling
+        ? `This roast has slowed to ${observed.toFixed(1)}°F per hour, well under the ` +
+          `${modelled.toFixed(1)}°F the curve so far predicts. This is the stall - ` +
+          'normal for a shoulder, and it passes on its own. Timing advice comes ' +
+          'back as soon as it picks up again.'
+        : `This roast has slowed to ${observed.toFixed(1)}°F per hour, well under the ` +
+          `${modelled.toFixed(1)}°F the curve so far predicts, so a finish time from it ` +
+          'would be wrong. This is normal in the middle of a large cut. Timing advice ' +
+          'comes back as soon as it picks up again.',
       detail: rateCheck.detail
     });
   }
@@ -735,7 +772,12 @@ export function projectScheduleUnderOven({
   const fit = fitThermalModel({
     readings,
     ovenEvents,
-    prior: kPrior({ weightLb: config.weight, meatType: config.meatType }),
+    prior: kPrior({
+      weightLb: config.weight,
+      meatType: config.meatType,
+      thicknessCm: config.thicknessCm ?? null,
+      meatCut: config.meatCut
+    }),
     nowISO: now
   });
   if (!fit) return null;

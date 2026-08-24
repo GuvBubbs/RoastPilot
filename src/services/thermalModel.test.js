@@ -16,6 +16,13 @@ import {
   TAU_OVEN_HEAT_MIN,
   TAU_OVEN_COOL_MIN,
   REFERENCE_WEIGHT_LB,
+  REFERENCE_RADIUS_CM,
+  PRIOR_THICKNESS_BOUNDS,
+  PRIOR_WEIGHT_BOUNDS,
+  K_REFERENCE,
+  STALL_BAND_F,
+  expectsStall,
+  stallExplainsSlowdown,
   PROJECTION_HORIZON_MINUTES,
   AMBIENT_F
 } from './thermalModel.js';
@@ -635,5 +642,201 @@ describe('the fit search bracket', () => {
     });
     expect(fit.pinnedAtEdge).toBe(false);
     expect(fit.k).toBeCloseTo(kPrior({ weightLb: 6, meatType: 'Prime Rib' }), 3);
+  });
+});
+
+
+describe('kPrior with no thickness measured', () => {
+  /**
+   * The expression as it stood before a measured thickness was an option, written
+   * out here so the comparison is against a statement of the old behaviour rather
+   * than against the new code's own arithmetic.
+   */
+  function priorAsItWas(weightLb, meatType) {
+    const shape = SHAPE_FACTORS[String(meatType ?? '').trim().toLowerCase()] ?? 1.0;
+    const weight = Number.isFinite(weightLb)
+      ? Math.min(PRIOR_WEIGHT_BOUNDS.maxLb, Math.max(PRIOR_WEIGHT_BOUNDS.minLb, weightLb))
+      : REFERENCE_WEIGHT_LB;
+    return K_REFERENCE * (REFERENCE_WEIGHT_LB / weight) ** (2 / 3) * shape;
+  }
+
+  it('is bit-identical to the weight-and-shape rule across every cut and weight', () => {
+    /**
+     * THE REGRESSION THAT MATTERS. Every cook who does not reach for a tape
+     * measure - which is nearly all of them, since the field is behind a
+     * collapsed disclosure - has to get exactly the projection they got before
+     * this existed. `toBe`, not `toBeCloseTo`: the change is supposed to be
+     * invisible, and a tolerance would let a reordered expression through.
+     */
+    const cuts = [null, 'Not a cut we know', ...Object.keys(SHAPE_FACTORS)];
+    for (const meatType of cuts) {
+      for (let weightLb = 1; weightLb <= 40; weightLb += 0.5) {
+        expect(
+          kPrior({ weightLb, meatType }),
+          `${meatType} at ${weightLb} lb`
+        ).toBe(priorAsItWas(weightLb, meatType));
+      }
+    }
+  });
+
+  it('still falls back to the reference weight when nothing is known', () => {
+    expect(kPrior()).toBe(K_REFERENCE);
+    expect(kPrior({ weightLb: null, thicknessCm: null })).toBe(K_REFERENCE);
+  });
+
+  it('ignores a thickness that is not a number', () => {
+    // The form emits null for an empty stepper, and a config from an older build
+    // has no key at all. Both mean "not measured", not "measured as zero".
+    const weightPath = kPrior({ weightLb: 12, meatType: 'Prime Rib' });
+    expect(kPrior({ weightLb: 12, meatType: 'Prime Rib', thicknessCm: null })).toBe(weightPath);
+    expect(kPrior({ weightLb: 12, meatType: 'Prime Rib', thicknessCm: undefined })).toBe(weightPath);
+    expect(kPrior({ weightLb: 12, meatType: 'Prime Rib', thicknessCm: NaN })).toBe(weightPath);
+  });
+});
+
+describe('kPrior with a measured thickness', () => {
+  /** The reference cylinder's diameter at a given weight, in cm. */
+  function referenceThicknessCm(weightLb) {
+    return 2 * REFERENCE_RADIUS_CM * (weightLb / REFERENCE_WEIGHT_LB) ** (1 / 3);
+  }
+
+  it('reproduces the weight rule exactly at the reference geometry', () => {
+    /**
+     * Not a coincidence and not a tolerance: radiusForWeightCm scales as
+     * w^(1/3), so (r_ref/r)^2 and (w_ref/w)^(2/3) are the same expression. The
+     * table is the one in PHASE_8_MEASURED_INPUTS.md's R1.1, and if a future
+     * change breaks it that is a finding rather than a number to widen.
+     */
+    const expected = {
+      3: 0.017447,
+      6: 0.010991,
+      12: 0.006924,
+      24: 0.004362
+    };
+    for (const [weightLb, k] of Object.entries(expected)) {
+      const thicknessCm = referenceThicknessCm(Number(weightLb));
+      expect(kPrior({ thicknessCm }), `${weightLb} lb`).toBeCloseTo(k, 6);
+      expect(kPrior({ thicknessCm }), `${weightLb} lb vs weight path`)
+        .toBeCloseTo(kPrior({ weightLb: Number(weightLb) }), 12);
+    }
+  });
+
+  it('supersedes the weight, rather than being averaged with it', () => {
+    // A 20 lb roast that measures as thin as a 6 lb one heats like the thin one.
+    // The weight is a proxy for this length; the tape measure states it.
+    const measured = kPrior({ weightLb: 20, thicknessCm: 2 * REFERENCE_RADIUS_CM });
+    expect(measured).toBeCloseTo(K_REFERENCE, 12);
+    expect(measured).toBeGreaterThan(kPrior({ weightLb: 20 }));
+  });
+
+  it('does not apply the shape factor twice', () => {
+    /**
+     * SHAPE_FACTORS exists only to approximate the length a measurement states
+     * outright, so applying it on top of one would count the geometry twice - and
+     * a tenderloin's 1.6 against a shoulder's 0.85 is nearly a factor of two in
+     * the opening projection.
+     */
+    const thicknessCm = 12;
+    const tenderloin = kPrior({ thicknessCm, meatType: 'Beef Tenderloin' });
+    const shoulder = kPrior({ thicknessCm, meatType: 'Pork Shoulder' });
+    const unknown = kPrior({ thicknessCm });
+
+    expect(tenderloin).toBe(shoulder);
+    expect(tenderloin).toBe(unknown);
+  });
+
+  it('ignores the cut, deliberately and visibly', () => {
+    // No measured cook justifies a bone-in coefficient. meatCut is in the
+    // signature so one can be tested later without touching a caller; it must
+    // change nothing until then.
+    expect(kPrior({ thicknessCm: 12, meatCut: 'Bone-in' }))
+      .toBe(kPrior({ thicknessCm: 12, meatCut: 'Boneless' }));
+    expect(kPrior({ weightLb: 6, meatCut: 'Bone-in' }))
+      .toBe(kPrior({ weightLb: 6 }));
+  });
+
+  it('clamps an absurd measurement rather than rejecting it', () => {
+    // Same posture as the weight clamp: a cook who typed inches into a cm field
+    // gets a bad prior, not a broken app - and the prior is about a tenth of a
+    // percent of the fit once three readings exist.
+    expect(kPrior({ thicknessCm: 0.001 }))
+      .toBe(kPrior({ thicknessCm: PRIOR_THICKNESS_BOUNDS.minCm }));
+    expect(kPrior({ thicknessCm: 500 }))
+      .toBe(kPrior({ thicknessCm: PRIOR_THICKNESS_BOUNDS.maxCm }));
+    expect(Number.isFinite(kPrior({ thicknessCm: 0.001 }))).toBe(true);
+  });
+});
+
+describe('expectsStall', () => {
+  it('knows a shoulder stalls and a prime rib does not', () => {
+    expect(expectsStall('Pork Shoulder')).toBe(true);
+    expect(expectsStall('Prime Rib')).toBe(false);
+    expect(expectsStall('Beef Tenderloin')).toBe(false);
+  });
+
+  it('is keyed like SHAPE_FACTORS, so the config string as stored matches', () => {
+    // The config records the display string ("Pork Shoulder"), and this map is
+    // lowercased for the same reason SHAPE_FACTORS is. The sim keys the same fact
+    // by slug, which is why a sim test asserts the two agree.
+    expect(expectsStall('  pork shoulder  ')).toBe(true);
+    expect(expectsStall('PORK SHOULDER')).toBe(true);
+    // Not the slug form: nothing in the app stores it that way, and answering
+    // true here would hide a real mismatch rather than tolerate one.
+    expect(expectsStall('pork-shoulder')).toBe(false);
+  });
+
+  it('says no when nothing was chosen', () => {
+    expect(expectsStall(null)).toBe(false);
+    expect(expectsStall(undefined)).toBe(false);
+    expect(expectsStall('')).toBe(false);
+  });
+
+  it('states a band that is a pair of absolute temperatures, low first', () => {
+    expect(STALL_BAND_F).toHaveLength(2);
+    expect(STALL_BAND_F[0]).toBeLessThan(STALL_BAND_F[1]);
+  });
+});
+
+describe('stallExplainsSlowdown', () => {
+  const [lo, hi] = STALL_BAND_F;
+
+  it('needs the temperature as well as the cut', () => {
+    /**
+     * THE DEFECT THIS PREDICATE EXISTS FOR. assessRateAgreement has no temperature
+     * term at all - it fires whenever the observed rate falls far enough below the
+     * modelled one - so a shoulder whose probe has worked its way out of the
+     * thickest part trips it at 101 °F exactly as a real stall does at 155. Keyed
+     * on the cut alone, the app told that cook "this is the stall - normal for a
+     * shoulder around 150-165 °F" beside a reading of 101, and inverted the advice:
+     * wait it out, on a roast that wanted the probe re-seated.
+     */
+    expect(expectsStall('Pork Shoulder')).toBe(true);
+    expect(stallExplainsSlowdown('Pork Shoulder', 101)).toBe(false);
+    expect(stallExplainsSlowdown('Pork Shoulder', 155)).toBe(true);
+  });
+
+  it('is the band and nothing wider, at both ends', () => {
+    // No margin is invented at either edge: the sentence quotes 150-165 °F, so it
+    // is shown in 150-165 °F. Past the band a shoulder's moisture loss is largely
+    // done and a slowdown is the ordinary approach to the oven temperature, so
+    // "this is the stall" would misquote the band in the other direction.
+    expect(stallExplainsSlowdown('Pork Shoulder', lo - 0.1)).toBe(false);
+    expect(stallExplainsSlowdown('Pork Shoulder', lo)).toBe(true);
+    expect(stallExplainsSlowdown('Pork Shoulder', hi)).toBe(true);
+    expect(stallExplainsSlowdown('Pork Shoulder', hi + 0.1)).toBe(false);
+  });
+
+  it('says no for a cut that does not stall, wherever it is', () => {
+    for (const coreF of [101, lo, (lo + hi) / 2, hi, 195]) {
+      expect(stallExplainsSlowdown('Prime Rib', coreF), `${coreF} F`).toBe(false);
+      expect(stallExplainsSlowdown('Beef Tenderloin', coreF), `${coreF} F`).toBe(false);
+    }
+  });
+
+  it('says no when either half is unknown', () => {
+    expect(stallExplainsSlowdown(null, 155)).toBe(false);
+    expect(stallExplainsSlowdown('Pork Shoulder', null)).toBe(false);
+    expect(stallExplainsSlowdown('Pork Shoulder', undefined)).toBe(false);
+    expect(stallExplainsSlowdown('Pork Shoulder', NaN)).toBe(false);
   });
 });

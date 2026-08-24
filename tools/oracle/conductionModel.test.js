@@ -26,6 +26,9 @@ import {
   TAU_OVEN_COOL_MIN,
   GEOMETRY
 } from './conductionModel.js';
+import {
+  REFERENCE_RADIUS_CM, REFERENCE_WEIGHT_LB
+} from '../../src/services/thermalModel.js';
 
 /** Roots of J0 and the matching J1 values, for the cylinder series. */
 const CYLINDER_ROOTS = [
@@ -347,5 +350,24 @@ describe('the cylinder has a real roast\'s proportions', () => {
     // Five inches across, give or take - not three, and not eight.
     expect(diameterInches).toBeGreaterThan(4.5);
     expect(diameterInches).toBeLessThan(5.5);
+  });
+
+  it('is the geometry the app pins REFERENCE_RADIUS_CM to', () => {
+    /**
+     * THE ONE PLACE THESE TWO NUMBERS CAN BE CHECKED AGAINST EACH OTHER.
+     *
+     * kPrior's thickness path needs the reference roast's radius, and the app must
+     * not import from tools/ - so the value is pinned as a literal in
+     * thermalModel.js. A pinned constant with nothing checking it is a constant
+     * that drifts, and this one has already moved once: the aspect ratio was 4.0
+     * until commit 60cddf6, which put the reference radius at 4.69 cm instead of
+     * 6.50 and made every accuracy figure this oracle certifies wrong by about 2x.
+     *
+     * Six decimal places, which is inside where the pinned literal is truncated. If
+     * this fails, the app's prior and the oracle's geometry have stopped describing
+     * the same roast, and the app is the one that needs editing.
+     */
+    expect(REFERENCE_WEIGHT_LB).toBe(6);
+    expect(REFERENCE_RADIUS_CM).toBeCloseTo(radiusForWeightCm(REFERENCE_WEIGHT_LB, 'cylinder'), 6);
   });
 });

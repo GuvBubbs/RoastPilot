@@ -71,6 +71,17 @@ function csvDelta(deltaF, units, decimals) {
 
 /**
  * Generate a comprehensive JSON export of the session
+ *
+ * `config` and `readings` are serialised WHOLESALE, so every field Phase 8 added
+ * - the measured dimensions, the covering, the kitchen temperature, which oven it
+ * was, and each reading's oven-thermometer value - lands here without this
+ * function naming any of them. That is the property tools/sim/calibrate.js
+ * depends on, and it is asserted rather than assumed - in
+ * measuredInputs.test.js's round-trip, which is where the new fields live;
+ * exportService.test.js checks this function's shape and summary only. A future
+ * refactor that picked fields explicitly would otherwise silently stop exporting
+ * every measurement a cook took.
+ *
  * @param {Session} session
  * @returns {string} Formatted JSON string
  */
@@ -132,6 +143,32 @@ export function exportToCSV(session) {
   if (session.config.weight) {
     lines.push(csvRow(['Weight', session.config.weight, 'lbs']));
   }
+  /**
+   * The measured dimensions, in canonical CENTIMETRES with a literal unit.
+   *
+   * Not converted to the display preference, and not run through csvTemp or
+   * csvDelta - a length is neither. It matches the Weight row directly above,
+   * which exports raw pounds with a 'lbs' literal, and a file that always states
+   * cm is easier to reconstruct a cook from than one whose units depend on a
+   * preference the file does not record.
+   */
+  if (session.config.thicknessCm) {
+    lines.push(csvRow(['Thickness', session.config.thicknessCm, 'cm']));
+  }
+  if (session.config.lengthCm) {
+    lines.push(csvRow(['Length', session.config.lengthCm, 'cm']));
+  }
+  if (session.config.covering) {
+    lines.push(csvRow(['Covering', session.config.covering, '']));
+  }
+  // csvTemp: the kitchen temperature is an ABSOLUTE temperature, so it takes the
+  // 32-degree offset. Carryover two rows up is the counterexample.
+  if (Number.isFinite(session.config.ambientF)) {
+    lines.push(csvRow(['Kitchen Ambient', csvTemp(session.config.ambientF, units, 1), `°${units}`]));
+  }
+  if (typeof session.config.ovenIsFanForced === 'boolean') {
+    lines.push(csvRow(['Fan-forced', session.config.ovenIsFanForced ? 'yes' : 'no', '']));
+  }
   if (session.config.notes) {
     lines.push(csvRow(['Notes', session.config.notes, '']));
   }
@@ -145,7 +182,11 @@ export function exportToCSV(session) {
     `Temperature (°${units})`,
     `Delta From Start (°${units})`,
     `Delta From Previous (°${units})`,
-    'Minutes Elapsed'
+    'Minutes Elapsed',
+    // Seventh column. csvTemp returns null for a non-number and csvField renders
+    // null as an empty field, so a reading taken without a thermometer on the
+    // shelf costs a comma and nothing else.
+    `Oven Actual (°${units})`
   ]));
 
   const startTime = readings.length > 0
@@ -161,7 +202,10 @@ export function exportToCSV(session) {
       csvTemp(r.temp, units, 1),
       csvDelta(r.deltaFromStart, units, 1),
       csvDelta(r.deltaFromPrevious, units, 1),
-      elapsed
+      elapsed,
+      // csvTemp, never csvDelta: this is an absolute oven temperature, not a
+      // change in one.
+      csvTemp(r.ovenActualF, units, 1)
     ]));
   });
   lines.push('');

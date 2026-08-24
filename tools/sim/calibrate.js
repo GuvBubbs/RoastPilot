@@ -49,7 +49,7 @@ const C = (f) => Math.round(((f - 32) * 5 / 9) * 100) / 100;
  * event type that carries that information is the opposite of what this file is
  * for.
  */
-function timeline(exported) {
+export function timeline(exported) {
   const { readings, ovenEvents } = exported.session;
   const t0 = new Date(readings[0].timestamp).getTime();
   const at = (iso) => (new Date(iso).getTime() - t0) / 60000;

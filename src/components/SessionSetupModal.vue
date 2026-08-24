@@ -180,6 +180,88 @@
           <p class="mt-2 text-[13px] text-ink-mute">
             Low and slow is {{ formatTemperature(150, form.units.value) }}–{{ formatTemperature(300, form.units.value) }}.
           </p>
+
+          <!-- The oven's character. Collapsed, because none of it changes a
+               single number the app computes: it is captured so that a file
+               exported months from now still says what oven this cook was in.
+               Collapsed by default is also what keeps "time from open to start
+               cook" unchanged for a cook who ignores all of it. -->
+          <div class="mt-4">
+            <button
+              type="button"
+              class="tap flex items-center justify-between gap-3 w-full text-left"
+              :aria-expanded="showOvenCharacter"
+              @click="showOvenCharacter = !showOvenCharacter"
+            >
+              <span class="section-label">This oven — optional</span>
+              <svg
+                class="w-4 h-4 shrink-0 text-ink-dim transition-transform duration-150"
+                :class="{ 'rotate-180': showOvenCharacter }"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                viewBox="0 0 24 24"
+              >
+                <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
+              </svg>
+            </button>
+
+            <div v-show="showOvenCharacter" class="mt-3 space-y-4">
+              <!-- A STATEMENT, not a question. The cook's own oven does not
+                   change between roasts, so it is asked once and confirmed
+                   thereafter; changing it here also updates the remembered
+                   default, exactly as the weight unit does. -->
+              <div class="flex items-center justify-between gap-3">
+                <span class="text-[13px] text-ink-dim">
+                  Fan-forced:
+                  <span class="text-ink font-medium">{{ form.ovenIsFanForced.value ? 'yes' : 'no' }}</span>
+                </span>
+                <!-- aria-pressed and a full aria-label: the visible name is just
+                     "Change", which tells a screen-reader user neither what it
+                     changes nor what it currently is - and activating it writes a
+                     device-wide preference. Every other toggle in this sheet (the
+                     weight unit, the length unit, the time-input mode) sets
+                     aria-pressed, so this one does too. -->
+                <button
+                  type="button"
+                  class="tap px-3 rounded-md text-[13px] font-medium bg-raised border border-rule text-ink-dim"
+                  :aria-pressed="form.ovenIsFanForced.value"
+                  aria-label="Fan-forced oven"
+                  @click="setFanForced(!form.ovenIsFanForced.value)"
+                >
+                  Change
+                </button>
+              </div>
+
+              <div>
+                <label for="covering" class="label">Covered?</label>
+                <select id="covering" v-model="form.covering.value" class="field-select">
+                  <option value="open">Uncovered</option>
+                  <option value="foil">Foil</option>
+                  <option value="lid">Lid or covered pan</option>
+                </select>
+              </div>
+
+              <div>
+                <NumberStepper
+                  v-model="form.ambientF.value"
+                  label="Kitchen temperature"
+                  :suffix="'°' + form.units.value"
+                  :step="1"
+                  :min="ambientRanges.min"
+                  :max="ambientRanges.max"
+                  :error="form.ambientF.touched ? form.ambientF.error : ''"
+                  @blur="form.ambientF.touched = true"
+                />
+              </div>
+
+              <p class="text-[12px] leading-snug text-ink-mute">
+                None of this changes the app's advice. It is recorded so a future
+                calibration can tell one oven from another — and so this cook's
+                export says which oven it was.
+              </p>
+            </div>
+          </div>
         </section>
 
         <!-- Starting reading --------------------------------------------- -->
@@ -200,7 +282,9 @@
           </div>
 
           <p class="mt-2 text-[13px] text-ink-mute">
-            Optional. If you've already probed it, this becomes the baseline.
+            Optional. If you've already probed it, this becomes the baseline —
+            the projection starts from a temperature you measured rather than one
+            the app assumed.
           </p>
         </section>
 
@@ -284,6 +368,94 @@
               </p>
             </div>
           </div>
+
+          <!-- Measured dimensions, folded away.
+               Weight is a PROXY for the distance heat has to travel; a tape
+               measure states it. So thickness supersedes both weight and the
+               shape factor in the prior when it is there - and it is behind a
+               disclosure because the app helps cook a roast, it is not a
+               laboratory notebook. -->
+          <div class="mt-4">
+            <button
+              type="button"
+              class="tap flex items-center justify-between gap-3 w-full text-left"
+              :aria-expanded="showMeasurements"
+              @click="showMeasurements = !showMeasurements"
+            >
+              <span class="section-label">Measurements — optional</span>
+              <svg
+                class="w-4 h-4 shrink-0 text-ink-dim transition-transform duration-150"
+                :class="{ 'rotate-180': showMeasurements }"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                viewBox="0 0 24 24"
+              >
+                <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
+              </svg>
+            </button>
+
+            <div v-show="showMeasurements" class="mt-3 space-y-4">
+              <div>
+                <div class="flex items-center justify-between gap-3">
+                  <span class="label mb-0">Thickness</span>
+                  <!-- Its own standing preference, like the weight unit above and
+                       for the same reason: a cook who measures in inches does so
+                       for every roast, whatever scale their oven is marked in. -->
+                  <div class="flex gap-1 p-0.5 rounded-lg bg-raised border border-rule" role="group" aria-label="Length unit">
+                    <button
+                      v-for="unit in ['cm', 'in']"
+                      :key="unit"
+                      type="button"
+                      class="tap px-3 rounded-md text-[13px] font-medium transition-colors duration-150"
+                      :class="form.lengthUnit.value === unit ? 'bg-rule text-ink' : 'text-ink-dim'"
+                      :aria-pressed="form.lengthUnit.value === unit"
+                      @click="setLengthUnit(unit)"
+                    >
+                      {{ unit }}
+                    </button>
+                  </div>
+                </div>
+                <div class="mt-2">
+                  <!-- hideLabel: "Thickness" is already above it and the unit is
+                       already in the suffix, so a rendered label would be a third
+                       statement of the same thing. The accessible name stays. -->
+                  <NumberStepper
+                    v-model="form.thicknessCm.value"
+                    :label="`Thickness in ${form.lengthUnit.value === 'in' ? 'inches' : 'centimetres'}`"
+                    hide-label
+                    :suffix="form.lengthUnit.value"
+                    :step="form.lengthUnit.value === 'in' ? 0.5 : 1"
+                    :min="0"
+                    :max="lengthLimits.thicknessMax"
+                    :error="form.thicknessCm.touched ? form.thicknessCm.error : ''"
+                    @blur="form.thicknessCm.touched = true"
+                  />
+                </div>
+                <p class="mt-1.5 text-[12px] leading-snug text-ink-mute">
+                  The short way through — heat travels the shortest path. Measure
+                  through the meat, not the bone.
+                </p>
+              </div>
+
+              <div>
+                <NumberStepper
+                  v-model="form.lengthCm.value"
+                  label="Length"
+                  :suffix="form.lengthUnit.value"
+                  :step="form.lengthUnit.value === 'in' ? 0.5 : 1"
+                  :min="0"
+                  :max="lengthLimits.lengthMax"
+                  :error="form.lengthCm.touched ? form.lengthCm.error : ''"
+                  @blur="form.lengthCm.touched = true"
+                />
+                <p class="mt-1.5 text-[12px] leading-snug text-ink-mute">
+                  The long way. Recorded, not used — the app's model has one
+                  length in it, and this is here so a future one can have two.
+                </p>
+              </div>
+            </div>
+          </div>
         </section>
 
         <!-- Everything else, folded away ------------------------------------ -->
@@ -360,7 +532,9 @@ import { addMinutes } from '../utils/timeUtils.js';
 import { MEAT_PRESETS, SESSION_DEFAULTS } from '../constants/defaults.js';
 import { estimateCarryoverF, pullTempFor } from '../services/carryoverService.js';
 import { storageService } from '../services/storageService.js';
-import { weightToDisplay, weightToStorage } from '../utils/temperatureUtils.js';
+import {
+  weightToDisplay, weightToStorage, lengthToDisplay, lengthToStorage
+} from '../utils/temperatureUtils.js';
 import { validateSessionConfig } from '../utils/validationUtils.js';
 
 const props = defineProps({
@@ -378,7 +552,7 @@ const emit = defineEmits(['update:modelValue', 'submit', 'cancel']);
 
 // The unit the last cook was run in. A Celsius cook shouldn't have to switch
 // units every time they start a new one.
-const { preferredUnits } = useSession();
+const { preferredUnits, preferredOvenIsFanForced, rememberOvenIsFanForced } = useSession();
 
 // Defaults are stored in Fahrenheit; the form works in display units.
 const getInitialServingTemp = (units) => {
@@ -412,6 +586,37 @@ function setWeightUnit(unit) {
   storageService.saveWeightUnit(unit);
 }
 
+/**
+ * Switch the length unit, converting both dimensions with it.
+ *
+ * Same shape as setWeightUnit above, and converting rather than reinterpreting
+ * for the same reason: a cook who typed 13 cm and then taps `in` means 5.1 in,
+ * not 13 in. Both fields move together - one toggle governs both, because a roast
+ * measured with one tape measure is measured in one unit.
+ */
+function setLengthUnit(unit) {
+  if (unit === form.lengthUnit.value) return;
+  const thicknessCm = lengthToStorage(form.thicknessCm.value, form.lengthUnit.value);
+  const lengthCm = lengthToStorage(form.lengthCm.value, form.lengthUnit.value);
+  form.lengthUnit.value = unit;
+  form.thicknessCm.value = lengthToDisplay(thicknessCm, unit);
+  form.lengthCm.value = lengthToDisplay(lengthCm, unit);
+  storageService.saveLengthUnit(unit);
+}
+
+/**
+ * Record the oven's character for this cook, AND remember it as the default.
+ *
+ * Two writes on purpose. `settings.ovenIsFanForced` is what the app assumes next
+ * time, so the question is asked once; `config.ovenIsFanForced` is what was true
+ * of THIS cook, which is what the export has to state - a cook roasting at
+ * someone else's house would otherwise export a lie about their own oven.
+ */
+function setFanForced(value) {
+  form.ovenIsFanForced.value = value;
+  rememberOvenIsFanForced(value);
+}
+
 /** `datetime-local` wants a local-time string, not an ISO instant. */
 function toLocalInputValue(date) {
   const pad = (n) => String(n).padStart(2, '0');
@@ -433,6 +638,22 @@ const form = reactive({
   meatCut: { value: '', error: '', touched: false },
   weight: { value: null, error: '', touched: false },
   weightUnit: { value: storageService.loadWeightUnit() ?? 'lb', error: '', touched: false },
+  /**
+   * Named for the CONFIG keys they submit to, not for the unit they hold.
+   *
+   * These two hold DISPLAY values - centimetres or inches, per form.lengthUnit -
+   * and go through lengthToStorage on submit, exactly as `weight` does. The names
+   * have to match the config field names regardless, because handleSubmit maps
+   * validation error keys onto form fields by name and falls back to
+   * form.servingTemp on a miss: a mismatch would land "Thickness must be between
+   * 2 and 30 cm" under the serving temperature.
+   */
+  thicknessCm: { value: null, error: '', touched: false },
+  lengthCm: { value: null, error: '', touched: false },
+  lengthUnit: { value: storageService.loadLengthUnit() ?? 'cm', error: '', touched: false },
+  covering: { value: 'open', error: '', touched: false },
+  ambientF: { value: null, error: '', touched: false },
+  ovenIsFanForced: { value: preferredOvenIsFanForced.value, error: '', touched: false },
   notes: { value: '', error: '', touched: false }
 });
 
@@ -442,6 +663,11 @@ const timeRemaining = reactive({
 });
 
 const showMeatDetails = ref(false);
+// Both collapsed by default, and that is load-bearing rather than tidy: a cook
+// who ignores everything this phase added has to reach "Start cook" in exactly
+// the number of taps they did before it.
+const showMeasurements = ref(false);
+const showOvenCharacter = ref(false);
 const userHasEditedTarget = ref(false);
 const userHasEditedOven = ref(false);
 const userHasEditedRest = ref(false);
@@ -510,6 +736,47 @@ const ovenTempRanges = computed(() => {
   }
 });
 
+/**
+ * Stepper ceilings for the measured dimensions, in the form's unit.
+ *
+ * DERIVED FROM THE VALIDATOR'S CENTIMETRE BOUNDS, not chosen. They were 100 and
+ * 40 - display-unit numbers picked to look generous - against a validator that
+ * caps thickness at 30 cm and length at 100 cm. So the thickness stepper's own
+ * maximum was always illegal, and long-pressing the length stepper to 40 in
+ * (101.6 cm) produced "Length must be between 3 and 100 cm" on a field reading
+ * `40 in`: a number inside the range the message quotes, in a unit the message
+ * does not mention, with Start cook doing nothing. Exactly the trap ovenTempRanges
+ * below carries a comment about.
+ *
+ * Floored to whole units so the ceiling is always inside the bound: 11 in is
+ * 27.9 cm and 39 in is 99.1 cm, both legal, where 12 in (30.5 cm) and 40 in are
+ * not.
+ */
+const lengthLimits = computed(() => (
+  form.lengthUnit.value === 'in'
+    ? { thicknessMax: 11, lengthMax: 39 }
+    : { thicknessMax: 30, lengthMax: 100 }
+));
+
+/**
+ * Kitchen temperature bounds, in the form's unit.
+ *
+ * 48, not 49: the validator's ceiling is 120 °F and 49 °C is 120.2 °F, so the
+ * Celsius ceiling has to be the whole degree below. Same trap ovenTempRanges above
+ * documents - a value the stepper allows and the validator then refuses, with no
+ * way for the cook to see why.
+ *
+ * The stepper's max is not sufficient on its own, because the UNIT TOGGLE can
+ * write a value no stepper produced: 120 °F converts to Math.round(48.888) = 49,
+ * which submits as 120.2 °F and is refused. See handleUnitChange, which clamps.
+ */
+const ambientRanges = computed(() => {
+  if (form.units.value === 'F') {
+    return { min: 32, max: 120 };
+  }
+  return { min: 0, max: 48 };
+});
+
 // Selected meat preset
 const selectedMeatPreset = computed(() => {
   return MEAT_PRESETS.find(p => p.type === form.meatType.value);
@@ -572,6 +839,25 @@ function handleUnitChange(newUnit) {
     } else {
       form.startingTemp.value = Math.round(celsiusToFahrenheit(form.startingTemp.value));
     }
+  }
+  
+  /**
+   * The kitchen temperature is an absolute temperature like the three above, so it
+   * converts with them. Left out, a form switched from °F to °C would carry 70
+   * straight across and record a kitchen at 158 °F.
+   *
+   * AND IT IS CLAMPED, because rounding a converted value can land outside the
+   * range the stepper enforces: 120 °F is Math.round(48.888) = 49 °C, which submits
+   * as 120.2 °F and the validator refuses - so Start cook did nothing, over a value
+   * no stepper would let the cook type and that the message called valid. The
+   * conversion is the only way to reach it, so the clamp belongs here.
+   */
+  if (form.ambientF.value !== null) {
+    const converted = newUnit === 'C'
+      ? Math.round(fahrenheitToCelsius(form.ambientF.value))
+      : Math.round(celsiusToFahrenheit(form.ambientF.value));
+    const bounds = newUnit === 'F' ? { min: 32, max: 120 } : { min: 0, max: 48 };
+    form.ambientF.value = Math.min(bounds.max, Math.max(bounds.min, converted));
   }
   
   // Switch units only after the values above have been converted out of oldUnit
@@ -666,6 +952,14 @@ function resetForm() {
   form.meatCut.value = '';
   form.weight.value = null;
   form.weightUnit.value = storageService.loadWeightUnit() ?? 'lb';
+  form.thicknessCm.value = null;
+  form.lengthCm.value = null;
+  form.lengthUnit.value = storageService.loadLengthUnit() ?? 'cm';
+  form.covering.value = 'open';
+  form.ambientF.value = null;
+  // The remembered oven, re-read: a cook who changed it during a setup they then
+  // cancelled still changed their oven, and the preference is where that survives.
+  form.ovenIsFanForced.value = preferredOvenIsFanForced.value;
   form.notes.value = '';
 
   Object.values(form).forEach((field) => {
@@ -677,6 +971,8 @@ function resetForm() {
   timeRemaining.minutes = 0;
 
   showMeatDetails.value = false;
+  showMeasurements.value = false;
+  showOvenCharacter.value = false;
   userHasEditedTarget.value = false;
   userHasEditedOven.value = false;
   userHasEditedRest.value = false;
@@ -744,6 +1040,17 @@ function handleSubmit() {
     // part of the session: a cook who switches to kilograms next month must not
     // find this roast's weight reinterpreted.
     weight: weightToStorage(form.weight.value, form.weightUnit.value) || null,
+    // Canonical CENTIMETRES, for the same reason weight is canonical pounds: the
+    // display unit is a standing preference and must not be able to reinterpret a
+    // roast measured months ago.
+    thicknessCm: lengthToStorage(form.thicknessCm.value, form.lengthUnit.value) || null,
+    lengthCm: lengthToStorage(form.lengthCm.value, form.lengthUnit.value) || null,
+    covering: form.covering.value || 'open',
+    ambientF: form.ambientF.value !== null
+      ? toStorageUnit(form.ambientF.value, form.units.value)
+      : null,
+    // What was true of THIS oven, defaulted from the remembered setting.
+    ovenIsFanForced: form.ovenIsFanForced.value,
     notes: sanitizeString(form.notes.value) || null
   };
   
@@ -767,6 +1074,17 @@ function handleSubmit() {
       const target = form[field] ?? form.servingTemp;
       target.error = message;
       target.touched = true;
+      /**
+       * And OPEN the fold it lives in, or the refusal is silent.
+       *
+       * Both new sections are collapsed by default, which is what keeps setup one
+       * screen for a cook who ignores them - but a message rendered inside a
+       * `v-show="false"` is a Start cook button that does nothing and says
+       * nothing. The fields are optional; being unable to see why they were
+       * rejected is not.
+       */
+      if (field === 'thicknessCm' || field === 'lengthCm') showMeasurements.value = true;
+      else if (field === 'covering' || field === 'ambientF') showOvenCharacter.value = true;
     });
     return;
   }

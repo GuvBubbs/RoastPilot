@@ -23,6 +23,20 @@ import { estimateCarryoverF, pullTempFor, servingTempFor } from '../services/car
  * @property {string|null} meatType - Optional: e.g., "Prime Rib", "Pork Shoulder"
  * @property {string|null} meatCut - Optional: e.g., "Bone-in", "Boneless"
  * @property {number|null} weight - Optional: weight in pounds
+ * @property {number|null} thicknessCm - Optional: MEASURED shortest way through
+ *   the meat, in centimetres. Feeds the prior on k directly, in place of the
+ *   weight-and-shape estimate of the same length. Absent means unknown.
+ * @property {number|null} lengthCm - Optional: measured long dimension, cm.
+ *   RECORDED, NOT MODELLED - the app's cascade has one length in it. This exists
+ *   so the oracle's assumed 1.5-diameter proportion can become a measurement.
+ * @property {'open'|'foil'|'lid'|null} covering - Optional: what was over the
+ *   roast. Captured and exported; no coefficient is applied to it.
+ * @property {number|null} ambientF - Optional: kitchen temperature, °F. Captured
+ *   and exported; AMBIENT_F is still the constant the model uses.
+ * @property {boolean|null} ovenIsFanForced - Optional: whether THIS cook's oven
+ *   was fan-forced. Defaulted from settings.ovenIsFanForced but recorded per
+ *   session, because a cook roasting at someone else's house would otherwise
+ *   export a lie. Captured and exported; no coefficient is applied to it.
  * @property {string|null} notes - Optional: free-form notes
  * @property {string} createdAt - ISO 8601 datetime when session started
  * @property {string} updatedAt - ISO 8601 datetime of last modification
@@ -35,6 +49,12 @@ import { estimateCarryoverF, pullTempFor, servingTempFor } from '../services/car
  * @property {string} timestamp - ISO 8601 datetime when reading was taken
  * @property {number|null} deltaFromStart - Computed: degrees change from first reading
  * @property {number|null} deltaFromPrevious - Computed: degrees change from previous reading
+ * @property {number|null} ovenActualF - Optional: an oven thermometer read at the
+ *   same moment, in Fahrenheit. NEVER feeds the projection - the model drives its
+ *   oven node from the dial, because that is what the cook controls and what the
+ *   recommendation engine writes, so feeding an observation back in would close a
+ *   loop from a measurement into the advice that produced it. It is exported, and
+ *   tools/sim/calibrate.js weights it into the objective at 0.25.
  */
 
 /**
@@ -122,6 +142,9 @@ import { estimateCarryoverF, pullTempFor, servingTempFor } from '../services/car
  *   projection and is usually shorter - see useReadingSchedule.
  * @property {number} staleReadingMinutes - Age at which the newest reading stops
  *   being evidence and advice is withheld (default 45).
+ * @property {boolean} ovenIsFanForced - The cook's own oven, remembered so the
+ *   question is asked once. Each session records its own config.ovenIsFanForced
+ *   from this; the setting is the default, the config is the truth about that cook.
  */
 
 /**
@@ -221,6 +244,13 @@ export function createSession(configOverrides = {}) {
       meatType: null,
       meatCut: null,
       weight: null,
+      // Phase 8's measured inputs. Every one of them absent-means-unknown, and
+      // nothing downstream requires any of them - see PHASE_8_MEASURED_INPUTS.md.
+      thicknessCm: null,
+      lengthCm: null,
+      covering: 'open',
+      ambientF: null,
+      ovenIsFanForced: null,
       notes: null,
       createdAt: now,
       updatedAt: now,
@@ -340,7 +370,11 @@ export function createDefaultSettings() {
     ovenChangeSettleReadings: 2,
     defaultRestMinutes: SESSION_DEFAULTS.REST_MINUTES,
     readingIntervalMinutes: 45,
-    staleReadingMinutes: 45
+    staleReadingMinutes: 45,
+    // The remembered answer to a question worth asking once. Nothing in the model
+    // reads it; it seeds config.ovenIsFanForced so the export can state which
+    // oven the cook was in.
+    ovenIsFanForced: false
   };
 }
 
@@ -348,15 +382,25 @@ export function createDefaultSettings() {
  * Factory function to create an internal reading
  * @param {number} temp - Temperature in current display units (will be converted)
  * @param {string} [timestamp] - Optional timestamp, defaults to now
+ * @param {number|null} [ovenActualF] - Optional oven thermometer reading, °F
  * @returns {InternalReading}
  */
-export function createReading(temp, timestamp = null) {
+export function createReading(temp, timestamp = null, ovenActualF = null) {
   return {
     id: generateUUID(),
     temp: temp, // Caller responsible for ensuring this is in Fahrenheit
     timestamp: timestamp || new Date().toISOString(),
     deltaFromStart: null, // Computed after creation
-    deltaFromPrevious: null // Computed after creation
+    deltaFromPrevious: null, // Computed after creation
+    /**
+     * NULL rather than omitted, always. An export whose readings sometimes carry
+     * the key and sometimes do not is one where "no thermometer on the shelf" and
+     * "written by a build that could not record it" are indistinguishable, and the
+     * offline fitter has to tell those apart. Number.isFinite guards the consumer
+     * either way (calibrate.js:sse), but the file should not need the guard to be
+     * readable.
+     */
+    ovenActualF: Number.isFinite(ovenActualF) ? ovenActualF : null
   };
 }
 
